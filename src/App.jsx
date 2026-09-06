@@ -726,6 +726,13 @@ function DashboardPage({ profile, requests, services, announcements, events, pay
             <p>Pending requests: {pendingRequests}</p>
           </div>
 
+          <nav className="mobile-quick-nav" aria-label="Quick access">
+            <button type="button" onClick={() => navigate('/requests')}><span aria-hidden="true">📄</span> Requests</button>
+            <button type="button" onClick={() => document.getElementById('announcements-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}><span aria-hidden="true">📢</span> Updates</button>
+            <button type="button" onClick={() => navigate('/events')}><span aria-hidden="true">📅</span> Events</button>
+            <button type="button" onClick={() => navigate('/payments')}><span aria-hidden="true">💳</span> Payments</button>
+          </nav>
+
           {profile.status && profile.status !== 'Active Resident' && (
             <div className="verification-banner">
               <strong>Account verification pending</strong>
@@ -770,7 +777,7 @@ function DashboardPage({ profile, requests, services, announcements, events, pay
 
           <div className="dashboard-body">
             <div className="main-column">
-              <article className="panel-card">
+              <article className="panel-card" id="announcements-section">
                 <div className="panel-header">
                   <h2>Current Situation</h2>
                   <span className="soft-label">Recent announcements</span>
