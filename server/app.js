@@ -175,8 +175,16 @@ export function createApp() {
     return next()
   }
 
-  app.get('/api/health', (_req, res) => {
-    res.json({ ok: true, message: 'Barangay Legaspi API is running' })
+  app.get('/api/health', async (_req, res) => {
+    try {
+      if (process.env.DATABASE_URL) {
+        await pgDb.query('SELECT 1')
+      }
+      res.json({ ok: true, message: 'Barangay Legaspi API is running' })
+    } catch (error) {
+      console.error('health check failed', error)
+      res.status(503).json({ ok: false, message: 'Database unavailable.' })
+    }
   })
 
   app.post('/api/register', authRateLimit, async (req, res) => {
