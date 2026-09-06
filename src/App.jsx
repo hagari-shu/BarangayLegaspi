@@ -1259,7 +1259,7 @@ function SettingsPage({ profile, onLogout }) {
   )
 }
 
-function StaffPage({ requests, staffMembers = [], announcements = [], onProcessRequest, onLogout, onAddStaffMember, onAddAnnouncement, onDeleteAnnouncement, onDeleteStaffMember }) {
+function StaffPage({ requests, staffMembers = [], announcements = [], currentUser, userRole = 'staff', onProcessRequest, onLogout, onAddStaffMember, onAddAnnouncement, onDeleteAnnouncement, onDeleteStaffMember }) {
   const [activeTab, setActiveTab] = useState('queue')
   const [openRequestPanel, setOpenRequestPanel] = useState(null)
   const [queueSearch, setQueueSearch] = useState('')
@@ -1440,7 +1440,7 @@ function StaffPage({ requests, staffMembers = [], announcements = [], onProcessR
         </div>
 
         <div className="topbar-actions">
-          <span className="role-chip">Staff Workspace</span>
+          <span className="role-chip">{getDisplayName(currentUser)} • {userRole === 'admin' ? 'Administrator' : 'Staff'}</span>
           <button className="logout-btn" type="button" onClick={onLogout}>Log out</button>
         </div>
       </header>
@@ -3084,7 +3084,7 @@ function App() {
       <Route path="/payments" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['resident']} userRole={userRole}><PaymentsPage payments={payments} onLogout={handleLogout} /></ProtectedRoute>} />
       <Route path="/events" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['resident']} userRole={userRole}><EventsPage events={events} onLogout={handleLogout} /></ProtectedRoute>} />
       <Route path="/settings" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['resident']} userRole={userRole}><SettingsPage profile={profile} onLogout={handleLogout} /></ProtectedRoute>} />
-      <Route path="/staff" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['staff', 'admin']} userRole={userRole}><StaffPage requests={requests} staffMembers={staffMembers} announcements={announcementsData} onProcessRequest={handleRequestStatus} onLogout={handleLogout} onAddStaffMember={handleAddStaffMember} onAddAnnouncement={handleAddAnnouncement} onDeleteAnnouncement={handleDeleteAnnouncement} onDeleteStaffMember={handleDeleteStaffMember} /></ProtectedRoute>} />
+      <Route path="/staff" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['staff', 'admin']} userRole={userRole}><StaffPage requests={requests} staffMembers={staffMembers} announcements={announcementsData} currentUser={session?.user} userRole={userRole} onProcessRequest={handleRequestStatus} onLogout={handleLogout} onAddStaffMember={handleAddStaffMember} onAddAnnouncement={handleAddAnnouncement} onDeleteAnnouncement={handleDeleteAnnouncement} onDeleteStaffMember={handleDeleteStaffMember} /></ProtectedRoute>} />
       <Route path="/admin" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['admin']} userRole={userRole}><AdminPage users={users.length ? users : [{ id: 'seed-1', first_name: 'Maria', last_name: 'Dela Cruz', role: 'resident', status: 'Active Resident', email: 'maria.delacruz@email.com' }, { id: 'seed-2', first_name: 'Alicia', last_name: 'Ramos', role: 'staff', status: 'On Duty', email: 'staff@barangay.gov.ph' }, { id: 'seed-3', first_name: 'Carmen', last_name: 'Santos', role: 'admin', status: 'Administrator', email: 'admin@barangay.gov.ph' }]} residents={residents} requests={requests} reports={reports} onLogout={handleLogout} /></ProtectedRoute>} />
       <Route path="*" element={<Navigate to={userRole === 'staff' ? '/staff' : userRole === 'admin' ? '/admin' : '/dashboard'} replace />} />
     </Routes>
