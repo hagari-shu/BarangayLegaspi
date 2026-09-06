@@ -27,6 +27,9 @@ export const DB_PATH = dbPath
 if (process.env.NODE_ENV === 'production' && (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 32)) {
   throw new Error('JWT_SECRET must be configured with at least 32 characters in production.')
 }
+if (process.env.NODE_ENV === 'production' && !process.env.CORS_ORIGINS) {
+  throw new Error('CORS_ORIGINS must be configured in production.')
+}
 
 export const JWT_SECRET = process.env.JWT_SECRET || 'brgy-legaspi-demo-secret'
 export const PORT = Number(process.env.PORT || 3001)

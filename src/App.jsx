@@ -1212,6 +1212,38 @@ function EventsPage({ events, onLogout }) {
 }
 
 function SettingsPage({ profile, onLogout }) {
+  const [passwordForm, setPasswordForm] = useState({ currentPassword: '', newPassword: '', confirmPassword: '' })
+  const [savingPassword, setSavingPassword] = useState(false)
+
+  const handlePasswordSubmit = async (event) => {
+    event.preventDefault()
+    if (!isValidPassword(passwordForm.newPassword)) {
+      alert(`New password must have ${passwordRequirements}.`)
+      return
+    }
+    if (passwordForm.newPassword !== passwordForm.confirmPassword) {
+      alert('New password and confirmation do not match.')
+      return
+    }
+
+    setSavingPassword(true)
+    try {
+      const response = await fetch(`${API_BASE}/change-password`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ currentPassword: passwordForm.currentPassword, newPassword: passwordForm.newPassword }),
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(data.message || 'Unable to change password.')
+      setPasswordForm({ currentPassword: '', newPassword: '', confirmPassword: '' })
+      alert(data.message || 'Password changed successfully.')
+    } catch (error) {
+      alert(error.message || 'Unable to change password.')
+    } finally {
+      setSavingPassword(false)
+    }
+  }
+
   return (
     <div className="dashboard-shell">
       <header className="dashboard-topbar">
@@ -1249,11 +1281,16 @@ function SettingsPage({ profile, onLogout }) {
 
             <div className="info-box">
               <h3>Security</h3>
-              <dl>
-                <div><dt>Authentication</dt><dd>Two-step enabled</dd></div>
-                <div><dt>Notifications</dt><dd>Email & SMS alerts</dd></div>
-                <div><dt>Privacy</dt><dd>Profile visible to residents only</dd></div>
-              </dl>
+              <form className="password-change-form" onSubmit={handlePasswordSubmit}>
+                <label htmlFor="current-password">Current password</label>
+                <input id="current-password" type="password" autoComplete="current-password" value={passwordForm.currentPassword} onChange={(event) => setPasswordForm((current) => ({ ...current, currentPassword: event.target.value }))} required />
+                <label htmlFor="new-password">New password</label>
+                <input id="new-password" type="password" minLength="8" autoComplete="new-password" value={passwordForm.newPassword} onChange={(event) => setPasswordForm((current) => ({ ...current, newPassword: event.target.value }))} required />
+                <label htmlFor="confirm-password">Confirm new password</label>
+                <input id="confirm-password" type="password" minLength="8" autoComplete="new-password" value={passwordForm.confirmPassword} onChange={(event) => setPasswordForm((current) => ({ ...current, confirmPassword: event.target.value }))} required />
+                <small>{passwordRequirements}.</small>
+                <button type="submit" className="primary-btn small" disabled={savingPassword}>{savingPassword ? 'Saving...' : 'Change password'}</button>
+              </form>
             </div>
           </div>
 

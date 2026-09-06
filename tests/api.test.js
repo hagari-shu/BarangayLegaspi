@@ -1,6 +1,9 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createApp } from '../server/app.js'
+import { hashPassword } from '../server/auth.js'
+import * as jsonDb from '../server/db.js'
+import { randomUUID } from 'node:crypto'
 
 const createTestServer = async () => {
   const app = createApp()
@@ -129,12 +132,26 @@ test('staff cannot create staff accounts', async () => {
   const { server, baseUrl } = await createTestServer()
 
   try {
+    const staffPassword = 'StaffPass123!'
+    const staff = {
+      id: randomUUID(),
+      firstName: 'Test',
+      lastName: 'Staff',
+      mobile: `091${Math.floor(10000000 + Math.random() * 90000000)}`,
+      email: `staff.${Date.now()}@example.com`,
+      passwordHash: await hashPassword(staffPassword),
+      role: 'staff',
+      status: 'On Duty',
+      createdAt: new Date().toISOString(),
+    }
+    await jsonDb.saveUser(staff)
+
     const loginResponse = await fetch(`${baseUrl}/api/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        identifier: 'staff@barangay.gov.ph',
-        password: 'StaffPass123',
+        identifier: staff.email,
+        password: staffPassword,
       }),
     })
     assert.equal(loginResponse.status, 200)
@@ -208,10 +225,24 @@ test('password reset uses a one-time token', async () => {
   const resetPassword = 'ResetPass123!'
 
   try {
+    const email = `reset.${Date.now()}@example.com`
+    const registerResponse = await fetch(`${baseUrl}/api/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        firstName: 'Reset',
+        lastName: 'User',
+        mobile: `091${Math.floor(10000000 + Math.random() * 90000000)}`,
+        email,
+        password: originalPassword,
+      }),
+    })
+    assert.equal(registerResponse.status, 201)
+
     const requestResponse = await fetch(`${baseUrl}/api/reset-password/request`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ identifier: 'maria.delacruz@email.com' }),
+      body: JSON.stringify({ identifier: email }),
     })
     assert.equal(requestResponse.status, 200)
     const requestData = await requestResponse.json()
@@ -234,7 +265,7 @@ test('password reset uses a one-time token', async () => {
     const restoreRequest = await fetch(`${baseUrl}/api/reset-password/request`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ identifier: 'maria.delacruz@email.com' }),
+      body: JSON.stringify({ identifier: email }),
     })
     const restoreData = await restoreRequest.json()
     const restoreResponse = await fetch(`${baseUrl}/api/reset-password`, {
@@ -243,6 +274,63 @@ test('password reset uses a one-time token', async () => {
       body: JSON.stringify({ token: restoreData.resetToken, newPassword: originalPassword }),
     })
     assert.equal(restoreResponse.status, 200)
+  } finally {
+    await new Promise((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()))
+    })
+  }
+})
+
+test('authenticated users can change passwords with the current password', async () => {
+  const { server, baseUrl } = await createTestServer()
+  const currentPassword = 'CurrentPass123!'
+  const nextPassword = 'NextPass123!'
+  const email = `change.${Date.now()}@example.com`
+
+  try {
+    const registerResponse = await fetch(`${baseUrl}/api/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        firstName: 'Change',
+        lastName: 'Password',
+        mobile: `091${Math.floor(10000000 + Math.random() * 90000000)}`,
+        email,
+        password: currentPassword,
+      }),
+    })
+    assert.equal(registerResponse.status, 201)
+
+    const user = await jsonDb.findUserByIdentifier(email)
+    await jsonDb.updateUser(user.id, { status: 'Active Resident' })
+
+    const loginResponse = await fetch(`${baseUrl}/api/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ identifier: email, password: currentPassword }),
+    })
+    const { token } = await loginResponse.json()
+
+    const wrongPasswordResponse = await fetch(`${baseUrl}/api/change-password`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ currentPassword: 'WrongPass123!', newPassword: nextPassword }),
+    })
+    assert.equal(wrongPasswordResponse.status, 401)
+
+    const changeResponse = await fetch(`${baseUrl}/api/change-password`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ currentPassword, newPassword: nextPassword }),
+    })
+    assert.equal(changeResponse.status, 200)
+
+    const nextLoginResponse = await fetch(`${baseUrl}/api/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ identifier: email, password: nextPassword }),
+    })
+    assert.equal(nextLoginResponse.status, 200)
   } finally {
     await new Promise((resolve, reject) => {
       server.close((error) => (error ? reject(error) : resolve()))

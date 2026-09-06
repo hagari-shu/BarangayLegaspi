@@ -10,6 +10,9 @@ const databaseUrl = process.env.DATABASE_URL?.replace(/[?&]sslmode=[^&]*/i, '')
 const pool = new Pool({
   connectionString: databaseUrl,
   ssl: process.env.DATABASE_URL ? { rejectUnauthorized: false } : false,
+  max: Number(process.env.DB_POOL_MAX || 10),
+  idleTimeoutMillis: Number(process.env.DB_IDLE_TIMEOUT_MS || 30000),
+  connectionTimeoutMillis: Number(process.env.DB_CONNECTION_TIMEOUT_MS || 10000),
 })
 
 const normalizeUser = (user = null) => {

@@ -1520,6 +1520,36 @@ textarea:focus {
   margin: 0;
   color: var(--text-900);
   font-weight: 600;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.password-change-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.password-change-form label {
+  color: var(--text-700);
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.password-change-form input {
+  min-height: 44px;
+}
+
+.password-change-form small {
+  color: var(--text-500);
+  line-height: 1.45;
+}
+
+.password-change-form .primary-btn {
+  align-self: flex-start;
+  margin-top: 4px;
 }
 
 .quick-grid {

@@ -118,6 +118,7 @@ export async function seedDemoResident() {
 
 export function createApp() {
   const app = express()
+  app.disable('x-powered-by')
 
   const allowedOrigins = (process.env.CORS_ORIGINS || 'http://localhost:5173,http://127.0.0.1:5173').split(',').map((origin) => origin.trim()).filter(Boolean)
   app.use(cors({
@@ -166,6 +167,11 @@ export function createApp() {
     }
     recent.push(now)
     authAttempts.set(key, recent)
+    if (authAttempts.size > 10000) {
+      for (const [attemptKey, timestamps] of authAttempts) {
+        if (timestamps.every((timestamp) => timestamp <= windowStart)) authAttempts.delete(attemptKey)
+      }
+    }
     return next()
   }
 
@@ -326,6 +332,39 @@ export function createApp() {
     } catch (error) {
       console.error('reset password error', error)
       return res.status(500).json({ message: 'Unable to reset password.' })
+    }
+  })
+
+  app.post('/api/change-password', async (req, res) => {
+    const authHeader = req.headers.authorization || ''
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null
+    if (!token) return res.status(401).json({ message: 'Authentication required.' })
+
+    try {
+      const payload = verifyToken(token)
+      const user = await store.findUserById(payload.sub)
+      const currentPassword = String(req.body?.currentPassword || '')
+      const newPassword = String(req.body?.newPassword || '').trim()
+
+      if (!user || ['Suspended', 'Disabled'].includes(user.status)) {
+        return res.status(403).json({ message: 'Account access is disabled.' })
+      }
+      if (!currentPassword || !isValidPassword(newPassword)) {
+        return res.status(400).json({ message: `A current password and new password with ${passwordRequirements} are required.` })
+      }
+      if (currentPassword === newPassword) {
+        return res.status(400).json({ message: 'The new password must be different from the current password.' })
+      }
+      if (!await comparePassword(currentPassword, user.passwordHash || user.password_hash)) {
+        return res.status(401).json({ message: 'Current password is incorrect.' })
+      }
+
+      await store.updateUser?.(user.id, { passwordHash: await hashPassword(newPassword) })
+      await writeAudit(user, 'password.changed', 'user', user.id)
+      return res.json({ message: 'Password changed successfully.' })
+    } catch (error) {
+      console.error('change password error', error)
+      return res.status(401).json({ message: 'Invalid or expired token.' })
     }
   })
 
