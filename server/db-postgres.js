@@ -178,6 +178,10 @@ export async function createUser(user) {
   }
 }
 
+export async function saveUser(user) {
+  return createUser(user)
+}
+
 export async function updateUser(userId, updates = {}) {
   const entries = Object.entries({
     passwordHash: updates.passwordHash ?? updates.password_hash,
