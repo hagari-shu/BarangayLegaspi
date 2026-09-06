@@ -136,6 +136,11 @@ export function createApp() {
     return user ? { payload, user } : null
   }
 
+  const hasCurrentRole = async (token, roles) => {
+    const actor = await getCurrentActor(token)
+    return Boolean(actor && roles.includes(actor.user.role) && !['Suspended', 'Disabled'].includes(actor.user.status))
+  }
+
   const writeAudit = async (actor, action, targetType, targetId, metadata = {}) => {
     await store.addAuditLog?.({
       id: randomUUID(),
@@ -423,7 +428,7 @@ export function createApp() {
         return res.status(401).json({ message: 'User not found.' })
       }
 
-      const requests = payload.role === 'resident'
+      const requests = user.role === 'resident'
         ? await store.listRequestsForUser(payload.sub)
         : await store.listAllRequests?.() || []
 
@@ -478,7 +483,7 @@ export function createApp() {
 
     try {
       const payload = verifyToken(token)
-      if (payload.role !== 'admin') {
+      if (!(await hasCurrentRole(token, ['admin']))) {
         return res.status(403).json({ message: 'Administrator access required.' })
       }
 
@@ -525,7 +530,7 @@ export function createApp() {
 
     try {
       const payload = verifyToken(token)
-      if (payload.role !== 'admin') {
+      if (!(await hasCurrentRole(token, ['admin']))) {
         return res.status(403).json({ message: 'Administrator access required.' })
       }
 
@@ -567,10 +572,13 @@ export function createApp() {
     }
 
     try {
-      const payload = verifyToken(token)
-      const requests = payload.role === 'resident'
-        ? await store.listRequestsForUser(payload.sub)
-        : await store.listAllRequests?.() || await store.listRequestsForUser(payload.sub)
+      const actor = await getCurrentActor(token)
+      if (!actor || ['Suspended', 'Disabled'].includes(actor.user.status)) {
+        return res.status(403).json({ message: 'Account access is disabled.' })
+      }
+      const requests = actor.user.role === 'resident'
+        ? await store.listRequestsForUser(actor.user.id)
+        : await store.listAllRequests?.() || await store.listRequestsForUser(actor.user.id)
       return res.json({ requests })
     } catch {
       return res.status(401).json({ message: 'Invalid or expired token.' })
@@ -587,7 +595,7 @@ export function createApp() {
 
     try {
       const payload = verifyToken(token)
-      if (!['staff', 'admin'].includes(payload.role)) {
+      if (!(await hasCurrentRole(token, ['staff', 'admin']))) {
         return res.status(403).json({ message: 'Access denied for this role.' })
       }
 
@@ -644,7 +652,7 @@ export function createApp() {
 
     try {
       const payload = verifyToken(token)
-      if (payload.role !== 'admin') {
+      if (!(await hasCurrentRole(token, ['admin']))) {
         return res.status(403).json({ message: 'Admin access required.' })
       }
 
@@ -819,7 +827,7 @@ export function createApp() {
 
     try {
       const payload = verifyToken(token)
-      if (!['staff', 'admin'].includes(payload.role)) {
+      if (!(await hasCurrentRole(token, ['staff', 'admin']))) {
         return res.status(403).json({ message: 'Staff access required.' })
       }
 
@@ -841,14 +849,15 @@ export function createApp() {
 
     try {
       const payload = verifyToken(token)
-      if (!['staff', 'admin'].includes(payload.role)) {
+      if (!(await hasCurrentRole(token, ['staff', 'admin']))) {
         return res.status(403).json({ message: 'Staff access required.' })
       }
 
       const archivesDir = path.join(process.cwd(), 'server', 'data', 'archives')
       try {
         const files = await fs.promises.readdir(archivesDir)
-        const visibleFiles = payload.role === 'admin' ? files : files.filter((file) => file.startsWith('queue-approvals-'))
+        const actor = await getCurrentActor(token)
+        const visibleFiles = actor?.user.role === 'admin' ? files : files.filter((file) => file.startsWith('queue-approvals-'))
         const list = await Promise.all(visibleFiles.map(async (file) => {
           const stat = await fs.promises.stat(path.join(archivesDir, file))
           return { name: file, size: stat.size, mtime: stat.mtime.toISOString() }
@@ -870,8 +879,8 @@ export function createApp() {
     if (!token) return res.status(401).json({ message: 'Authentication required.' })
 
     try {
-      const payload = verifyToken(token)
-      if (!['staff', 'admin'].includes(payload.role)) {
+      const actor = await getCurrentActor(token)
+      if (!actor || !['staff', 'admin'].includes(actor.user.role) || ['Suspended', 'Disabled'].includes(actor.user.status)) {
         return res.status(403).json({ message: 'Staff access required.' })
       }
 
@@ -879,7 +888,7 @@ export function createApp() {
       if (!name || typeof name !== 'string' || name.includes('..') || !/^[\w\-.]+$/.test(name)) {
         return res.status(400).json({ message: 'Invalid file name.' })
       }
-      if (payload.role !== 'admin' && !name.startsWith('queue-approvals-')) {
+      if (actor.user.role !== 'admin' && !name.startsWith('queue-approvals-')) {
         return res.status(403).json({ message: 'This archive is not available to staff.' })
       }
 
@@ -913,7 +922,7 @@ export function createApp() {
 
     try {
       const payload = verifyToken(token)
-      if (payload.role !== 'admin') {
+      if (!(await hasCurrentRole(token, ['admin']))) {
         return res.status(403).json({ message: 'Administrator access required.' })
       }
 
@@ -1030,7 +1039,7 @@ export function createApp() {
 
     try {
       const payload = verifyToken(token)
-      if (payload.role !== 'admin') return res.status(403).json({ message: 'Admin access required.' })
+      if (!(await hasCurrentRole(token, ['admin']))) return res.status(403).json({ message: 'Admin access required.' })
 
       const users = await store.listAllUsers?.() || []
       const archivesDir = path.join(process.cwd(), 'server', 'data', 'archives')
@@ -1078,7 +1087,7 @@ export function createApp() {
 
     try {
       const payload = verifyToken(token)
-      if (payload.role !== 'admin') {
+      if (!(await hasCurrentRole(token, ['admin']))) {
         return res.status(403).json({ message: 'Admin access required.' })
       }
 
@@ -1112,7 +1121,7 @@ export function createApp() {
 
     try {
       const payload = verifyToken(token)
-      if (payload.role !== 'admin') {
+      if (!(await hasCurrentRole(token, ['admin']))) {
         return res.status(403).json({ message: 'Admin access required.' })
       }
 
@@ -1156,7 +1165,7 @@ export function createApp() {
 
     try {
       const payload = verifyToken(token)
-      if (payload.role !== 'admin') {
+      if (!(await hasCurrentRole(token, ['admin']))) {
         return res.status(403).json({ message: 'Admin access required.' })
       }
 
@@ -1201,7 +1210,7 @@ export function createApp() {
     if (!token) return res.status(401).json({ message: 'Authentication required.' })
     try {
       const payload = verifyToken(token)
-      if (payload.role !== 'admin') return res.status(403).json({ message: 'Admin access required.' })
+      if (!(await hasCurrentRole(token, ['admin']))) return res.status(403).json({ message: 'Admin access required.' })
 
       const users = await store.listAllUsers?.() || []
       const accessUsers = users.map((user) => ({
@@ -1224,7 +1233,7 @@ export function createApp() {
     if (!token) return res.status(401).json({ message: 'Authentication required.' })
     try {
       const payload = verifyToken(token)
-      if (payload.role !== 'admin') return res.status(403).json({ message: 'Admin access required.' })
+      if (!(await hasCurrentRole(token, ['admin']))) return res.status(403).json({ message: 'Admin access required.' })
       const user = await store.findUserById?.(req.params.id)
       if (!user) return res.status(404).json({ message: 'User not found.' })
       return res.json({ user: sanitizeUserRecord(user) })
@@ -1241,7 +1250,7 @@ export function createApp() {
     if (!token) return res.status(401).json({ message: 'Authentication required.' })
     try {
       const payload = verifyToken(token)
-      if (payload.role !== 'admin') return res.status(403).json({ message: 'Admin access required.' })
+      if (!(await hasCurrentRole(token, ['admin']))) return res.status(403).json({ message: 'Admin access required.' })
       const keepAdmins = req.body?.keepAdmins !== false
       await store.clearData?.({ keepAdmins })
       return res.json({ ok: true })
@@ -1258,7 +1267,7 @@ export function createApp() {
     if (!token) return res.status(401).json({ message: 'Authentication required.' })
     try {
       const payload = verifyToken(token)
-      if (payload.role !== 'admin') return res.status(403).json({ message: 'Admin access required.' })
+      if (!(await hasCurrentRole(token, ['admin']))) return res.status(403).json({ message: 'Admin access required.' })
       const rawDays = req.body?.days
       const parsedDays = rawDays === undefined || rawDays === null || rawDays === '' ? 7 : Number(rawDays)
       const days = Number.isFinite(parsedDays) ? Math.max(0, parsedDays) : 7
@@ -1276,7 +1285,7 @@ export function createApp() {
     if (!token) return res.status(401).json({ message: 'Authentication required.' })
     try {
       const payload = verifyToken(token)
-      if (payload.role !== 'admin') return res.status(403).json({ message: 'Admin access required.' })
+      if (!(await hasCurrentRole(token, ['admin']))) return res.status(403).json({ message: 'Admin access required.' })
       const approvals = await store.listApprovals?.() || []
       return res.json({ approvals })
     } catch {
@@ -1291,7 +1300,7 @@ export function createApp() {
     if (!token) return res.status(401).json({ message: 'Authentication required.' })
     try {
       const payload = verifyToken(token)
-      if (payload.role !== 'admin') return res.status(403).json({ message: 'Admin access required.' })
+      if (!(await hasCurrentRole(token, ['admin']))) return res.status(403).json({ message: 'Admin access required.' })
 
       const archivesDir = path.join(process.cwd(), 'server', 'data', 'archives')
       try {
@@ -1321,7 +1330,7 @@ export function createApp() {
 
     try {
       const payload = verifyToken(token)
-      if (payload.role !== 'admin') return res.status(403).json({ message: 'Admin access required.' })
+      if (!(await hasCurrentRole(token, ['admin']))) return res.status(403).json({ message: 'Admin access required.' })
 
       const name = req.query.name
       if (!name || typeof name !== 'string' || name.includes('..') || !/^[\w\-.]+$/.test(name)) {
@@ -1359,7 +1368,7 @@ export function createApp() {
 
     try {
       const payload = verifyToken(token)
-      if (payload.role !== 'admin') return res.status(403).json({ message: 'Admin access required.' })
+      if (!(await hasCurrentRole(token, ['admin']))) return res.status(403).json({ message: 'Admin access required.' })
 
       const name = req.query.name
       if (!name || typeof name !== 'string' || name.includes('..') || !/^[\w\-.]+$/.test(name)) {
