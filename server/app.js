@@ -500,7 +500,7 @@ export function createApp() {
       db.announcements = Array.isArray(db.announcements) ? db.announcements : []
 
       const announcement = {
-        id: req.body?.id || randomUUID(),
+        id: randomUUID(),
         tag,
         title,
         content,
@@ -745,7 +745,7 @@ export function createApp() {
       }
 
       const staffMember = {
-        id: req.body?.id || randomUUID(),
+        id: randomUUID(),
         firstName,
         lastName,
         email,
