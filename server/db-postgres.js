@@ -5,10 +5,11 @@ import { hashPassword } from './auth.js'
 
 const { Pool } = pg
 const jsonDbPath = path.join(process.cwd(), 'server', 'data', 'db.json')
+const databaseUrl = process.env.DATABASE_URL?.replace(/[?&]sslmode=[^&]*/i, '')
 
 const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: process.env.DATABASE_URL?.includes('sslmode=require') ? { rejectUnauthorized: false } : false,
+  connectionString: databaseUrl,
+  ssl: process.env.DATABASE_URL ? { rejectUnauthorized: false } : false,
 })
 
 const normalizeUser = (user = null) => {
