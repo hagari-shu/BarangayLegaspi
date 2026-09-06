@@ -1354,6 +1354,11 @@ textarea:focus {
   text-align: left;
 }
 
+.service-item > span:nth-child(2) {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
 .service-icon {
   width: 46px;
   height: 46px;
@@ -1458,6 +1463,11 @@ textarea:focus {
   align-items: center;
   gap: 12px;
   margin-bottom: 18px;
+}
+
+.profile-head > div:not(.profile-avatar) {
+  min-width: 0;
+  flex: 1 1 auto;
 }
 
 .profile-avatar {
@@ -2962,6 +2972,35 @@ textarea:focus {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 8px;
+  }
+
+  .service-item {
+    align-items: flex-start;
+    gap: 10px;
+    padding: 13px 12px;
+  }
+
+  .service-item .service-icon {
+    flex: 0 0 42px;
+    width: 42px;
+    height: 42px;
+  }
+
+  .service-item .service-status {
+    flex: 0 0 auto;
+    margin-left: 0;
+    align-self: center;
+    max-width: 82px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .profile-head {
+    align-items: flex-start;
+  }
+
+  .profile-head h3 {
+    overflow-wrap: anywhere;
   }
 
   .mobile-quick-nav {
