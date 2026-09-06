@@ -456,17 +456,16 @@ export function createApp() {
 
   app.get('/api/announcements', async (_req, res) => {
     try {
-      const db = await store.readDb?.() || { announcements: [] }
-      const storedAnnouncements = Array.isArray(db.announcements) ? db.announcements : []
+      const storedAnnouncements = await store.listAnnouncements?.() || []
 
       if (storedAnnouncements.length === 0) {
-        db.announcements = announcements.map((item, index) => ({ id: `announcement-seed-${index + 1}`, ...item }))
-        if (typeof store.writeDb === 'function') {
-          await store.writeDb(db)
+        for (const [index, item] of announcements.entries()) {
+          await store.saveAnnouncement?.({ id: randomUUID(), ...item, createdAt: new Date(Date.now() - index * 1000).toISOString() })
         }
+        return res.json({ announcements: await store.listAnnouncements?.() || announcements })
       }
 
-      return res.json({ announcements: db.announcements || [] })
+      return res.json({ announcements: storedAnnouncements })
     } catch (error) {
       console.error('failed to load announcements', error)
       return res.json({ announcements })
@@ -482,7 +481,6 @@ export function createApp() {
     }
 
     try {
-      const payload = verifyToken(token)
       if (!(await hasCurrentRole(token, ['admin']))) {
         return res.status(403).json({ message: 'Administrator access required.' })
       }
@@ -496,9 +494,6 @@ export function createApp() {
         return res.status(400).json({ message: 'Title and message are required.' })
       }
 
-      const db = await store.readDb?.() || { announcements: [] }
-      db.announcements = Array.isArray(db.announcements) ? db.announcements : []
-
       const announcement = {
         id: randomUUID(),
         tag,
@@ -508,12 +503,9 @@ export function createApp() {
         createdAt: new Date().toISOString(),
       }
 
-      db.announcements.unshift(announcement)
-      if (typeof store.writeDb === 'function') {
-        await store.writeDb(db)
-      }
+      const savedAnnouncement = await store.saveAnnouncement?.(announcement)
 
-      return res.status(201).json({ announcement })
+      return res.status(201).json({ announcement: savedAnnouncement || announcement })
     } catch (error) {
       console.error('failed to create announcement', error)
       return res.status(401).json({ message: 'Invalid or expired token.' })
@@ -529,23 +521,14 @@ export function createApp() {
     }
 
     try {
-      const payload = verifyToken(token)
       if (!(await hasCurrentRole(token, ['admin']))) {
         return res.status(403).json({ message: 'Administrator access required.' })
       }
 
-      const db = await store.readDb?.() || { announcements: [] }
-      db.announcements = Array.isArray(db.announcements) ? db.announcements : []
       const targetId = req.params.id
-      const beforeCount = db.announcements.length
-      db.announcements = db.announcements.filter((item) => String(item.id || item.title) !== String(targetId))
-
-      if (db.announcements.length === beforeCount) {
+      const deletedAnnouncement = await store.deleteAnnouncement?.(targetId)
+      if (!deletedAnnouncement) {
         return res.status(404).json({ message: 'Announcement not found.' })
-      }
-
-      if (typeof store.writeDb === 'function') {
-        await store.writeDb(db)
       }
 
       return res.json({ success: true, removedId: targetId })

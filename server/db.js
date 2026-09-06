@@ -105,6 +105,29 @@ export async function listApprovals() {
   return db.approvals || []
 }
 
+export async function listAnnouncements() {
+  const db = await readDb()
+  return Array.isArray(db.announcements) ? db.announcements : []
+}
+
+export async function saveAnnouncement(announcement) {
+  const db = await readDb()
+  db.announcements = Array.isArray(db.announcements) ? db.announcements : []
+  db.announcements.unshift(announcement)
+  await writeDb(db)
+  return announcement
+}
+
+export async function deleteAnnouncement(id) {
+  const db = await readDb()
+  db.announcements = Array.isArray(db.announcements) ? db.announcements : []
+  const announcement = db.announcements.find((item) => String(item.id || item.title) === String(id))
+  if (!announcement) return null
+  db.announcements = db.announcements.filter((item) => String(item.id || item.title) !== String(id))
+  await writeDb(db)
+  return announcement
+}
+
 export async function addAuditLog(entry) {
   const db = await readDb()
   db.auditLogs = db.auditLogs || []

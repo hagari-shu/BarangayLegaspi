@@ -99,6 +99,17 @@ export async function initDatabase() {
     );
   `)
 
+  await query(`
+    CREATE TABLE IF NOT EXISTS announcements (
+      id UUID PRIMARY KEY,
+      tag VARCHAR(30) NOT NULL DEFAULT 'green',
+      title VARCHAR(200) NOT NULL,
+      content TEXT NOT NULL,
+      date VARCHAR(100),
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+  `)
+
   const adminCheck = await query('SELECT id FROM users WHERE email = $1', ['admin@barangay.gov.ph'])
   if (adminCheck.rows.length === 0) {
     const { randomUUID } = await import('node:crypto')
@@ -176,6 +187,26 @@ export async function createUser(user) {
     await writeDb(db)
     return { ...user, firstName, lastName, mobile, email }
   }
+}
+
+export async function listAnnouncements() {
+  const result = await query('SELECT id, tag, title, content, date, created_at AS "createdAt" FROM announcements ORDER BY created_at DESC')
+  return result.rows
+}
+
+export async function saveAnnouncement(announcement) {
+  const result = await query(
+    `INSERT INTO announcements (id, tag, title, content, date, created_at)
+     VALUES ($1, $2, $3, $4, $5, $6)
+     RETURNING id, tag, title, content, date, created_at AS "createdAt"`,
+    [announcement.id, announcement.tag, announcement.title, announcement.content, announcement.date, announcement.createdAt]
+  )
+  return result.rows[0]
+}
+
+export async function deleteAnnouncement(id) {
+  const result = await query('DELETE FROM announcements WHERE id = $1 RETURNING id', [id])
+  return result.rows[0] || null
 }
 
 export async function saveUser(user) {
