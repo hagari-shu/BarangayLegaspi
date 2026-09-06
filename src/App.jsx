@@ -1317,6 +1317,7 @@ function StaffPage({ requests, staffMembers = [], announcements = [], currentUse
     availability: 'Available',
     email: '',
     mobile: '',
+    password: '',
   })
   const [announcementForm, setAnnouncementForm] = useState({
     title: '',
@@ -1413,9 +1414,14 @@ function StaffPage({ requests, staffMembers = [], announcements = [], currentUse
     const position = sanitizeText(staffForm.position) || 'Staff'
     const email = sanitizeText(staffForm.email)
     const mobile = sanitizeText(staffForm.mobile)
+    const password = sanitizeText(staffForm.password)
 
-    if (!firstName || !lastName || !email || !mobile) {
+    if (!firstName || !lastName || !email || !mobile || !password) {
       alert('Please complete all staff member fields before saving.')
+      return
+    }
+    if (!isValidPassword(password)) {
+      alert(`Staff password must have ${passwordRequirements}.`)
       return
     }
 
@@ -1427,6 +1433,7 @@ function StaffPage({ requests, staffMembers = [], announcements = [], currentUse
         availability: staffForm.availability || 'Available',
         email,
         mobile,
+        password,
         status: 'On Duty',
       })
 
@@ -1437,6 +1444,7 @@ function StaffPage({ requests, staffMembers = [], announcements = [], currentUse
         availability: 'Available',
         email: '',
         mobile: '',
+        password: '',
       })
     } catch (error) {
       alert(error.message || 'Unable to add staff member.')
@@ -1836,6 +1844,11 @@ function StaffPage({ requests, staffMembers = [], announcements = [], currentUse
                         <label>Mobile</label>
                         <input type="text" value={staffForm.mobile} onChange={(event) => setStaffForm((prev) => ({ ...prev, mobile: event.target.value }))} placeholder="09XXXXXXXXX" />
                       </div>
+                      <div className="input-block">
+                        <label>Initial Password</label>
+                        <input type="password" value={staffForm.password} onChange={(event) => setStaffForm((prev) => ({ ...prev, password: event.target.value }))} placeholder="Create staff password" minLength="8" required />
+                        <small>{passwordRequirements}.</small>
+                      </div>
                     </div>
                     <div className="editor-actions">
                       <button type="submit" className="primary-btn small">Add Staff Member</button>
@@ -1997,6 +2010,7 @@ function AdminPage({ users, residents = [], requests, reports = [], onLogout }) 
   const [activeTab, setActiveTab] = useState('overview')
   const [searchQuery, setSearchQuery] = useState('')
   const [accessSearch, setAccessSearch] = useState('')
+  const [adminForm, setAdminForm] = useState({ firstName: '', lastName: '', email: '', mobile: '', password: '' })
   const [selectedZone, setSelectedZone] = useState('all')
   const [selectedUser, setSelectedUser] = useState(null)
   const [selectedReport, setSelectedReport] = useState(null)
@@ -2066,6 +2080,28 @@ function AdminPage({ users, residents = [], requests, reports = [], onLogout }) 
       setSelectedUser((current) => current?.id === userId ? data.user : current)
     } catch (error) {
       alert(error.message || 'Unable to update user.')
+    }
+  }
+
+  const handleCreateAdmin = async (event) => {
+    event.preventDefault()
+    if (!isValidPassword(adminForm.password)) {
+      alert(`Administrator password must have ${passwordRequirements}.`)
+      return
+    }
+    try {
+      const response = await fetch(`${API_BASE}/admin/users`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(adminForm),
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(data.message || 'Unable to create administrator.')
+      setManagedUsers((current) => [data.user, ...current])
+      setAdminForm({ firstName: '', lastName: '', email: '', mobile: '', password: '' })
+      alert('Administrator account created. Share the initial password securely and ask them to change it after signing in.')
+    } catch (error) {
+      alert(error.message || 'Unable to create administrator.')
     }
   }
 
@@ -2579,6 +2615,22 @@ function AdminPage({ users, residents = [], requests, reports = [], onLogout }) 
                     <h2>User Access Management</h2>
                     <span className="soft-label">{managedUsers.length} total users</span>
                   </div>
+
+                  <form className="editor-panel admin-create-panel" onSubmit={handleCreateAdmin}>
+                    <div className="panel-header left-align">
+                      <h3>Create Administrator</h3>
+                      <span className="soft-label">Admin only</span>
+                    </div>
+                    <div className="editor-grid">
+                      <input aria-label="Administrator first name" placeholder="First name" value={adminForm.firstName} onChange={(event) => setAdminForm((current) => ({ ...current, firstName: event.target.value }))} required />
+                      <input aria-label="Administrator last name" placeholder="Last name" value={adminForm.lastName} onChange={(event) => setAdminForm((current) => ({ ...current, lastName: event.target.value }))} required />
+                      <input aria-label="Administrator email" type="email" placeholder="Email" value={adminForm.email} onChange={(event) => setAdminForm((current) => ({ ...current, email: event.target.value }))} required />
+                      <input aria-label="Administrator mobile" placeholder="09XXXXXXXXX" value={adminForm.mobile} onChange={(event) => setAdminForm((current) => ({ ...current, mobile: event.target.value }))} required />
+                      <input aria-label="Administrator initial password" type="password" placeholder="Initial password" minLength="8" value={adminForm.password} onChange={(event) => setAdminForm((current) => ({ ...current, password: event.target.value }))} required />
+                    </div>
+                    <small>{passwordRequirements}.</small>
+                    <div className="editor-actions"><button type="submit" className="primary-btn small">Create Administrator</button></div>
+                  </form>
 
                   <div className="search-and-filter">
                     <input

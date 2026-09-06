@@ -759,13 +759,14 @@ export function createApp() {
       const availability = sanitizeText(req.body?.availability) || 'Available'
       const email = sanitizeText(req.body?.email).toLowerCase()
       const mobile = sanitizeText(req.body?.mobile)
+      const password = String(req.body?.password || '').trim()
 
-      if (!firstName || !lastName || !email || !mobile) {
+      if (!firstName || !lastName || !email || !mobile || !password) {
         return res.status(400).json({ message: 'Please complete all staff member fields.' })
       }
 
-      if (!isValidEmail(email) || !isValidMobile(mobile)) {
-        return res.status(400).json({ message: 'Please enter a valid email and mobile number.' })
+      if (!isValidEmail(email) || !isValidMobile(mobile) || !isValidPassword(password)) {
+        return res.status(400).json({ message: `Please enter a valid email, mobile number, and password with ${passwordRequirements}.` })
       }
 
       const existingEmail = await store.findUserByIdentifier(email)
@@ -780,7 +781,7 @@ export function createApp() {
         lastName,
         email,
         mobile,
-        passwordHash: await hashPassword(randomUUID()),
+        passwordHash: await hashPassword(password),
         role: 'staff',
         householdId: `2024-${String(Date.now()).slice(-4)}`,
         familyMembers: 1,
@@ -807,6 +808,47 @@ export function createApp() {
     } catch (error) {
       console.error('failed to create staff member', error)
       return res.status(401).json({ message: 'Invalid or expired token.' })
+    }
+  })
+
+  app.post('/api/admin/users', async (req, res) => {
+    const authHeader = req.headers.authorization || ''
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null
+    if (!token) return res.status(401).json({ message: 'Authentication required.' })
+
+    try {
+      const actor = await getCurrentActor(token)
+      if (!actor || actor.user.role !== 'admin' || ['Suspended', 'Disabled'].includes(actor.user.status)) {
+        return res.status(403).json({ message: 'Admin access required.' })
+      }
+
+      const firstName = sanitizeText(req.body?.firstName)
+      const lastName = sanitizeText(req.body?.lastName)
+      const email = sanitizeText(req.body?.email).toLowerCase()
+      const mobile = sanitizeText(req.body?.mobile)
+      const password = String(req.body?.password || '').trim()
+      if (!firstName || !lastName || !email || !mobile || !password) {
+        return res.status(400).json({ message: 'First name, last name, email, mobile, and password are required.' })
+      }
+      if (!isValidEmail(email) || !isValidMobile(mobile) || !isValidPassword(password)) {
+        return res.status(400).json({ message: `Please provide valid account details and a password with ${passwordRequirements}.` })
+      }
+      if (await store.findUserByIdentifier(email) || await store.findUserByIdentifier(mobile)) {
+        return res.status(409).json({ message: 'A user with this email or mobile already exists.' })
+      }
+
+      const adminUser = {
+        id: randomUUID(), firstName, lastName, email, mobile, passwordHash: await hashPassword(password),
+        role: 'admin', householdId: `2024-${String(Date.now()).slice(-4)}`, familyMembers: 1,
+        status: 'Administrator', address: 'Barangay Hall, Legaspi', zone: 0, createdAt: new Date().toISOString(),
+      }
+      await store.createUser?.(adminUser) || await store.saveUser(adminUser)
+      const { passwordHash, ...safeUser } = adminUser
+      await writeAudit(actor.user, 'admin.created', 'user', adminUser.id, { email })
+      return res.status(201).json({ user: safeUser })
+    } catch (error) {
+      console.error('failed to create admin user', error)
+      return res.status(500).json({ message: 'Unable to create administrator account.' })
     }
   })
 
