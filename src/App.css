@@ -24,6 +24,7 @@
 html, body, #root {
   margin: 0;
   min-height: 100%;
+  width: 100%;
   background: var(--bg-page);
   font-family: 'Inter', sans-serif;
   color: var(--text-900);
@@ -35,6 +36,7 @@ body {
   align-items: center;
   justify-content: center;
   padding: 18px;
+  overflow-x: hidden;
 }
 
 button, input, select, textarea {
@@ -584,6 +586,14 @@ textarea:focus {
   padding: 26px 18px 40px;
   gap: 22px;
   align-items: start;
+}
+
+.dashboard-main > *,
+.dashboard-body > *,
+.page-content,
+.panel-card,
+.page-card {
+  min-width: 0;
 }
 
 .sidebar {
@@ -2802,6 +2812,19 @@ textarea:focus {
 }
 
 @media (max-width: 760px) {
+  body {
+    display: block;
+    padding: 0;
+  }
+
+  .app-shell {
+    width: 100%;
+    min-height: 100vh;
+    border-radius: 0;
+    border-left: 0;
+    border-right: 0;
+  }
+
   .dashboard-topbar {
     padding: 14px 16px;
     min-height: auto;
@@ -2814,6 +2837,7 @@ textarea:focus {
     width: 100%;
     justify-content: space-between;
     flex-wrap: wrap;
+    gap: 10px;
   }
 
   .profile-pill,
@@ -2828,6 +2852,47 @@ textarea:focus {
   .profile-banner {
     flex-direction: column;
     align-items: flex-start;
+    gap: 12px;
+  }
+
+  .dashboard-main {
+    width: 100%;
+    padding: 16px 12px 28px;
+    gap: 14px;
+  }
+
+  .dashboard-content,
+  .main-content,
+  .page-content {
+    width: 100%;
+    max-width: 100%;
+  }
+
+  .panel-card,
+  .page-card,
+  .sidebar {
+    border-radius: 14px;
+    padding: 16px;
+  }
+
+  .panel-header h2,
+  .panel-header h3,
+  .welcome-row h1,
+  .profile-banner h1 {
+    overflow-wrap: anywhere;
+  }
+
+  .topbar-actions > * {
+    max-width: 100%;
+  }
+
+  .role-chip,
+  .profile-pill,
+  .search-box,
+  .logout-btn {
+    min-width: 0;
+    max-width: 100%;
+    overflow-wrap: anywhere;
   }
 
   .request-table {
@@ -2841,15 +2906,6 @@ textarea:focus {
 }
 
 @media (max-width: 560px) {
-  body {
-    padding: 10px;
-  }
-
-  .app-shell {
-    min-height: 100vh;
-    border-radius: 0;
-  }
-
   .topbar {
     flex-direction: column;
     justify-content: center;
@@ -2858,7 +2914,10 @@ textarea:focus {
   }
 
   .topbar-inner {
-    padding: 0 14px;
+    width: 100%;
+    padding: 0;
+    gap: 8px;
+    flex-wrap: wrap;
   }
 
   .search-box, .profile-pill {
@@ -2877,6 +2936,7 @@ textarea:focus {
   .profile-banner {
     flex-direction: column;
     align-items: flex-start;
+    gap: 10px;
   }
 
   .role-chip,
@@ -2897,6 +2957,41 @@ textarea:focus {
   .primary-action,
   .primary-btn {
     width: 100%;
+  }
+
+  .secondary-btn,
+  .secondary-btn.small {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .editor-grid,
+  .staff-queue-filters,
+  .search-and-filter,
+  .history-actions,
+  .archive-actions-side {
+    grid-template-columns: 1fr;
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .staff-queue-filters > *,
+  .search-and-filter > *,
+  .history-actions > * {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .request-table-wrap,
+  .zone-group-body,
+  .archive-list {
+    max-width: 100%;
+    overflow-x: auto;
+  }
+
+  .request-table th,
+  .request-table td {
+    padding: 11px 12px;
   }
 
   .login-card {
