@@ -230,6 +230,12 @@ export function createApp() {
       const password = sanitizeText(req.body?.password)
       const address = sanitizeText(req.body?.address || 'Barangay Legaspi, Tayug, Pangasinan')
       const zone = req.body?.zone === undefined ? 1 : Number(req.body.zone)
+      const householdMembers = Array.isArray(req.body?.householdMembers)
+        ? req.body.householdMembers.slice(0, 12).map((member) => ({
+          name: sanitizeText(member?.name),
+          relationship: ['Parent', 'Sibling', 'Relative', 'Spouse', 'Child', 'Other'].includes(member?.relationship) ? member.relationship : 'Other',
+        })).filter((member) => member.name)
+        : []
 
       if (!firstName || !lastName || !mobile || !email || !password) {
         return res.status(400).json({ message: 'Please complete all required fields.' })
@@ -266,6 +272,7 @@ export function createApp() {
         status: 'Pending Verification',
         address,
         zone,
+        householdMembers,
         createdAt: new Date().toISOString(),
       }
 

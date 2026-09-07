@@ -241,6 +241,7 @@ function UserDetailModal({ user, onClose, onUserUpdated, allowEdit = false }) {
                 <div><dt>Household ID</dt><dd>{allowEdit ? <input value={editableUser.householdId || editableUser.household_id || ''} onChange={(event) => handleFieldChange('householdId', event.target.value)} /> : (editableUser.householdId || editableUser.household_id || 'N/A')}</dd></div>
                 <div><dt>Family Members</dt><dd>{allowEdit ? <input type="number" min="1" value={editableUser.familyMembers ?? editableUser.family_members ?? 4} onChange={(event) => handleFieldChange('familyMembers', Number(event.target.value) || 0)} /> : (editableUser.familyMembers ?? editableUser.family_members ?? 'N/A')}</dd></div>
                 <div><dt>Address</dt><dd>{allowEdit ? <input value={editableUser.address || ''} onChange={(event) => handleFieldChange('address', event.target.value)} /> : (editableUser.address || 'N/A')}</dd></div>
+                <div><dt>Household Members</dt><dd>{Array.isArray(editableUser.householdMembers) && editableUser.householdMembers.length > 0 ? editableUser.householdMembers.map((member) => `${member.name} (${member.relationship})`).join(', ') : 'None listed'}</dd></div>
               </dl>
             </div>
           )}
@@ -526,6 +527,7 @@ function LoginPage({ onLogin }) {
 
 function RegisterPage() {
   const navigate = useNavigate()
+  const relationshipOptions = ['Parent', 'Sibling', 'Relative', 'Spouse', 'Child', 'Other']
   const [form, setForm] = useState({
     firstName: '',
     lastName: '',
@@ -533,12 +535,28 @@ function RegisterPage() {
     email: '',
     address: '',
     zone: '',
+    householdMembers: [],
     password: '',
   })
 
   const handleChange = (event) => {
     const { name, value } = event.target
     setForm((prev) => ({ ...prev, [name]: value }))
+  }
+
+  const addHouseholdMember = () => {
+    setForm((prev) => ({ ...prev, householdMembers: [...prev.householdMembers, { name: '', relationship: 'Parent' }] }))
+  }
+
+  const updateHouseholdMember = (index, field, value) => {
+    setForm((prev) => ({
+      ...prev,
+      householdMembers: prev.householdMembers.map((member, memberIndex) => memberIndex === index ? { ...member, [field]: value } : member),
+    }))
+  }
+
+  const removeHouseholdMember = (index) => {
+    setForm((prev) => ({ ...prev, householdMembers: prev.householdMembers.filter((_, memberIndex) => memberIndex !== index) }))
   }
 
   const handleSubmit = async (event) => {
@@ -551,6 +569,9 @@ function RegisterPage() {
       email: sanitizeText(form.email),
       address: sanitizeText(form.address),
       zone: Number(form.zone),
+      householdMembers: form.householdMembers
+        .map((member) => ({ name: sanitizeText(member.name), relationship: relationshipOptions.includes(member.relationship) ? member.relationship : 'Other' }))
+        .filter((member) => member.name),
       password: sanitizeText(form.password),
     }
 
@@ -580,6 +601,7 @@ function RegisterPage() {
           email: nextForm.email,
           address: nextForm.address,
           zone: nextForm.zone,
+          householdMembers: nextForm.householdMembers,
           password: nextForm.password,
         }),
       })
@@ -644,6 +666,24 @@ function RegisterPage() {
                   <option value="">Select your zone</option>
                   {[1, 2, 3, 4, 5, 6, 7].map((zone) => <option key={zone} value={zone}>Zone {zone}</option>)}
                 </select>
+              </div>
+              <div className="input-block full-width household-members-block">
+                <div className="household-members-header">
+                  <div>
+                    <label>Household Members</label>
+                    <small>Add people who live at the same address. This is optional.</small>
+                  </div>
+                  <button type="button" className="secondary-btn small" onClick={addHouseholdMember}>Add member</button>
+                </div>
+                {form.householdMembers.map((member, index) => (
+                  <div className="household-member-row" key={`household-member-${index}`}>
+                    <input type="text" value={member.name} onChange={(event) => updateHouseholdMember(index, 'name', event.target.value)} placeholder="Full name" aria-label={`Household member ${index + 1} name`} />
+                    <select value={member.relationship} onChange={(event) => updateHouseholdMember(index, 'relationship', event.target.value)} aria-label={`Household member ${index + 1} relationship`}>
+                      {relationshipOptions.map((relationship) => <option key={relationship} value={relationship}>{relationship}</option>)}
+                    </select>
+                    <button type="button" className="small-action danger" onClick={() => removeHouseholdMember(index)} aria-label={`Remove household member ${index + 1}`}>Remove</button>
+                  </div>
+                ))}
               </div>
               <PasswordField id="registration-password" label="Password" value={form.password} onChange={(event) => setForm((current) => ({ ...current, password: event.target.value }))} placeholder="Create a strong password" helpText={`${passwordRequirements}.`} />
             </div>

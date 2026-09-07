@@ -23,6 +23,7 @@ const normalizeUser = (user = null) => {
    lastName: user.lastName ?? user.last_name ?? '',
    householdId: user.householdId ?? user.household_id ?? null,
    familyMembers: user.familyMembers ?? user.family_members ?? null,
+  householdMembers: user.householdMembers ?? user.household_members ?? [],
    passwordHash: user.passwordHash ?? user.password_hash ?? null,
    createdAt: user.createdAt ?? user.created_at ?? null,
    zone: user.zone ?? user.zone_number ?? null,
@@ -66,6 +67,7 @@ export async function initDatabase() {
       role VARCHAR(30) NOT NULL DEFAULT 'resident',
       household_id VARCHAR(50),
       family_members INTEGER DEFAULT 4,
+      household_members JSONB DEFAULT '[]'::jsonb,
       status VARCHAR(80) DEFAULT 'Active Resident',
       address TEXT,
       zone INTEGER,
@@ -74,6 +76,8 @@ export async function initDatabase() {
       created_at TIMESTAMPTZ DEFAULT NOW()
     );
   `)
+
+  await query("ALTER TABLE users ADD COLUMN IF NOT EXISTS household_members JSONB DEFAULT '[]'::jsonb")
 
   await query(`
     CREATE TABLE IF NOT EXISTS requests (
@@ -166,12 +170,12 @@ export async function findUserById(id) {
 }
 
 export async function createUser(user) {
-  const { id, firstName, lastName, mobile, email, passwordHash, role, householdId, familyMembers, status, address, zone, position, availability } = user
+  const { id, firstName, lastName, mobile, email, passwordHash, role, householdId, familyMembers, householdMembers = [], status, address, zone, position, availability } = user
   try {
     await query(
-      `INSERT INTO users (id, first_name, last_name, mobile, email, password_hash, role, household_id, family_members, status, address, zone, position, availability)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
-      [id, firstName, lastName, mobile, email, passwordHash, role, householdId, familyMembers, status, address, zone ?? null, position ?? null, availability ?? 'Available']
+      `INSERT INTO users (id, first_name, last_name, mobile, email, password_hash, role, household_id, family_members, household_members, status, address, zone, position, availability)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
+      [id, firstName, lastName, mobile, email, passwordHash, role, householdId, familyMembers, JSON.stringify(householdMembers), status, address, zone ?? null, position ?? null, availability ?? 'Available']
     )
     return { ...user, firstName, lastName, mobile, email }
   } catch (error) {
@@ -227,6 +231,7 @@ export async function updateUser(userId, updates = {}) {
     status: updates.status,
     householdId: updates.householdId ?? updates.household_id,
     familyMembers: updates.familyMembers ?? updates.family_members,
+    householdMembers: updates.householdMembers ?? updates.household_members,
     address: updates.address,
     zone: updates.zone,
     position: updates.position,
@@ -247,6 +252,7 @@ export async function updateUser(userId, updates = {}) {
     status: 'status',
     householdId: 'household_id',
     familyMembers: 'family_members',
+    householdMembers: 'household_members',
     address: 'address',
     zone: 'zone',
     position: 'position',

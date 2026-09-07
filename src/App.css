@@ -237,6 +237,44 @@ textarea:focus {
   line-height: 1.45;
 }
 
+.household-members-block {
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #f8faf9;
+}
+
+.household-members-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.household-members-header label {
+  margin-bottom: 3px;
+}
+
+.household-members-header small {
+  display: block;
+  color: var(--text-700);
+  line-height: 1.4;
+}
+
+.household-member-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(140px, 0.8fr) auto;
+  gap: 8px;
+  align-items: center;
+  margin-top: 8px;
+}
+
+.household-member-row input,
+.household-member-row select {
+  min-width: 0;
+}
+
 .label-row {
   display: flex;
   align-items: center;
@@ -3394,6 +3432,18 @@ textarea:focus {
     align-items: flex-start;
     flex-direction: column;
     gap: 14px;
+  }
+
+  .household-members-header {
+    flex-direction: column;
+  }
+
+  .household-member-row {
+    grid-template-columns: 1fr;
+  }
+
+  .household-member-row .small-action {
+    justify-self: start;
   }
 
   .onboarding-actions {
