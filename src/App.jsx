@@ -218,7 +218,12 @@ function UserDetailModal({ user, onClose, onUserUpdated, allowEdit = false }) {
                 </select>
               ) : (role.charAt(0).toUpperCase() + role.slice(1))}</dd></div>
               <div><dt>Status</dt><dd>{allowEdit ? <input value={editableUser.status || ''} onChange={(event) => handleFieldChange('status', event.target.value)} /> : (editableUser.status || 'N/A')}</dd></div>
-              <div><dt>Zone</dt><dd>{allowEdit ? <input type="number" min="0" value={editableUser.zone ?? ''} onChange={(event) => handleFieldChange('zone', event.target.value === '' ? null : Number(event.target.value))} /> : (zone !== 'N/A' ? `Zone ${zone}` : 'N/A')}</dd></div>
+              <div><dt>Zone</dt><dd>{allowEdit ? (
+                <select value={editableUser.zone ?? ''} onChange={(event) => handleFieldChange('zone', event.target.value === '' ? null : Number(event.target.value))}>
+                  <option value="">Select zone</option>
+                  {[1, 2, 3, 4, 5, 6, 7].map((zoneNumber) => <option key={zoneNumber} value={zoneNumber}>Zone {zoneNumber}</option>)}
+                </select>
+              ) : (zone !== 'N/A' ? `Zone ${zone}` : 'N/A')}</dd></div>
               <div><dt>Created Account</dt><dd>{createdAt}</dd></div>
               {allowEdit ? (
                 <>

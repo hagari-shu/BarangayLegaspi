@@ -1142,6 +1142,10 @@ export function createApp() {
         return res.status(400).json({ message: 'Please enter a valid mobile number.' })
       }
 
+      if (nextRole === 'resident' && (!Number.isInteger(nextZone) || nextZone < 1 || nextZone > 7)) {
+        return res.status(400).json({ message: 'Resident zone must be a number from 1 to 7.' })
+      }
+
       const duplicateEmail = nextEmail && await store.findUserByIdentifier(nextEmail)
       if (duplicateEmail && duplicateEmail.id !== req.params.id) {
         return res.status(409).json({ message: 'A user with this email already exists.' })
