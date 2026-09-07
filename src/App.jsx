@@ -2767,6 +2767,7 @@ function AdminPage({ users, residents = [], requests, reports = [], onLogout }) 
                                         <th>Household ID</th>
                                         <th>Family Members</th>
                                         <th>Email</th>
+                                        <th>Registered</th>
                                         <th>Action</th>
                                       </tr>
                                     </thead>
@@ -2777,6 +2778,7 @@ function AdminPage({ users, residents = [], requests, reports = [], onLogout }) 
                                           <td>{resident.householdId}</td>
                                           <td>{resident.familyMembers}</td>
                                           <td>{resident.email}</td>
+                                          <td>{formatDateValue(resident.createdAt || resident.created_at)}</td>
                                           <td>
                                             <button 
                                               className="small-action info"
@@ -2806,6 +2808,7 @@ function AdminPage({ users, residents = [], requests, reports = [], onLogout }) 
                             <th>Household ID</th>
                             <th>Family Members</th>
                             <th>Email</th>
+                            <th>Registered</th>
                             <th>Action</th>
                           </tr>
                         </thead>
@@ -2817,6 +2820,7 @@ function AdminPage({ users, residents = [], requests, reports = [], onLogout }) 
                               <td>{resident.householdId}</td>
                               <td>{resident.familyMembers}</td>
                               <td>{resident.email}</td>
+                              <td>{formatDateValue(resident.createdAt || resident.created_at)}</td>
                               <td>
                                 <button 
                                   className="small-action info"
