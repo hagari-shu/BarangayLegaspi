@@ -1,5 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { createServer } from 'node:http'
 import { createApp } from '../server/app.js'
 import { hashPassword } from '../server/auth.js'
 import * as jsonDb from '../server/db.js'
@@ -395,6 +396,69 @@ test('admin can archive residents by zone into separate files', async () => {
   } finally {
     await new Promise((resolve, reject) => {
       server.close((error) => (error ? reject(error) : resolve()))
+    })
+  }
+})
+
+test('reset password request sends a delivery webhook payload when configured', async () => {
+  const originalDeliveryUrl = process.env.RESET_DELIVERY_URL
+  const deliveryRequests = []
+  const deliveryServer = await new Promise((resolve) => {
+    const server = createServer((request, response) => {
+      let body = ''
+      request.on('data', (chunk) => { body += chunk })
+      request.on('end', () => {
+        deliveryRequests.push({
+          method: request.method,
+          path: request.url,
+          body: JSON.parse(body || '{}'),
+        })
+        response.writeHead(200, { 'Content-Type': 'application/json' })
+        response.end(JSON.stringify({ ok: true }))
+      })
+    })
+    server.listen(0, () => resolve(server))
+  })
+
+  process.env.RESET_DELIVERY_URL = `http://127.0.0.1:${deliveryServer.address().port}`
+
+  try {
+    const { server, baseUrl } = await createTestServer()
+    const email = `delivery.${Date.now()}@example.com`
+    const registerResponse = await fetch(`${baseUrl}/api/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        firstName: 'Delivery',
+        lastName: 'User',
+        mobile: `091${Math.floor(10000000 + Math.random() * 90000000)}`,
+        email,
+        password: 'SecurePass123!',
+      }),
+    })
+    assert.equal(registerResponse.status, 201)
+
+    const requestResponse = await fetch(`${baseUrl}/api/reset-password/request`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ identifier: email }),
+    })
+
+    assert.equal(requestResponse.status, 200)
+    const requestBody = await requestResponse.json()
+    assert.equal(requestBody.deliveryStatus, 'queued')
+    assert.equal(requestBody.message, 'If the account exists, reset instructions have been sent.')
+    assert.equal(deliveryRequests.length > 0, true)
+
+    const passwordResetRequest = deliveryRequests.find((delivery) => delivery.body.event === 'password_reset')
+    assert.ok(passwordResetRequest)
+    assert.equal(passwordResetRequest.body.email, email)
+    assert.equal(passwordResetRequest.body.event, 'password_reset')
+  } finally {
+    if (originalDeliveryUrl === undefined) delete process.env.RESET_DELIVERY_URL
+    else process.env.RESET_DELIVERY_URL = originalDeliveryUrl
+    await new Promise((resolve, reject) => {
+      deliveryServer.close((error) => (error ? reject(error) : resolve()))
     })
   }
 })

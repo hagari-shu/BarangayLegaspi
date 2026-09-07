@@ -157,6 +157,40 @@ export function createApp() {
 
   const authAttempts = new Map()
   const resetTokens = new Map()
+
+  const sendDeliveryWebhook = async ({ event, recipient, token, expiresAt, user, title, message, metadata = {} }) => {
+    const deliveryUrl = process.env.RESET_DELIVERY_URL || process.env.NOTIFICATION_WEBHOOK_URL
+    if (!deliveryUrl) {
+      return { queued: false, deliveryStatus: 'disabled', event }
+    }
+
+    const payload = {
+      event,
+      recipient,
+      token,
+      expiresAt,
+      userId: user?.id || null,
+      email: user?.email || null,
+      mobile: user?.mobile || null,
+      title,
+      message,
+      metadata,
+      sentAt: new Date().toISOString(),
+    }
+
+    const response = await fetch(deliveryUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+
+    if (!response.ok) {
+      throw new Error(`Delivery webhook failed with status ${response.status}`)
+    }
+
+    return { queued: true, deliveryStatus: 'queued', event, responseStatus: response.status }
+  }
+
   const authRateLimit = (req, res, next) => {
     const key = req.ip || req.socket.remoteAddress || 'unknown'
     const now = Date.now()
@@ -194,6 +228,8 @@ export function createApp() {
       const mobile = sanitizeText(req.body?.mobile)
       const email = sanitizeText(req.body?.email).toLowerCase()
       const password = sanitizeText(req.body?.password)
+      const address = sanitizeText(req.body?.address || 'Barangay Legaspi, Tayug, Pangasinan')
+      const zone = req.body?.zone === undefined ? 1 : Number(req.body.zone)
 
       if (!firstName || !lastName || !mobile || !email || !password) {
         return res.status(400).json({ message: 'Please complete all required fields.' })
@@ -201,6 +237,10 @@ export function createApp() {
 
       if (!isValidMobile(mobile) || !isValidEmail(email) || !isValidPassword(password)) {
         return res.status(400).json({ message: `Please enter a valid mobile number, email, and password with ${passwordRequirements}.` })
+      }
+
+      if (!address || !Number.isInteger(zone) || zone < 1 || zone > 7) {
+        return res.status(400).json({ message: 'Please provide a valid address and a zone from 1 to 7.' })
       }
 
       const existingUser = await store.findUserByIdentifier(mobile)
@@ -224,12 +264,27 @@ export function createApp() {
         householdId: `2024-${String(Date.now()).slice(-4)}`,
         familyMembers: 4,
         status: 'Pending Verification',
-        address: 'Barangay Legaspi, Tayug, Pangasinan',
+        address,
+        zone,
         createdAt: new Date().toISOString(),
       }
 
       await store.saveUser(user)
       await writeAudit(null, 'user.registered', 'user', user.id, { status: user.status })
+
+      const delivery = await sendDeliveryWebhook({
+        event: 'resident_registered',
+        recipient: user.email,
+        token: null,
+        expiresAt: null,
+        user,
+        title: 'Account registered',
+        message: 'Your account has been created and is waiting administrator approval.',
+        metadata: { status: user.status },
+      }).catch((error) => {
+        console.error('registration notification error', error)
+        return { queued: false, deliveryStatus: 'failed', event: 'resident_registered' }
+      })
 
       const { passwordHash, ...safeUser } = user
 
@@ -237,6 +292,7 @@ export function createApp() {
         message: 'Account created and is awaiting administrator approval.',
         requiresApproval: true,
         user: safeUser,
+        deliveryStatus: delivery.deliveryStatus || 'disabled',
       })
     } catch (error) {
       console.error('Register error:', error)
@@ -295,21 +351,33 @@ export function createApp() {
       const expiresAt = Date.now() + 15 * 60 * 1000
       resetTokens.set(createHash('sha256').update(token).digest('hex'), { userId: user.id, expiresAt })
 
-      if (process.env.RESET_DELIVERY_URL) {
-        const deliveryResponse = await fetch(process.env.RESET_DELIVERY_URL, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email: user.email, token, expiresAt }),
-        })
-        if (!deliveryResponse.ok) throw new Error('Reset delivery failed')
-        return res.json({ message: genericMessage })
+      const webhookResult = await sendDeliveryWebhook({
+        event: 'password_reset',
+        recipient: user.email,
+        token,
+        expiresAt,
+        user,
+        title: 'Password reset requested',
+        message: 'Use the reset code below to continue resetting your password.',
+        metadata: { expiresInMinutes: 15 },
+      }).catch((error) => {
+        console.error('delivery webhook error', error)
+        return { queued: false, deliveryStatus: 'failed', event: 'password_reset' }
+      })
+
+      if (webhookResult.queued) {
+        return res.json({ message: genericMessage, deliveryStatus: webhookResult.deliveryStatus })
       }
 
       if (process.env.NODE_ENV === 'production') {
         return res.status(503).json({ message: 'Password reset delivery is not configured. Please contact the barangay office.' })
       }
 
-      return res.json({ message: 'Development reset token generated.', resetToken: token })
+      return res.json({
+        message: 'Development reset token generated.',
+        resetToken: token,
+        deliveryStatus: webhookResult.deliveryStatus,
+      })
     } catch (error) {
       console.error('reset request error', error)
       return res.status(500).json({ message: 'Unable to start password reset.' })
@@ -1095,6 +1163,19 @@ export function createApp() {
       if (!updatedUser) {
         return res.status(404).json({ message: 'User not found.' })
       }
+
+      await sendDeliveryWebhook({
+        event: 'account_status_updated',
+        recipient: updatedUser.email,
+        token: null,
+        expiresAt: null,
+        user: updatedUser,
+        title: 'Account status updated',
+        message: `Your barangay account status changed to ${updatedUser.status}.`,
+        metadata: { status: updatedUser.status, role: updatedUser.role },
+      }).catch((error) => {
+        console.error('status notification error', error)
+      })
 
       await writeAudit(actor.user, 'user.updated', 'user', updatedUser.id, { status: updatedUser.status, role: updatedUser.role })
       return res.json({ user: sanitizeUserRecord(updatedUser) })

@@ -1,12 +1,7 @@
 ﻿import { useEffect, useState } from 'react'
-import { Routes, Route, Navigate, Link, NavLink, useNavigate } from 'react-router-dom'
+import { Routes, Route, Navigate, Link, useNavigate } from 'react-router-dom'
 import barangaySeal from './assets/barangay-seal.svg'
 import './App.css'
-
-const demoAccount = {
-  identifier: '09123456789',
-  password: 'SecurePass123',
-}
 
 const sessionKey = 'brgy-legaspi-session'
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:3001/api'
@@ -34,6 +29,40 @@ const isValidPassword = (value) => {
   return password.length >= 8 && /[a-z]/.test(password) && /[A-Z]/.test(password) && /\d/.test(password) && /[^A-Za-z0-9\s]/.test(password)
 }
 const passwordRequirements = 'at least 8 characters, one uppercase letter, one lowercase letter, one number, and one special character'
+
+function PasswordField({ id, label, value, onChange, autoComplete = 'new-password', minLength = 8, placeholder, required = true, helpText }) {
+  const [visible, setVisible] = useState(false)
+
+  return (
+    <div className="password-field-block">
+      {label && <label htmlFor={id}>{label}</label>}
+      <div className="password-wrap">
+        <input
+          id={id}
+          type={visible ? 'text' : 'password'}
+          value={value}
+          onChange={onChange}
+          autoComplete={autoComplete}
+          minLength={minLength}
+          placeholder={placeholder}
+          required={required}
+        />
+        <button
+          type="button"
+          className="toggle-password"
+          aria-label={visible ? `Hide ${label || 'password'}` : `Show ${label || 'password'}`}
+          aria-pressed={visible}
+          onClick={() => setVisible((current) => !current)}
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M12 5c5.4 0 9.8 4.3 11.4 6.5-1.6 2.2-6 6.5-11.4 6.5S2.2 13.7.6 11.5C2.2 9.3 6.6 5 12 5Zm0 2a8.2 8.2 0 0 0-7.8 4.5A8.2 8.2 0 0 0 12 16a8.2 8.2 0 0 0 7.8-4.5A8.2 8.2 0 0 0 12 7Zm0 2.5A2 2 0 1 1 12 14a2 2 0 0 1 0-4.5Z" />
+          </svg>
+        </button>
+      </div>
+      {helpText && <small>{helpText}</small>}
+    </div>
+  )
+}
 
 const readStoredSession = () => {
   try {
@@ -481,9 +510,7 @@ function LoginPage({ onLogin }) {
                 <input id="reset-token" type="text" value={resetForm.token} onChange={(event) => setResetForm((current) => ({ ...current, token: event.target.value }))} required />
               </div>}
               {resetRequested && <div className="input-block">
-                <label htmlFor="reset-new-password">New password</label>
-                <input id="reset-new-password" type="password" minLength="8" value={resetForm.newPassword} onChange={(event) => setResetForm((current) => ({ ...current, newPassword: event.target.value }))} required />
-                <small>{passwordRequirements}.</small>
+                <PasswordField id="reset-new-password" label="New password" value={resetForm.newPassword} onChange={(event) => setResetForm((current) => ({ ...current, newPassword: event.target.value }))} helpText={`${passwordRequirements}.`} />
               </div>}
               <div className="modal-actions">
                 <button type="button" className="secondary-btn small" onClick={() => { setShowReset(false); setResetRequested(false) }}>Cancel</button>
@@ -497,13 +524,15 @@ function LoginPage({ onLogin }) {
   )
 }
 
-function RegisterPage({ onRegister }) {
+function RegisterPage() {
   const navigate = useNavigate()
   const [form, setForm] = useState({
     firstName: '',
     lastName: '',
     mobile: '',
     email: '',
+    address: '',
+    zone: '',
     password: '',
   })
 
@@ -520,10 +549,12 @@ function RegisterPage({ onRegister }) {
       lastName: sanitizeText(form.lastName),
       mobile: sanitizeText(form.mobile),
       email: sanitizeText(form.email),
+      address: sanitizeText(form.address),
+      zone: Number(form.zone),
       password: sanitizeText(form.password),
     }
 
-    if (!nextForm.firstName || !nextForm.lastName || !nextForm.mobile || !nextForm.email || !nextForm.password) {
+    if (!nextForm.firstName || !nextForm.lastName || !nextForm.mobile || !nextForm.email || !nextForm.address || !nextForm.zone || !nextForm.password) {
       alert('Please complete all required fields to register.')
       return
     }
@@ -547,6 +578,8 @@ function RegisterPage({ onRegister }) {
           lastName: nextForm.lastName,
           mobile: nextForm.mobile,
           email: nextForm.email,
+          address: nextForm.address,
+          zone: nextForm.zone,
           password: nextForm.password,
         }),
       })
@@ -601,11 +634,18 @@ function RegisterPage({ onRegister }) {
                 <label>Email Address</label>
                 <input type="email" name="email" value={form.email} onChange={handleChange} placeholder="name@email.com" />
               </div>
-              <div className="input-block">
-                <label>Password</label>
-                <input type="password" name="password" value={form.password} onChange={handleChange} placeholder="Create a strong password" minLength="8" required />
-                <small>{passwordRequirements}.</small>
+              <div className="input-block full-width">
+                <label>Home Address</label>
+                <input type="text" name="address" value={form.address} onChange={handleChange} placeholder="House number, street, Barangay Legaspi" />
               </div>
+              <div className="input-block">
+                <label>Zone</label>
+                <select name="zone" value={form.zone} onChange={handleChange} required>
+                  <option value="">Select your zone</option>
+                  {[1, 2, 3, 4, 5, 6, 7].map((zone) => <option key={zone} value={zone}>Zone {zone}</option>)}
+                </select>
+              </div>
+              <PasswordField id="registration-password" label="Password" value={form.password} onChange={(event) => setForm((current) => ({ ...current, password: event.target.value }))} placeholder="Create a strong password" helpText={`${passwordRequirements}.`} />
             </div>
 
             <p className="approval-notice">After registration, your account will remain pending until a barangay administrator verifies it.</p>
@@ -624,6 +664,22 @@ function RegisterPage({ onRegister }) {
 function DashboardPage({ profile, requests, services, announcements, events, payments, onLogout, onProfileUpdated }) {
   const [searchQuery, setSearchQuery] = useState('')
   const [editingProfile, setEditingProfile] = useState(false)
+  const [showOnboarding, setShowOnboarding] = useState(() => {
+    try {
+      return localStorage.getItem(`brgy-legaspi-onboarding:${profile.email}`) !== 'complete'
+    } catch {
+      return true
+    }
+  })
+  const [notificationsOpen, setNotificationsOpen] = useState(false)
+  const [readNotificationIds, setReadNotificationIds] = useState(() => {
+    try {
+      const stored = localStorage.getItem(`brgy-legaspi-notifications:${profile.email}`)
+      return stored ? JSON.parse(stored) : []
+    } catch {
+      return []
+    }
+  })
   const [profileForm, setProfileForm] = useState(profile)
   const [savingProfile, setSavingProfile] = useState(false)
   const navigate = useNavigate()
@@ -686,6 +742,71 @@ function DashboardPage({ profile, requests, services, announcements, events, pay
     return !normalizedSearch || searchText.includes(normalizedSearch)
   })
 
+  const residentChecklist = [
+    {
+      label: 'Profile complete',
+      complete: Boolean(profile.firstName && profile.lastName && profile.email && profile.mobile && profile.address),
+      detail: 'Resident details are filled in',
+    },
+    {
+      label: 'Approval status ready',
+      complete: profile.status === 'Active Resident',
+      detail: profile.status === 'Active Resident' ? 'Your account is active' : 'Waiting for admin verification',
+    },
+    {
+      label: 'Recent request tracked',
+      complete: (requests || []).length > 0,
+      detail: (requests || []).length > 0 ? `${(requests || []).length} active request${(requests || []).length === 1 ? '' : 's'}` : 'No request submitted yet',
+    },
+  ]
+  const onboardingProgress = Math.round((residentChecklist.filter((item) => item.complete).length / residentChecklist.length) * 100)
+  const residentNotifications = [
+    ...(profile.status !== 'Active Resident' ? [{ id: 'verification-pending', title: 'Verification pending', detail: 'Please wait for barangay confirmation before requesting services.' }] : []),
+    ...((requests || []).slice(0, 3).map((request) => ({
+      id: `request-${request.id}`,
+      title: `${request.type}: ${request.status || 'Pending'}`,
+      detail: request.purpose || 'Submitted and awaiting review.',
+    }))),
+    ...((announcements || []).slice(0, 2).map((announcement) => ({
+      id: `announcement-${announcement.id || announcement.title}`,
+      title: announcement.title,
+      detail: announcement.date || 'Latest barangay update',
+    }))),
+  ].slice(0, 4)
+  const unreadNotificationCount = residentNotifications.filter((notification) => !readNotificationIds.includes(notification.id)).length
+
+  const completeOnboarding = () => {
+    setShowOnboarding(false)
+    try {
+      localStorage.setItem(`brgy-legaspi-onboarding:${profile.email}`, 'complete')
+    } catch {
+      // Ignore storage write issues in restricted browsing environments.
+    }
+  }
+
+  const markNotificationsRead = () => {
+    const nextReadIds = residentNotifications.map((notification) => notification.id)
+    setReadNotificationIds(nextReadIds)
+    try {
+      localStorage.setItem(`brgy-legaspi-notifications:${profile.email}`, JSON.stringify(nextReadIds))
+    } catch {
+      // Ignore storage write issues in restricted browsing environments.
+    }
+  }
+
+  const markNotificationRead = (notificationId) => {
+    setReadNotificationIds((current) => {
+      if (current.includes(notificationId)) return current
+      const nextReadIds = [...current, notificationId]
+      try {
+        localStorage.setItem(`brgy-legaspi-notifications:${profile.email}`, JSON.stringify(nextReadIds))
+      } catch {
+        // Ignore storage write issues in restricted browsing environments.
+      }
+      return nextReadIds
+    })
+  }
+
   return (
     <div className="dashboard-shell">
       <header className="dashboard-topbar">
@@ -708,6 +829,10 @@ function DashboardPage({ profile, requests, services, announcements, events, pay
               aria-label="Search resident dashboard"
             />
           </label>
+          <button className="notification-button" type="button" aria-label={`${unreadNotificationCount} unread notifications`} onClick={() => setNotificationsOpen((current) => !current)}>
+            <span aria-hidden="true">🔔</span>
+            {unreadNotificationCount > 0 && <span className="notification-count">{unreadNotificationCount}</span>}
+          </button>
           <button className="profile-pill" type="button" aria-label="Edit profile" onClick={() => setEditingProfile(true)}>
             <span className="avatar">{(profile.firstName || '').charAt(0)}</span>
             <span>{profile.firstName}</span>
@@ -739,6 +864,44 @@ function DashboardPage({ profile, requests, services, announcements, events, pay
               <span>An administrator must verify your Barangay Legaspi residency before you can submit service requests.</span>
             </div>
           )}
+
+          {showOnboarding && (
+            <div className="onboarding-welcome" role="dialog" aria-labelledby="onboarding-title">
+              <div>
+                <p className="eyebrow">New resident guide</p>
+                <h2 id="onboarding-title">Everything you need is here.</h2>
+                <p>Complete your profile, wait for verification, then choose a service to start a request. You can find updates and request progress on this dashboard.</p>
+              </div>
+              <div className="onboarding-actions">
+                <button type="button" className="secondary-btn small" onClick={completeOnboarding}>Got it</button>
+                <button type="button" className="primary-btn small" onClick={() => { completeOnboarding(); setEditingProfile(true) }}>Complete profile</button>
+              </div>
+            </div>
+          )}
+
+          <div className="onboarding-card">
+            <div className="onboarding-header">
+              <div>
+                <p className="eyebrow">Resident progress</p>
+                <h2>Getting started checklist</h2>
+              </div>
+              <span className="progress-pill">{onboardingProgress}% complete</span>
+            </div>
+            <div className="progress-bar" aria-hidden="true">
+              <span style={{ width: `${onboardingProgress}%` }} />
+            </div>
+            <ul className="checklist-list">
+              {residentChecklist.map((item) => (
+                <li key={item.label} className={item.complete ? 'complete' : ''}>
+                  <span className="checkmark" aria-hidden="true">{item.complete ? '✓' : '•'}</span>
+                  <div>
+                    <strong>{item.label}</strong>
+                    <small>{item.detail}</small>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </div>
 
           <div className="stats-grid" aria-label="Resident summary">
             <article className="stat-card accent">
@@ -842,6 +1005,21 @@ function DashboardPage({ profile, requests, services, announcements, events, pay
                 </dl>
               </article>
 
+              <article className="panel-card compact-panel">
+                <div className="panel-header notification-panel-header">
+                  <h2>Updates &amp; Alerts</h2>
+                  <button type="button" className="text-button" onClick={markNotificationsRead} disabled={unreadNotificationCount === 0}>Mark all read</button>
+                </div>
+                <ul className="notification-feed">
+                  {residentNotifications.length > 0 ? residentNotifications.map((notification) => (
+                    <li key={notification.id} className={readNotificationIds.includes(notification.id) ? 'read' : 'unread'}>
+                      <strong>{notification.title}</strong>
+                      <small>{notification.detail}</small>
+                    </li>
+                  )) : <li><div className="empty-state">No new alerts.</div></li>}
+                </ul>
+              </article>
+
               <article className="panel-card">
                 <div className="panel-header left-align">
                   <h2>Upcoming Events</h2>
@@ -879,6 +1057,25 @@ function DashboardPage({ profile, requests, services, announcements, events, pay
           </div>
         </section>
       </main>
+      {notificationsOpen && (
+        <div className="notification-popover" role="dialog" aria-label="Notification center">
+          <div className="notification-popover-header">
+            <div>
+              <strong>Notification center</strong>
+              <small>{unreadNotificationCount ? `${unreadNotificationCount} unread` : 'All caught up'}</small>
+            </div>
+            <button type="button" className="modal-close" aria-label="Close notification center" onClick={() => setNotificationsOpen(false)}>×</button>
+          </div>
+          <div className="notification-popover-list">
+            {residentNotifications.length > 0 ? residentNotifications.map((notification) => (
+              <button type="button" key={notification.id} className={`notification-popover-item ${readNotificationIds.includes(notification.id) ? 'read' : 'unread'}`} onClick={() => markNotificationRead(notification.id)}>
+                <strong>{notification.title}</strong>
+                <small>{notification.detail}</small>
+              </button>
+            )) : <span className="empty-state">No notifications yet.</span>}
+          </div>
+        </div>
+      )}
       {editingProfile && (
         <div className="modal-overlay" onClick={() => setEditingProfile(false)}>
           <form className="modal-content profile-edit-modal" onSubmit={handleProfileSave} onClick={(event) => event.stopPropagation()}>
@@ -933,6 +1130,16 @@ function RequestsPage({ requests, onSubmit, onLogout }) {
     notes: '',
   })
   const [submitted, setSubmitted] = useState(false)
+
+  const requestStatusSteps = ['Submitted', 'In Review', 'Finalized']
+  const recentRequests = [...(requests || [])].slice(0, 3)
+
+  const getRequestStatusMessage = (status) => {
+    if (status === 'Approved') return 'Approved and finalized by the barangay team.'
+    if (status === 'Rejected') return 'Needs clarification or is not eligible for this request type.'
+    if (status === 'In Review') return 'Your request is actively being reviewed by barangay staff.'
+    return 'Your request has been submitted and is waiting for initial review.'
+  }
 
   const handleChange = (event) => {
     const { name, value } = event.target
@@ -1034,6 +1241,34 @@ function RequestsPage({ requests, onSubmit, onLogout }) {
 
             <button type="submit" className="primary-btn wide">Submit Request</button>
           </form>
+
+          <div className="status-tracker-panel">
+            <div className="panel-header big-gap">
+              <h3>Request Status Tracker</h3>
+            </div>
+            {recentRequests.length > 0 ? recentRequests.map((item) => {
+              return (
+                <div key={item.id} className="request-status-card">
+                  <div className="request-status-title-row">
+                    <strong>{item.type}</strong>
+                    <span className={'status-badge ' + (item.status || '').toLowerCase().replace(/\s+/g, '-')}>{item.status || 'Pending'}</span>
+                  </div>
+                  <div className="status-steps" aria-label={`Status steps for ${item.type}`}>
+                    {requestStatusSteps.map((step) => {
+                      const isActive =
+                        (item.status === 'Approved' && step === 'Finalized') ||
+                        (item.status === 'Rejected' && step === 'Finalized') ||
+                        (item.status === 'In Review' && step === 'In Review') ||
+                        (!['Approved', 'Rejected', 'In Review'].includes(item.status) && step === 'Submitted')
+
+                      return <span key={`${item.id}-${step}`} className={isActive ? 'active' : ''}>{step}</span>
+                    })}
+                  </div>
+                  <p>{getRequestStatusMessage(item.status)}</p>
+                </div>
+              )
+            }) : <div className="empty-state">Your recent requests will appear here after submission.</div>}
+          </div>
 
           <div className="request-table-wrap">
             <h3>Recent Requests</h3>
@@ -1282,13 +1517,9 @@ function SettingsPage({ profile, onLogout }) {
             <div className="info-box">
               <h3>Security</h3>
               <form className="password-change-form" onSubmit={handlePasswordSubmit}>
-                <label htmlFor="current-password">Current password</label>
-                <input id="current-password" type="password" autoComplete="current-password" value={passwordForm.currentPassword} onChange={(event) => setPasswordForm((current) => ({ ...current, currentPassword: event.target.value }))} required />
-                <label htmlFor="new-password">New password</label>
-                <input id="new-password" type="password" minLength="8" autoComplete="new-password" value={passwordForm.newPassword} onChange={(event) => setPasswordForm((current) => ({ ...current, newPassword: event.target.value }))} required />
-                <label htmlFor="confirm-password">Confirm new password</label>
-                <input id="confirm-password" type="password" minLength="8" autoComplete="new-password" value={passwordForm.confirmPassword} onChange={(event) => setPasswordForm((current) => ({ ...current, confirmPassword: event.target.value }))} required />
-                <small>{passwordRequirements}.</small>
+                <PasswordField id="current-password" label="Current password" autoComplete="current-password" value={passwordForm.currentPassword} onChange={(event) => setPasswordForm((current) => ({ ...current, currentPassword: event.target.value }))} />
+                <PasswordField id="new-password" label="New password" value={passwordForm.newPassword} onChange={(event) => setPasswordForm((current) => ({ ...current, newPassword: event.target.value }))} />
+                <PasswordField id="confirm-password" label="Confirm new password" value={passwordForm.confirmPassword} onChange={(event) => setPasswordForm((current) => ({ ...current, confirmPassword: event.target.value }))} helpText={`${passwordRequirements}.`} />
                 <button type="submit" className="primary-btn small" disabled={savingPassword}>{savingPassword ? 'Saving...' : 'Change password'}</button>
               </form>
             </div>
@@ -1333,8 +1564,6 @@ function StaffPage({ requests, staffMembers = [], announcements = [], currentUse
   const pendingCount = requests.filter((item) => item.status === 'Pending' || item.status === 'In Review').length
   const approvedCount = requests.filter((item) => item.status === 'Approved').length
   const totalRequests = requests.length
-  const queueOverflow = totalRequests > 15
-  const approvalsOverflow = approvedCount > 15
   const filteredQueueRequests = requests.filter((item) => {
     const search = queueSearch.trim().toLowerCase()
     const residentName = `${item.first_name || item.firstName || ''} ${item.last_name || item.lastName || ''}`.toLowerCase()
@@ -1844,11 +2073,7 @@ function StaffPage({ requests, staffMembers = [], announcements = [], currentUse
                         <label>Mobile</label>
                         <input type="text" value={staffForm.mobile} onChange={(event) => setStaffForm((prev) => ({ ...prev, mobile: event.target.value }))} placeholder="09XXXXXXXXX" />
                       </div>
-                      <div className="input-block">
-                        <label>Initial Password</label>
-                        <input type="password" value={staffForm.password} onChange={(event) => setStaffForm((prev) => ({ ...prev, password: event.target.value }))} placeholder="Create staff password" minLength="8" required />
-                        <small>{passwordRequirements}.</small>
-                      </div>
+                      <PasswordField id="staff-initial-password" label="Initial Password" value={staffForm.password} onChange={(event) => setStaffForm((prev) => ({ ...prev, password: event.target.value }))} placeholder="Create staff password" helpText={`${passwordRequirements}.`} />
                     </div>
                     <div className="editor-actions">
                       <button type="submit" className="primary-btn small">Add Staff Member</button>
@@ -2418,6 +2643,7 @@ function AdminPage({ users, residents = [], requests, reports = [], onLogout }) 
                             <div>
                               <strong>{user.firstName || user.first_name} {user.lastName || user.last_name}</strong>
                               <small>{user.mobile} • Registered {formatDateValue(user.createdAt || user.created_at)}</small>
+                              <small>{user.address || 'No address provided'} • Zone {user.zone || user.zoneNumber || 'N/A'}</small>
                             </div>
                             <div className="action-row">
                               <button type="button" className="small-action success" onClick={() => handleVerification(user, 'Active Resident')}>Approve</button>
@@ -2626,7 +2852,7 @@ function AdminPage({ users, residents = [], requests, reports = [], onLogout }) 
                       <input aria-label="Administrator last name" placeholder="Last name" value={adminForm.lastName} onChange={(event) => setAdminForm((current) => ({ ...current, lastName: event.target.value }))} required />
                       <input aria-label="Administrator email" type="email" placeholder="Email" value={adminForm.email} onChange={(event) => setAdminForm((current) => ({ ...current, email: event.target.value }))} required />
                       <input aria-label="Administrator mobile" placeholder="09XXXXXXXXX" value={adminForm.mobile} onChange={(event) => setAdminForm((current) => ({ ...current, mobile: event.target.value }))} required />
-                      <input aria-label="Administrator initial password" type="password" placeholder="Initial password" minLength="8" value={adminForm.password} onChange={(event) => setAdminForm((current) => ({ ...current, password: event.target.value }))} required />
+                      <PasswordField id="admin-initial-password" label="Administrator initial password" value={adminForm.password} onChange={(event) => setAdminForm((current) => ({ ...current, password: event.target.value }))} placeholder="Initial password" helpText={null} />
                     </div>
                     <small>{passwordRequirements}.</small>
                     <div className="editor-actions"><button type="submit" className="primary-btn small">Create Administrator</button></div>
@@ -3030,24 +3256,6 @@ function App() {
     setSession(null)
   }
 
-  const handleRegister = ({ firstName, lastName, mobile, email, token, user }) => {
-    setProfile((prev) => ({
-      ...prev,
-      firstName,
-      lastName,
-      mobile,
-      email,
-    }))
-
-    handleLogin({
-      token,
-      user,
-      identifier: mobile,
-      role: 'resident',
-      isActive: true,
-    })
-  }
-
   const handleRequestSubmit = (newRequest) => {
     setRequests((prev) => [newRequest, ...prev])
   }
@@ -3173,7 +3381,7 @@ function App() {
   return (
     <Routes>
       <Route path="/" element={isAuthenticated ? <Navigate to={userRole === 'staff' ? '/staff' : userRole === 'admin' ? '/admin' : '/dashboard'} replace /> : <LoginPage onLogin={handleLogin} />} />
-      <Route path="/register" element={isAuthenticated ? <Navigate to={userRole === 'staff' ? '/staff' : userRole === 'admin' ? '/admin' : '/dashboard'} replace /> : <RegisterPage onRegister={handleRegister} />} />
+      <Route path="/register" element={isAuthenticated ? <Navigate to={userRole === 'staff' ? '/staff' : userRole === 'admin' ? '/admin' : '/dashboard'} replace /> : <RegisterPage />} />
       <Route path="/dashboard" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['resident']} userRole={userRole}><DashboardPage profile={profile} requests={requests} services={services} announcements={announcementsData} events={events} payments={payments} onLogout={handleLogout} onProfileUpdated={setProfile} /></ProtectedRoute>} />
       <Route path="/requests" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['resident']} userRole={userRole}><RequestsPage requests={requests} onSubmit={handleRequestSubmit} onLogout={handleLogout} /></ProtectedRoute>} />
       <Route path="/profile" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['resident']} userRole={userRole}><ProfilePage profile={profile} onLogout={handleLogout} /></ProtectedRoute>} />
