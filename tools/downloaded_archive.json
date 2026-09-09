@@ -1,0 +1,19 @@
+[
+  {
+    "id": "APP-81614798",
+    "requestId": "38d7a4d4-72a7-49a7-a8a7-ffcb212eaada",
+    "approvedBy": "28a2a517-4ec2-41b5-aae4-191f0ca53619",
+    "approvedByRole": "staff",
+    "dateApproved": "2026-08-29T05:33:34.798Z",
+    "requestSnapshot": {
+      "id": "38d7a4d4-72a7-49a7-a8a7-ffcb212eaada",
+      "userId": "8a257586-9027-4437-81ee-ad87d903790c",
+      "type": "Barangay Certificate",
+      "purpose": "Smoke test",
+      "notes": "Created by automated smoke test",
+      "status": "Approved",
+      "date": "2026-08-29T05:33:34.641Z",
+      "previousStatus": "Pending"
+    }
+  }
+]
