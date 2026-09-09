@@ -1,78 +1,97 @@
 <svg width="520" height="520" viewBox="0 0 520 520" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="sealTitle sealDesc">
   <title id="sealTitle">Barangay Legaspi Seal</title>
-  <desc id="sealDesc">Circular barangay emblem with a rayburst, community figures, and circular text.</desc>
+  <desc id="sealDesc">Circular barangay emblem with municipal hall, torch, and ring text.</desc>
 
   <defs>
-    <path id="topArc" d="M 112 260 A 148 148 0 0 1 408 260" />
-    <path id="bottomArc" d="M 408 260 A 148 148 0 0 1 112 260" />
-    <linearGradient id="goldStroke" x1="0" x2="1">
-      <stop offset="0%" stop-color="#f6dc6f" />
-      <stop offset="100%" stop-color="#d8a82f" />
-    </linearGradient>
-    <linearGradient id="blueFill" x1="0" x2="1">
-      <stop offset="0%" stop-color="#7bbfe6" />
-      <stop offset="100%" stop-color="#4d99d5" />
+    <path id="topArc" d="M 120 260 A 140 140 0 0 1 400 260" />
+    <path id="bottomArc" d="M 400 260 A 140 140 0 0 1 120 260" />
+    <linearGradient id="goldGlow" x1="0" x2="1">
+      <stop offset="0%" stop-color="#f7d64a" />
+      <stop offset="100%" stop-color="#d7a800" />
     </linearGradient>
   </defs>
 
-  <circle cx="260" cy="260" r="246" fill="url(#blueFill)" stroke="url(#goldStroke)" stroke-width="12" />
-  <circle cx="260" cy="260" r="220" fill="#edf6fb" stroke="#d8a82f" stroke-width="8" />
+  <circle cx="260" cy="260" r="248" fill="#0a0a0a" />
+  <circle cx="260" cy="260" r="232" fill="none" stroke="url(#goldGlow)" stroke-width="18" />
+  <circle cx="260" cy="260" r="215" fill="#fff" />
 
-  <text font-size="30" font-weight="800" letter-spacing="2" font-family="Georgia, 'Times New Roman', serif" fill="#0c2a3d" text-anchor="middle">
-    <textPath href="#topArc" startOffset="50%">SANGGUNIANG KABATAAN NG LEGASPI</textPath>
+  <text font-size="42" font-weight="800" letter-spacing="2" font-family="Georgia, 'Times New Roman', serif" fill="#111" text-anchor="middle">
+    <textPath href="#topArc" startOffset="50%">BAYAN NG TAYUG</textPath>
   </text>
 
-  <text font-size="28" font-weight="700" letter-spacing="2" font-family="Georgia, 'Times New Roman', serif" fill="#0c2a3d" text-anchor="middle">
-    <textPath href="#bottomArc" startOffset="50%">TAYUG, PANGASINAN</textPath>
+  <text font-size="38" font-weight="800" letter-spacing="2" font-family="Georgia, 'Times New Roman', serif" fill="#111" text-anchor="middle">
+    <textPath href="#bottomArc" startOffset="50%">LALAWIGAN NG PANGASINAN</textPath>
   </text>
 
-  <g fill="#0d2434" stroke="#0d2434" stroke-width="2">
-    <path d="M 118 142 L 133 167 L 159 167 L 138 185 L 146 212 L 118 195 L 90 212 L 98 185 L 77 167 L 103 167 Z" />
-    <path d="M 402 142 L 417 167 L 443 167 L 422 185 L 430 212 L 402 195 L 374 212 L 382 185 L 361 167 L 387 167 Z" />
+  <g transform="translate(0 4)">
+    <rect x="182" y="126" width="156" height="82" fill="#e8e4df" stroke="#111" stroke-width="5" />
+    <rect x="176" y="118" width="168" height="16" fill="#d7d0c8" stroke="#111" stroke-width="5" />
+    <rect x="190" y="144" width="52" height="46" fill="#fff" stroke="#111" stroke-width="4" />
+    <rect x="250" y="144" width="52" height="46" fill="#fff" stroke="#111" stroke-width="4" />
+    <rect x="310" y="144" width="20" height="46" fill="#fff" stroke="#111" stroke-width="4" />
+    <rect x="214" y="192" width="92" height="16" fill="#d7d0c8" stroke="#111" stroke-width="4" />
+    <rect x="116" y="205" width="288" height="38" fill="#0d4ea5" stroke="#111" stroke-width="5" />
+    <rect x="318" y="205" width="86" height="38" fill="#d82a2a" stroke="#111" stroke-width="5" />
+    <rect x="116" y="205" width="202" height="38" fill="#0d4ea5" stroke="#111" stroke-width="5" />
+    <rect x="172" y="206" width="124" height="36" fill="#f0f5f0" stroke="#111" stroke-width="4" />
+    <text x="234" y="232" text-anchor="middle" font-size="12" font-weight="700" letter-spacing="1.2" fill="#111" font-family="Arial, sans-serif">TAYUG</text>
+    <text x="234" y="244" text-anchor="middle" font-size="10" font-weight="700" fill="#111" font-family="Arial, sans-serif">MUNICIPAL</text>
+    <text x="234" y="255" text-anchor="middle" font-size="10" font-weight="700" fill="#111" font-family="Arial, sans-serif">HALL</text>
+    <rect x="116" y="243" width="288" height="58" fill="#f0f3f1" stroke="#111" stroke-width="5" />
+
+    <g fill="#ffffff" stroke="#111" stroke-width="3">
+      <rect x="128" y="248" width="28" height="38" />
+      <rect x="162" y="248" width="28" height="38" />
+      <rect x="196" y="248" width="28" height="38" />
+      <rect x="230" y="248" width="28" height="38" />
+      <rect x="264" y="248" width="28" height="38" />
+      <rect x="298" y="248" width="28" height="38" />
+      <rect x="332" y="248" width="28" height="38" />
+      <rect x="366" y="248" width="28" height="38" />
+    </g>
   </g>
 
   <g>
-    <circle cx="260" cy="260" r="142" fill="#f4efe7" stroke="#d8a82f" stroke-width="7" />
-    <circle cx="260" cy="260" r="103" fill="#f6d15a" stroke="#d8a82f" stroke-width="6" />
-
-    <g fill="#f1d764" stroke="#d8a82f" stroke-width="4">
-      <path d="M 260 160 L 270 203 L 260 214 L 250 203 Z" />
-      <path d="M 260 360 L 270 317 L 260 306 L 250 317 Z" />
-      <path d="M 160 260 L 203 250 L 214 260 L 203 270 Z" />
-      <path d="M 360 260 L 317 250 L 306 260 L 317 270 Z" />
-      <path d="M 185 185 L 210 205 L 201 216 L 177 197 Z" />
-      <path d="M 335 185 L 310 205 L 319 216 L 343 197 Z" />
-      <path d="M 185 335 L 210 315 L 201 304 L 177 323 Z" />
-      <path d="M 335 335 L 310 315 L 319 304 L 343 323 Z" />
+    <circle cx="260" cy="313" r="98" fill="#3b8d4a" stroke="#111" stroke-width="6" />
+    <g stroke="#111" stroke-width="6" fill="none">
+      <path d="M 165 313 C 180 280, 200 260, 220 250"/>
+      <path d="M 355 313 C 340 280, 320 260, 300 250"/>
+      <path d="M 165 313 C 200 335, 220 362, 250 380"/>
+      <path d="M 355 313 C 320 335, 300 362, 270 380"/>
+      <path d="M 160 313 L 360 313"/>
+      <path d="M 260 250 L 260 380"/>
     </g>
-
-    <circle cx="260" cy="260" r="52" fill="#f7f7f6" stroke="#d8a82f" stroke-width="5" />
-
-    <g>
-      <circle cx="200" cy="294" r="20" fill="#d75c4d" stroke="#0d2434" stroke-width="3" />
-      <path d="M 180 322 C 185 300, 212 302, 220 323 L 226 364 L 174 364 Z" fill="#d75c4d" stroke="#0d2434" stroke-width="3" />
-
-      <circle cx="260" cy="288" r="20" fill="#4eb9d8" stroke="#0d2434" stroke-width="3" />
-      <path d="M 240 315 C 245 296, 276 296, 280 315 L 292 364 L 228 364 Z" fill="#4eb9d8" stroke="#0d2434" stroke-width="3" />
-
-      <circle cx="320" cy="294" r="20" fill="#4bb36e" stroke="#0d2434" stroke-width="3" />
-      <path d="M 300 322 C 305 300, 332 302, 340 323 L 346 364 L 294 364 Z" fill="#4bb36e" stroke="#0d2434" stroke-width="3" />
-
-      <circle cx="242" cy="222" r="18" fill="#d98139" stroke="#0d2434" stroke-width="3" />
-      <path d="M 224 246 C 231 234, 252 234, 258 246 L 265 295 L 218 295 Z" fill="#d98139" stroke="#0d2434" stroke-width="3" />
-
-      <circle cx="278" cy="222" r="18" fill="#d45d59" stroke="#0d2434" stroke-width="3" />
-      <path d="M 259 246 C 266 234, 291 234, 298 246 L 305 295 L 254 295 Z" fill="#d45d59" stroke="#0d2434" stroke-width="3" />
-    </g>
-
-    <g fill="#f0f4f7" stroke="#0d2434" stroke-width="3">
-      <path d="M 162 258 L 175 282 L 150 282 Z" />
-      <path d="M 358 258 L 345 282 L 370 282 Z" />
-    </g>
+    <circle cx="260" cy="313" r="58" fill="none" stroke="#111" stroke-width="6" />
+    <circle cx="260" cy="313" r="18" fill="#111" />
+    <path d="M 260 313 L 260 202" stroke="#111" stroke-width="7" stroke-linecap="round" />
+    <path d="M 260 205 L 285 185 L 272 175 L 260 190 L 248 175 L 235 185 Z" fill="#e4bf42" stroke="#111" stroke-width="4" />
+    <path d="M 260 205 L 260 170" stroke="#111" stroke-width="2" />
   </g>
 
-  <g fill="#d5a73d" stroke="#0d2434" stroke-width="4">
-    <path d="M 176 149 L 189 177 L 160 177 Z" />
-    <path d="M 344 149 L 331 177 L 360 177 Z" />
+  <g>
+    <path d="M 160 324 L 360 324 L 348 364 L 172 364 Z" fill="#d8be39" stroke="#111" stroke-width="5"/>
+    <circle cx="260" cy="270" r="23" fill="#f3b52a" stroke="#111" stroke-width="4"/>
+    <path d="M 258 273 L 272 292 L 260 307 L 248 292 Z" fill="#f8da5c" stroke="#111" stroke-width="3"/>
+    <path d="M 260 270 L 260 182" stroke="#111" stroke-width="4"/>
+    <path d="M 260 182 L 275 205 L 260 240 L 245 205 Z" fill="#ea6a42" stroke="#111" stroke-width="4"/>
+    <path d="M 235 204 L 260 164 L 285 204 Z" fill="#d22d2d" stroke="#111" stroke-width="4"/>
+    <path d="M 246 200 L 260 185 L 274 200" fill="none" stroke="#111" stroke-width="3"/>
   </g>
+
+  <g fill="#f0c52d" stroke="#111" stroke-width="5">
+    <path d="M 110 350 L 148 350 L 175 390 L 146 390 Z" transform="rotate(-14 110 350)" />
+    <path d="M 410 350 L 372 350 L 345 390 L 374 390 Z" transform="rotate(14 410 350)" />
+    <path d="M 154 152 L 186 152 L 210 192 L 180 192 Z" transform="rotate(-32 154 152)" />
+    <path d="M 366 152 L 334 152 L 310 192 L 340 192 Z" transform="rotate(32 366 152)" />
+  </g>
+
+  <g>
+    <circle cx="260" cy="260" r="122" fill="none" stroke="#111" stroke-width="4" opacity="0.8" />
+    <circle cx="260" cy="260" r="98" fill="none" stroke="#111" stroke-width="4" opacity="0.7" />
+    <path d="M 140 260 H 380 M 260 140 V 380" stroke="#111" stroke-width="3" opacity="0.8" />
+    <path d="M 170 170 L 350 350 M 350 170 L 170 350" stroke="#111" stroke-width="3" opacity="0.8" />
+  </g>
+
+  <circle cx="260" cy="260" r="208" fill="none" stroke="#111" stroke-width="6" opacity="0.4" />
+  <circle cx="260" cy="260" r="248" fill="none" stroke="#f7d64a" stroke-width="10" opacity="0.8" />
 </svg>
