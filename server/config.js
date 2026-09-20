@@ -54,9 +54,5 @@ export const ADMIN_SEED = {
   zone: Number(process.env.ADMIN_ZONE ?? 0),
 }
 
-if (IS_PRODUCTION && !SHOULD_SKIP_SEED && !ADMIN_SEED.password) {
-  throw new Error('ADMIN_PASSWORD must be configured in production when seeding is enabled.')
-}
-
 export const JWT_SECRET = resolvedJwtSecret
 export const PORT = Number(process.env.PORT || 3001)
