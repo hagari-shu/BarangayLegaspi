@@ -6,7 +6,7 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { comparePassword, hashPassword, signToken, verifyToken } from './auth.js'
 import * as jsonDb from './db.js'
 import * as pgDb from './db-postgres.js'
-import { CORS_ORIGINS, PORT } from './config.js'
+import { ADMIN_SEED, CORS_ORIGINS, IS_PRODUCTION, PORT, SHOULD_SKIP_SEED } from './config.js'
 import fs from 'node:fs'
 import path from 'node:path'
 
@@ -18,6 +18,29 @@ const sanitizeUserRecord = (user = {}) => {
   const { password, passwordHash, password_hash, ...safeUser } = user
   return { ...safeUser, role: safeUser.role || safeUser.userRole || 'resident' }
 }
+
+const isSyntheticTestAccount = (user = {}) => {
+  if (!user || typeof user !== 'object') return false
+  if (user.isTestAccount || user.isDemo || user.isSynthetic === true || user.source === 'demo') {
+    return true
+  }
+
+  const searchable = [
+    user.email,
+    user.firstName,
+    user.first_name,
+    user.lastName,
+    user.last_name,
+    user.mobile,
+    user.householdId,
+    user.household_id,
+    user.status,
+  ].join(' ').toLowerCase()
+
+  return /@example\.com|@test\.|generated|dummy|demo\b|test account|2024-test|household.*test/i.test(searchable)
+}
+
+const filterVisibleUsers = (users = []) => (Array.isArray(users) ? users.filter((user) => !isSyntheticTestAccount(user)) : [])
 
 const isValidEmail = (value) => /^[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}$/.test(String(value).trim())
 const isValidMobile = (value) => /^09\d{9}$/.test(String(value).trim())
@@ -57,6 +80,10 @@ export async function seedDemoResident() {
     return
   }
 
+  if (SHOULD_SKIP_SEED) {
+    return
+  }
+
   const db = await jsonDb.readDb()
 
   const demoNonAdminIdentifiers = new Set([
@@ -73,7 +100,7 @@ export async function seedDemoResident() {
     if (!user.role) {
       if (user.email === 'staff@barangay.gov.ph' || user.mobile === '09111111111') {
         user.role = 'staff'
-      } else if (user.email === 'admin@barangay.gov.ph' || user.mobile === '09999999999') {
+      } else if (String(user.email || '').toLowerCase() === ADMIN_SEED.email.toLowerCase() || user.mobile === ADMIN_SEED.mobile) {
         user.role = 'admin'
       } else {
         user.role = 'resident'
@@ -86,21 +113,11 @@ export async function seedDemoResident() {
     await jsonDb.writeDb(db)
   }
 
-  const requiredSeeds = [
-    {
-      firstName: 'Carmen',
-      lastName: 'Santos',
-      mobile: '09999999999',
-      email: 'admin@barangay.gov.ph',
-      password: 'AdminPass123',
-      role: 'admin',
-      householdId: '2024-ADMIN',
-      familyMembers: 1,
-      status: 'Administrator',
-      address: 'Barangay Hall, Legaspi',
-      zone: 0,
-    },
-  ]
+  const requiredSeeds = [ADMIN_SEED]
+
+  if (SHOULD_SKIP_SEED || (IS_PRODUCTION && !ADMIN_SEED.password)) {
+    return
+  }
 
   const missingSeeds = requiredSeeds.filter((seed) => !db.users.some((user) => user.mobile === seed.mobile || user.email.toLowerCase() === seed.email.toLowerCase()))
 
@@ -338,11 +355,14 @@ export function createApp() {
         return res.status(401).json({ message: 'Invalid credentials.' })
       }
 
-      if (user.role === 'resident' && user.status !== 'Active Resident') {
+      const normalizedRole = String(user.role || '').toLowerCase() || 'resident'
+      const normalizedStatus = String(user.status || '').trim()
+      const isApprovedUser = ['admin', 'staff'].includes(normalizedRole) || ['Administrator', 'On Duty', 'Active Resident'].includes(normalizedStatus)
+
+      if (normalizedRole === 'resident' && !isApprovedUser) {
         return res.status(403).json({ message: 'Your account is awaiting administrator approval before you can access the web app.' })
       }
 
-      const normalizedRole = user.role || 'resident'
       const token = signToken({ sub: user.id, role: normalizedRole })
       const safeUser = sanitizeUserRecord({ ...user, role: normalizedRole })
 
@@ -737,7 +757,7 @@ export function createApp() {
         return res.status(403).json({ message: 'Admin access required.' })
       }
 
-      const users = await store.listAllUsers?.() || []
+      const users = filterVisibleUsers(await store.listAllUsers?.() || [])
       return res.json({ users: users.map((user) => sanitizeUserRecord(user)) })
     } catch {
       return res.status(401).json({ message: 'Invalid or expired token.' })
@@ -1267,7 +1287,7 @@ export function createApp() {
         return res.status(403).json({ message: 'Admin access required.' })
       }
 
-      const users = await store.listAllUsers?.() || []
+      const users = filterVisibleUsers(await store.listAllUsers?.() || [])
       const residents = users.filter((user) => user.role === 'resident').map((user) => ({
         id: user.id,
         firstName: user.first_name || user.firstName,
@@ -1388,7 +1408,7 @@ export function createApp() {
       const payload = verifyToken(token)
       if (!(await hasCurrentRole(token, ['admin']))) return res.status(403).json({ message: 'Admin access required.' })
 
-      const users = await store.listAllUsers?.() || []
+      const users = filterVisibleUsers(await store.listAllUsers?.() || [])
       const accessUsers = users.map((user) => ({
         id: user.id,
         firstName: user.firstName ?? user.first_name ?? '',
@@ -1708,11 +1728,16 @@ export function createApp() {
 }
 
 export async function startServer() {
-  if (process.env.SKIP_SEED !== 'true') {
-    await seedDemoResident()
-  }
   const app = createApp()
-  return app.listen(PORT, () => {
+  const server = app.listen(PORT, () => {
     console.log(`Barangay API running on http://localhost:${PORT}`)
   })
+
+  if (process.env.SKIP_SEED !== 'true') {
+    seedDemoResident().catch((error) => {
+      console.error('Database initialization or seed failed:', error)
+    })
+  }
+
+  return server
 }

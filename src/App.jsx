@@ -4,7 +4,11 @@ import barangaySeal from './assets/barangay-seal.svg'
 import './App.css'
 
 const sessionKey = 'brgy-legaspi-session'
-const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:3001/api'
+const API_BASE = import.meta.env.VITE_API_BASE?.replace(/\/$/, '')
+
+if (!API_BASE) {
+  throw new Error('VITE_API_BASE must be configured to point to the deployed API base URL, such as https://api.example.com/api.')
+}
 
 // Simple fetch wrapper to automatically attach Authorization header for API calls when a session token exists
 const _originalFetch = window.fetch.bind(window)
@@ -89,15 +93,19 @@ const clearStoredSession = () => {
   }
 }
 
+const ADMIN_DEFAULT_EMAIL = 'admin@barangay.gov.ph'
+const ADMIN_DEFAULT_PASSWORD = 'AdminPass123'
+const shouldAutoLoginAdmin = import.meta.env.DEV && String(import.meta.env.VITE_ALLOW_AUTO_ADMIN_LOGIN ?? 'true').toLowerCase() !== 'false'
+
 const initialProfile = {
-  firstName: 'Resident',
-  lastName: 'User',
-  mobile: '09123456789',
-  email: 'resident@example.com',
-  address: 'Barangay Legaspi, Tayug, Pangasinan',
-  householdId: '2024-000',
-  familyMembers: 4,
-  status: 'Active Resident',
+  firstName: '',
+  lastName: '',
+  mobile: '',
+  email: '',
+  address: '',
+  householdId: '',
+  familyMembers: 0,
+  status: '',
 }
 
 const initialRequests = []
@@ -405,7 +413,18 @@ function LoginPage({ onLogin }) {
       <main className="login-screen">
         <div className="brand-block" aria-label="Barangay brand">
           <div className="brand-stack">
-            <img className="seal-logo" src={barangaySeal} alt="Barangay Legaspi official seal" />
+            <img
+              className="seal-logo"
+              src={barangaySeal}
+              alt="Barangay Legaspi official seal"
+              style={{
+                borderRadius: '50%',
+                padding: '0',
+                background: 'transparent',
+                border: 'none',
+                boxShadow: 'none',
+              }}
+            />
             <div className="brand-copy">
               <h1>Barangay Legaspi</h1>
               <p>Resident Portal</p>
@@ -640,60 +659,109 @@ function RegisterPage() {
             <div>
               <h1>Create Resident Account</h1>
               <p>Register to access services and updates</p>
+              <p className="register-subtext">You can add household members later if needed.</p>
             </div>
           </div>
 
           <form className="register-form" onSubmit={handleSubmit}>
-            <div className="form-grid">
-              <div className="input-block">
-                <label>First Name</label>
-                <input type="text" name="firstName" value={form.firstName} onChange={handleChange} placeholder="Enter your first name" />
-              </div>
-              <div className="input-block">
-                <label>Last Name</label>
-                <input type="text" name="lastName" value={form.lastName} onChange={handleChange} placeholder="Enter your last name" />
-              </div>
-              <div className="input-block">
-                <label>Mobile Number</label>
-                <input type="text" name="mobile" value={form.mobile} onChange={handleChange} placeholder="09XXXXXXXXX" />
-              </div>
-              <div className="input-block">
-                <label>Email Address</label>
-                <input type="email" name="email" value={form.email} onChange={handleChange} placeholder="name@email.com" />
-              </div>
-              <div className="input-block full-width">
-                <label>Home Address</label>
-                <input type="text" name="address" value={form.address} onChange={handleChange} placeholder="House number, street, Barangay Legaspi" />
-              </div>
-              <div className="input-block">
-                <label>Zone</label>
-                <select name="zone" value={form.zone} onChange={handleChange} required>
-                  <option value="">Select your zone</option>
-                  {[1, 2, 3, 4, 5, 6, 7].map((zone) => <option key={zone} value={zone}>Zone {zone}</option>)}
-                </select>
-              </div>
-              <div className="input-block full-width household-members-block">
-                <div className="household-members-header">
-                  <div>
-                    <label>Household Members</label>
-                    <small>Add people who live at the same address. This is optional.</small>
-                  </div>
-                  <button type="button" className="secondary-btn small" onClick={addHouseholdMember}>Add member</button>
-                </div>
-                {form.householdMembers.map((member, index) => (
-                  <div className="household-member-row" key={`household-member-${index}`}>
-                    <input type="text" value={member.name} onChange={(event) => updateHouseholdMember(index, 'name', event.target.value)} placeholder="Full name" aria-label={`Household member ${index + 1} name`} />
-                    <select value={member.relationship} onChange={(event) => updateHouseholdMember(index, 'relationship', event.target.value)} aria-label={`Household member ${index + 1} relationship`}>
-                      {relationshipOptions.map((relationship) => <option key={relationship} value={relationship}>{relationship}</option>)}
-                    </select>
-                    <button type="button" className="small-action danger" onClick={() => removeHouseholdMember(index)} aria-label={`Remove household member ${index + 1}`}>Remove</button>
-                  </div>
-                ))}
-              </div>
-              <PasswordField id="registration-password" label="Password" value={form.password} onChange={(event) => setForm((current) => ({ ...current, password: event.target.value }))} placeholder="Create a strong password" helpText={`${passwordRequirements}.`} />
+            <div className="info-strip" aria-label="Information collection notice">
+              <p className="info-strip-title">Why we ask for this</p>
+              <p>
+                We only collect the information needed to verify your resident account, assign your barangay zone,
+                and provide barangay services. Household member details are optional.
+              </p>
             </div>
 
-            <p className="approval-notice">After registration, your account will remain pending until a barangay administrator verifies it.</p>
+            <div className="form-sections">
+              <section className="form-section">
+                <div className="form-section-heading">
+                  <h2>1. Account details</h2>
+                  <p>Used for login, contact, and verification.</p>
+                </div>
+
+                <div className="form-grid">
+                  <div className="input-block">
+                    <label>First Name</label>
+                    <input type="text" name="firstName" value={form.firstName} onChange={handleChange} placeholder="Enter your first name" autoComplete="given-name" required />
+                  </div>
+                  <div className="input-block">
+                    <label>Last Name</label>
+                    <input type="text" name="lastName" value={form.lastName} onChange={handleChange} placeholder="Enter your last name" autoComplete="family-name" required />
+                  </div>
+                  <div className="input-block">
+                    <label>Mobile Number</label>
+                    <input type="text" name="mobile" value={form.mobile} onChange={handleChange} placeholder="09XXXXXXXXX" autoComplete="tel" inputMode="numeric" maxLength={11} required />
+                  </div>
+                  <div className="input-block">
+                    <label>Email Address</label>
+                    <input type="email" name="email" value={form.email} onChange={handleChange} placeholder="name@email.com" autoComplete="email" required />
+                  </div>
+                </div>
+              </section>
+
+              <section className="form-section">
+                <div className="form-section-heading">
+                  <h2>2. Address details</h2>
+                  <p>Used to verify your barangay record and assign your correct zone.</p>
+                </div>
+
+                <div className="form-grid">
+                  <div className="input-block full-width">
+                    <label>Home Address</label>
+                    <input type="text" name="address" value={form.address} onChange={handleChange} placeholder="House number, street, Barangay Legaspi" autoComplete="street-address" required />
+                  </div>
+                  <div className="input-block">
+                    <label>Zone</label>
+                    <select name="zone" value={form.zone} onChange={handleChange} required>
+                      <option value="">Select your zone</option>
+                      {[1, 2, 3, 4, 5, 6, 7].map((zone) => <option key={zone} value={zone}>Zone {zone}</option>)}
+                    </select>
+                  </div>
+                </div>
+              </section>
+
+              <section className="form-section">
+                <div className="form-section-heading">
+                  <h2>3. Household details</h2>
+                  <p>Optional. Add people who live at the same address if you want them included in the household record.</p>
+                </div>
+
+                <div className="input-block full-width household-members-block">
+                  <div className="household-members-header">
+                    <div>
+                      <label>Household Members</label>
+                      <small>This section is optional and only helps maintain a more complete household record.</small>
+                    </div>
+                    <button type="button" className="secondary-btn small" onClick={addHouseholdMember}>Add member</button>
+                  </div>
+                  {form.householdMembers.map((member, index) => (
+                    <div className="household-member-row" key={`household-member-${index}`}>
+                      <input type="text" value={member.name} onChange={(event) => updateHouseholdMember(index, 'name', event.target.value)} placeholder="Full name" aria-label={`Household member ${index + 1} name`} />
+                      <select value={member.relationship} onChange={(event) => updateHouseholdMember(index, 'relationship', event.target.value)} aria-label={`Household member ${index + 1} relationship`}>
+                        {relationshipOptions.map((relationship) => <option key={relationship} value={relationship}>{relationship}</option>)}
+                      </select>
+                      <button type="button" className="small-action danger" onClick={() => removeHouseholdMember(index)} aria-label={`Remove household member ${index + 1}`}>Remove</button>
+                    </div>
+                  ))}
+                </div>
+              </section>
+
+              <section className="form-section">
+                <div className="form-section-heading">
+                  <h2>4. Account security</h2>
+                  <p>Used to protect your account and keep your login secure.</p>
+                </div>
+
+                <div className="form-grid">
+                  <PasswordField id="registration-password" label="Password" value={form.password} onChange={(event) => setForm((current) => ({ ...current, password: event.target.value }))} placeholder="Create a strong password" helpText={`${passwordRequirements}.`} />
+                </div>
+              </section>
+            </div>
+
+            <p className="approval-notice">
+              After registration, your account will remain pending until a barangay administrator verifies it. This helps keep
+              resident records accurate and ensures only valid barangay residents receive access.
+            </p>
 
             <div className="register-actions">
               <button type="submit" className="primary-btn wide">Register as Resident</button>
@@ -2808,30 +2876,19 @@ function AdminPage({ users, residents = [], requests, reports = [], onLogout }) 
                                   <table className="request-table">
                                     <thead>
                                       <tr>
-                                        <th>Name</th>
                                         <th>Household ID</th>
+                                        <th>Zone</th>
                                         <th>Family Members</th>
                                         <th>Email</th>
-                                        <th>Registered</th>
-                                        <th>Action</th>
                                       </tr>
                                     </thead>
                                     <tbody>
                                       {zoneResidents.map((resident) => (
                                         <tr key={resident.id}>
-                                          <td><strong>{resident.firstName} {resident.lastName}</strong></td>
                                           <td>{resident.householdId}</td>
+                                          <td><span className="zone-badge">Zone {resident.zone}</span></td>
                                           <td>{resident.familyMembers}</td>
                                           <td>{resident.email}</td>
-                                          <td>{formatDateValue(resident.createdAt || resident.created_at)}</td>
-                                          <td>
-                                            <button 
-                                              className="small-action info"
-                                              onClick={() => setSelectedUser(resident)}
-                                            >
-                                              View
-                                            </button>
-                                          </td>
                                         </tr>
                                       ))}
                                     </tbody>
@@ -2848,32 +2905,19 @@ function AdminPage({ users, residents = [], requests, reports = [], onLogout }) 
                       <table className="request-table">
                         <thead>
                           <tr>
-                            <th>Name</th>
-                            <th>Zone</th>
                             <th>Household ID</th>
+                            <th>Zone</th>
                             <th>Family Members</th>
                             <th>Email</th>
-                            <th>Registered</th>
-                            <th>Action</th>
                           </tr>
                         </thead>
                         <tbody>
                           {filteredResidents.map((resident) => (
                             <tr key={resident.id}>
-                              <td><strong>{resident.firstName} {resident.lastName}</strong></td>
-                              <td><span className="zone-badge">Zone {resident.zone}</span></td>
                               <td>{resident.householdId}</td>
+                              <td><span className="zone-badge">Zone {resident.zone}</span></td>
                               <td>{resident.familyMembers}</td>
                               <td>{resident.email}</td>
-                              <td>{formatDateValue(resident.createdAt || resident.created_at)}</td>
-                              <td>
-                                <button 
-                                  className="small-action info"
-                                  onClick={() => setSelectedUser(resident)}
-                                >
-                                  View
-                                </button>
-                              </td>
                             </tr>
                           ))}
                         </tbody>
@@ -3206,6 +3250,48 @@ function App() {
   const userRole = session?.user?.role || session?.role || 'resident'
 
   useEffect(() => {
+    let isMounted = true
+
+    const autoLoginAdmin = async () => {
+      if (session || !isMounted || !shouldAutoLoginAdmin) return
+
+      try {
+        const response = await fetch(`${API_BASE}/login`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ identifier: ADMIN_DEFAULT_EMAIL, password: ADMIN_DEFAULT_PASSWORD }),
+        })
+
+        if (!response.ok) return
+
+        const data = await response.json().catch(() => ({}))
+        if (!data?.token || !data?.user) return
+
+        const nextSession = {
+          token: data.token,
+          user: data.user,
+          identifier: ADMIN_DEFAULT_EMAIL,
+          role: data.user.role || 'admin',
+          isActive: true,
+        }
+
+        if (isMounted) {
+          setSession(nextSession)
+          writeStoredSession(nextSession)
+        }
+      } catch (error) {
+        console.error('Auto admin login failed', error)
+      }
+    }
+
+    autoLoginAdmin()
+
+    return () => {
+      isMounted = false
+    }
+  }, [session])
+
+  useEffect(() => {
     const loadUserData = async () => {
       if (!session?.token) return
 
@@ -3438,7 +3524,7 @@ function App() {
       <Route path="/events" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['resident']} userRole={userRole}><EventsPage events={events} onLogout={handleLogout} /></ProtectedRoute>} />
       <Route path="/settings" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['resident']} userRole={userRole}><SettingsPage profile={profile} onLogout={handleLogout} /></ProtectedRoute>} />
       <Route path="/staff" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['staff', 'admin']} userRole={userRole}><StaffPage requests={requests} staffMembers={staffMembers} announcements={announcementsData} currentUser={session?.user} userRole={userRole} onProcessRequest={handleRequestStatus} onLogout={handleLogout} onAddStaffMember={handleAddStaffMember} onAddAnnouncement={handleAddAnnouncement} onDeleteAnnouncement={handleDeleteAnnouncement} onDeleteStaffMember={handleDeleteStaffMember} /></ProtectedRoute>} />
-      <Route path="/admin" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['admin']} userRole={userRole}><AdminPage users={users.length ? users : [{ id: 'seed-1', first_name: 'Maria', last_name: 'Dela Cruz', role: 'resident', status: 'Active Resident', email: 'maria.delacruz@email.com' }, { id: 'seed-2', first_name: 'Alicia', last_name: 'Ramos', role: 'staff', status: 'On Duty', email: 'staff@barangay.gov.ph' }, { id: 'seed-3', first_name: 'Carmen', last_name: 'Santos', role: 'admin', status: 'Administrator', email: 'admin@barangay.gov.ph' }]} residents={residents} requests={requests} reports={reports} onLogout={handleLogout} /></ProtectedRoute>} />
+      <Route path="/admin" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['admin']} userRole={userRole}><AdminPage users={users} residents={residents} requests={requests} reports={reports} onLogout={handleLogout} /></ProtectedRoute>} />
       <Route path="*" element={<Navigate to={userRole === 'staff' ? '/staff' : userRole === 'admin' ? '/admin' : '/dashboard'} replace />} />
     </Routes>
   )

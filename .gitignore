@@ -29,3 +29,5 @@ dist-ssr
 # Local application data
 server/data/db.json
 server/data/archives/
+
+.vercel

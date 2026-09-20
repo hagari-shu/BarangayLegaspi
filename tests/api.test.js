@@ -220,6 +220,52 @@ test('admin deletion only allows staff members and blocks administrators', async
   }
 })
 
+test('admin-visible resident lists exclude generated test accounts', async () => {
+  const { server, baseUrl } = await createTestServer()
+
+  try {
+    await jsonDb.saveUser({
+      id: randomUUID(),
+      firstName: 'Generated',
+      lastName: 'Test',
+      mobile: `091${Math.floor(10000000 + Math.random() * 90000000)}`,
+      email: `resident.${Date.now()}@example.com`,
+      passwordHash: await hashPassword('GeneratedPass123!'),
+      role: 'resident',
+      householdId: '2024-TEST',
+      familyMembers: 4,
+      status: 'Pending Verification',
+      address: 'Barangay Legaspi, Tayug, Pangasinan',
+      zone: 1,
+      createdAt: new Date().toISOString(),
+    })
+
+    const loginResponse = await fetch(`${baseUrl}/api/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        identifier: 'admin@barangay.gov.ph',
+        password: 'AdminPass123',
+      }),
+    })
+    assert.equal(loginResponse.status, 200)
+    const { token } = await loginResponse.json()
+
+    const usersResponse = await fetch(`${baseUrl}/api/admin/users`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    assert.equal(usersResponse.status, 200)
+
+    const usersData = await usersResponse.json()
+    const generatedResident = usersData.users.find((user) => user.email && user.email.includes('@example.com') && user.role === 'resident')
+    assert.equal(generatedResident, undefined)
+  } finally {
+    await new Promise((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()))
+    })
+  }
+})
+
 test('password reset uses a one-time token', async () => {
   const { server, baseUrl } = await createTestServer()
   const originalPassword = 'SecurePass123!'

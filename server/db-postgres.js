@@ -2,6 +2,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import pg from 'pg'
 import { hashPassword } from './auth.js'
+import { ADMIN_SEED, IS_PRODUCTION, SHOULD_SKIP_SEED } from './config.js'
 
 const { Pool } = pg
 const jsonDbPath = path.join(process.cwd(), 'server', 'data', 'db.json')
@@ -117,24 +118,31 @@ export async function initDatabase() {
     );
   `)
 
-  const adminCheck = await query('SELECT id FROM users WHERE email = $1', ['admin@barangay.gov.ph'])
+  if (SHOULD_SKIP_SEED || (IS_PRODUCTION && !ADMIN_SEED.password)) {
+    return
+  }
+
+  const adminCheck = await query('SELECT id FROM users WHERE email = $1', [ADMIN_SEED.email])
   if (adminCheck.rows.length === 0) {
     const { randomUUID } = await import('node:crypto')
     await query(
-      `INSERT INTO users (id, first_name, last_name, mobile, email, password_hash, role, household_id, family_members, status, address)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+      `INSERT INTO users (id, first_name, last_name, mobile, email, password_hash, role, household_id, family_members, status, address, zone, position, availability)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
       [
         randomUUID(),
-        'Carmen',
-        'Santos',
-        '09999999999',
-        'admin@barangay.gov.ph',
-        await hashPassword('AdminPass123'),
-        'admin',
-        '2024-ADMIN',
-        1,
+        ADMIN_SEED.firstName,
+        ADMIN_SEED.lastName,
+        ADMIN_SEED.mobile,
+        ADMIN_SEED.email,
+        await hashPassword(ADMIN_SEED.password),
+        ADMIN_SEED.role,
+        ADMIN_SEED.householdId,
+        ADMIN_SEED.familyMembers,
+        ADMIN_SEED.status,
+        ADMIN_SEED.address,
+        ADMIN_SEED.zone,
         'Administrator',
-        'Barangay Hall, Legaspi',
+        'Available',
       ]
     )
   }
