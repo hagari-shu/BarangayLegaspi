@@ -2342,7 +2342,7 @@ function StaffPage({ requests, staffMembers = [], announcements = [], currentUse
   )
 }
 
-function AdminPage({ users, residents = [], requests, reports = [], onLogout }) {
+function AdminPage({ users, residents = [], requests, reports = [], currentUser, onLogout }) {
   const zoneNumbers = [1, 2, 3, 4, 5, 6, 7]
   const [managedUsers, setManagedUsers] = useState(users)
   const [activeTab, setActiveTab] = useState('overview')
@@ -2614,6 +2614,11 @@ function AdminPage({ users, residents = [], requests, reports = [], onLogout }) 
         </div>
 
         <div className="topbar-actions">
+          <div className="admin-identity" aria-label={`Signed in as ${getDisplayName(currentUser)}`}>
+            <small>Signed in as</small>
+            <strong>{getDisplayName(currentUser)}</strong>
+            <span>{currentUser?.email || currentUser?.mobile || 'Administrator'}</span>
+          </div>
           <span className="role-chip">Admin Console</span>
           <button className="logout-btn" type="button" onClick={onLogout}>Log out</button>
         </div>
@@ -3524,7 +3529,7 @@ function App() {
       <Route path="/events" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['resident']} userRole={userRole}><EventsPage events={events} onLogout={handleLogout} /></ProtectedRoute>} />
       <Route path="/settings" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['resident']} userRole={userRole}><SettingsPage profile={profile} onLogout={handleLogout} /></ProtectedRoute>} />
       <Route path="/staff" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['staff', 'admin']} userRole={userRole}><StaffPage requests={requests} staffMembers={staffMembers} announcements={announcementsData} currentUser={session?.user} userRole={userRole} onProcessRequest={handleRequestStatus} onLogout={handleLogout} onAddStaffMember={handleAddStaffMember} onAddAnnouncement={handleAddAnnouncement} onDeleteAnnouncement={handleDeleteAnnouncement} onDeleteStaffMember={handleDeleteStaffMember} /></ProtectedRoute>} />
-      <Route path="/admin" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['admin']} userRole={userRole}><AdminPage users={users} residents={residents} requests={requests} reports={reports} onLogout={handleLogout} /></ProtectedRoute>} />
+      <Route path="/admin" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['admin']} userRole={userRole}><AdminPage users={users} residents={residents} requests={requests} reports={reports} currentUser={session?.user} onLogout={handleLogout} /></ProtectedRoute>} />
       <Route path="*" element={<Navigate to={userRole === 'staff' ? '/staff' : userRole === 'admin' ? '/admin' : '/dashboard'} replace />} />
     </Routes>
   )
