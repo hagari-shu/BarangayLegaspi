@@ -10,7 +10,7 @@ import { ADMIN_SEED, CORS_ORIGINS, IS_PRODUCTION, PORT, SHOULD_SKIP_SEED } from 
 import fs from 'node:fs'
 import path from 'node:path'
 
-const store = process.env.DATABASE_URL ? pgDb : jsonDb
+let store = process.env.DATABASE_URL ? pgDb : jsonDb
 
 const sanitizeText = (value = '') => String(value).replace(/[<>]/g, '').trim()
 const sanitizeUserRecord = (user = {}) => {
@@ -240,10 +240,14 @@ export function createApp() {
 
   app.get('/api/health', async (_req, res) => {
     try {
-      if (process.env.DATABASE_URL) {
+      if (store === pgDb) {
         await pgDb.query('SELECT 1')
       }
-      res.json({ ok: true, message: 'Barangay Legaspi API is running' })
+      res.json({
+        ok: true,
+        message: 'Barangay Legaspi API is running',
+        storage: store === pgDb ? 'postgres' : 'json-fallback',
+      })
     } catch (error) {
       console.error('health check failed', error)
       res.status(503).json({ ok: false, message: 'Database unavailable.' })
@@ -1736,6 +1740,10 @@ export async function startServer() {
   if (process.env.SKIP_SEED !== 'true') {
     seedDemoResident().catch((error) => {
       console.error('Database initialization or seed failed:', error)
+      if (store === pgDb) {
+        store = jsonDb
+        console.warn('Falling back to JSON storage until the database connection is restored.')
+      }
     })
   }
 
