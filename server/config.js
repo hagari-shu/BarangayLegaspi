@@ -60,4 +60,12 @@ export const ADMIN_SEED = {
 }
 
 export const JWT_SECRET = resolvedJwtSecret
+export const MFA_ENCRYPTION_KEY = process.env.MFA_ENCRYPTION_KEY || ''
 export const PORT = Number(process.env.PORT || 3001)
+
+if (IS_PRODUCTION && MFA_ENCRYPTION_KEY && MFA_ENCRYPTION_KEY.length < 32) {
+  throw new Error('MFA_ENCRYPTION_KEY must contain at least 32 characters when configured.')
+}
+if (IS_PRODUCTION && MFA_ENCRYPTION_KEY && MFA_ENCRYPTION_KEY === JWT_SECRET) {
+  throw new Error('MFA_ENCRYPTION_KEY must be different from JWT_SECRET.')
+}

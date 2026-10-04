@@ -1545,7 +1545,9 @@ class ApiController extends Controller
 
     private function encryptTotpSecret(string $secret): string
     {
-        $key = hash('sha256', (string) config('app.jwt_secret'), true);
+        $configuredKey = (string) config('app.mfa_encryption_key');
+        $version = $configuredKey === '' ? 'v1' : 'v2';
+        $key = hash('sha256', $configuredKey !== '' ? $configuredKey : (string) config('app.jwt_secret'), true);
         $iv = random_bytes(12);
         $tag = '';
         $ciphertext = openssl_encrypt($secret, 'aes-256-gcm', $key, OPENSSL_RAW_DATA, $iv, $tag);
@@ -1553,13 +1555,13 @@ class ApiController extends Controller
             throw new \RuntimeException('Unable to protect authenticator secret.');
         }
 
-        return 'v1.'.rtrim(strtr(base64_encode($iv), '+/', '-_'), '=').'.'.rtrim(strtr(base64_encode($tag), '+/', '-_'), '=').'.'.rtrim(strtr(base64_encode($ciphertext), '+/', '-_'), '=');
+        return $version.'.'.rtrim(strtr(base64_encode($iv), '+/', '-_'), '=').'.'.rtrim(strtr(base64_encode($tag), '+/', '-_'), '=').'.'.rtrim(strtr(base64_encode($ciphertext), '+/', '-_'), '=');
     }
 
     private function decryptTotpSecret(string $value): string
     {
         $parts = explode('.', $value);
-        if (count($parts) !== 4 || $parts[0] !== 'v1') {
+        if (count($parts) !== 4 || !in_array($parts[0], ['v1', 'v2'], true)) {
             throw new \RuntimeException('Invalid encrypted MFA secret.');
         }
         $decode = fn ($part) => base64_decode(strtr($part, '-_', '+/').str_repeat('=', (4 - strlen($part) % 4) % 4), true);
@@ -1569,7 +1571,13 @@ class ApiController extends Controller
         if ($iv === false || $tag === false || $ciphertext === false) {
             throw new \RuntimeException('Invalid encrypted MFA secret.');
         }
-        $secret = openssl_decrypt($ciphertext, 'aes-256-gcm', hash('sha256', (string) config('app.jwt_secret'), true), OPENSSL_RAW_DATA, $iv, $tag);
+        $encryptionSecret = $parts[0] === 'v1'
+            ? (string) config('app.jwt_secret')
+            : (string) config('app.mfa_encryption_key');
+        if ($encryptionSecret === '') {
+            throw new \RuntimeException('MFA encryption key is not configured.');
+        }
+        $secret = openssl_decrypt($ciphertext, 'aes-256-gcm', hash('sha256', $encryptionSecret, true), OPENSSL_RAW_DATA, $iv, $tag);
         if ($secret === false) {
             throw new \RuntimeException('Unable to decrypt authenticator secret.');
         }

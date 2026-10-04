@@ -71,6 +71,10 @@ export async function query(text, params = []) {
   }
 }
 
+export async function closeDatabase() {
+  await pool.end()
+}
+
 export async function initDatabase() {
   await query(`
     CREATE TABLE IF NOT EXISTS users (

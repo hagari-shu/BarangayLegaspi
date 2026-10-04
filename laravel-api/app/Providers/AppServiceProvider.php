@@ -19,6 +19,14 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
-        //
+        $mfaKey = (string) config('app.mfa_encryption_key');
+        if (app()->environment('production') && $mfaKey !== '') {
+            if (strlen($mfaKey) < 32) {
+                throw new \RuntimeException('MFA_ENCRYPTION_KEY must contain at least 32 characters.');
+            }
+            if (hash_equals((string) config('app.jwt_secret'), $mfaKey)) {
+                throw new \RuntimeException('MFA_ENCRYPTION_KEY must be different from JWT_SECRET.');
+            }
+        }
     }
 }

@@ -12,7 +12,8 @@
     "build": "vite build",
     "lint": "oxlint",
     "preview": "vite preview",
-    "test": "node --test tests/api.test.js tests/mau-and-mfa.test.js tests/payments.test.js tests/reminders.test.js tests/translations.test.js"
+    "test": "node --test tests/api.test.js tests/mau-and-mfa.test.js tests/mfa-key-rotation.test.js tests/payments.test.js tests/reminders.test.js tests/translations.test.js",
+    "mfa:rotate-key": "node scripts/rotate-mfa-encryption.js"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",

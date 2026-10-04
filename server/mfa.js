@@ -1,8 +1,11 @@
 import { createCipheriv, createDecipheriv, createHmac, createHash, randomBytes, timingSafeEqual } from 'node:crypto'
-import { JWT_SECRET } from './config.js'
+import { JWT_SECRET, MFA_ENCRYPTION_KEY } from './config.js'
 
 const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'
-const encryptionKey = createHash('sha256').update(JWT_SECRET).digest()
+const legacyEncryptionKey = createHash('sha256').update(JWT_SECRET).digest()
+const encryptionKey = MFA_ENCRYPTION_KEY
+  ? createHash('sha256').update(MFA_ENCRYPTION_KEY).digest()
+  : legacyEncryptionKey
 
 const encodeBase32 = (bytes) => {
   let buffer = 0
@@ -53,13 +56,21 @@ export const encryptTotpSecret = (secret) => {
   const iv = randomBytes(12)
   const cipher = createCipheriv('aes-256-gcm', encryptionKey, iv)
   const ciphertext = Buffer.concat([cipher.update(secret, 'utf8'), cipher.final()])
-  return `v1.${iv.toString('base64url')}.${cipher.getAuthTag().toString('base64url')}.${ciphertext.toString('base64url')}`
+  const version = MFA_ENCRYPTION_KEY ? 'v2' : 'v1'
+  return `${version}.${iv.toString('base64url')}.${cipher.getAuthTag().toString('base64url')}.${ciphertext.toString('base64url')}`
 }
 
 export const decryptTotpSecret = (value) => {
-  if (!String(value || '').startsWith('v1.')) throw new Error('Invalid encrypted MFA secret.')
-  const [, ivValue, tagValue, ciphertextValue] = String(value).split('.')
-  const decipher = createDecipheriv('aes-256-gcm', encryptionKey, Buffer.from(ivValue, 'base64url'))
+  const parts = String(value || '').split('.')
+  const [version, ivValue, tagValue, ciphertextValue] = parts
+  if (parts.length !== 4 || !['v1', 'v2'].includes(version) || !ivValue || !tagValue || !ciphertextValue) {
+    throw new Error('Invalid encrypted MFA secret.')
+  }
+  if (version === 'v2' && !MFA_ENCRYPTION_KEY) {
+    throw new Error('MFA_ENCRYPTION_KEY is required to decrypt this secret.')
+  }
+  const key = version === 'v1' ? legacyEncryptionKey : encryptionKey
+  const decipher = createDecipheriv('aes-256-gcm', key, Buffer.from(ivValue, 'base64url'))
   decipher.setAuthTag(Buffer.from(tagValue, 'base64url'))
   return Buffer.concat([
     decipher.update(Buffer.from(ciphertextValue, 'base64url')),
