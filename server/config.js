@@ -62,19 +62,24 @@ export const ADMIN_SEED = {
 export const JWT_SECRET = resolvedJwtSecret
 export const MFA_ENCRYPTION_KEY = process.env.MFA_ENCRYPTION_KEY || ''
 export const MFA_ENCRYPTION_KEY_PREVIOUS = process.env.MFA_ENCRYPTION_KEY_PREVIOUS || ''
+const previousMfaEncryptionKeys = MFA_ENCRYPTION_KEY_PREVIOUS
+  .split(',')
+  .map((key) => key.trim())
+  .filter(Boolean)
 export const PORT = Number(process.env.PORT || 3001)
 
-for (const [keyName, value] of [
-  ['MFA_ENCRYPTION_KEY', MFA_ENCRYPTION_KEY],
-  ['MFA_ENCRYPTION_KEY_PREVIOUS', MFA_ENCRYPTION_KEY_PREVIOUS],
-]) {
-  if (IS_PRODUCTION && value && value.length < 32) {
-    throw new Error(`${keyName} must contain at least 32 characters when configured.`)
-  }
+if (IS_PRODUCTION && MFA_ENCRYPTION_KEY && MFA_ENCRYPTION_KEY.length < 32) {
+  throw new Error('MFA_ENCRYPTION_KEY must contain at least 32 characters when configured.')
+}
+if (IS_PRODUCTION && previousMfaEncryptionKeys.some((key) => key.length < 32)) {
+  throw new Error('Every MFA_ENCRYPTION_KEY_PREVIOUS entry must contain at least 32 characters.')
 }
 if (IS_PRODUCTION && MFA_ENCRYPTION_KEY && MFA_ENCRYPTION_KEY === JWT_SECRET) {
   throw new Error('MFA_ENCRYPTION_KEY must be different from JWT_SECRET.')
 }
-if (IS_PRODUCTION && MFA_ENCRYPTION_KEY && MFA_ENCRYPTION_KEY === MFA_ENCRYPTION_KEY_PREVIOUS) {
+if (IS_PRODUCTION && MFA_ENCRYPTION_KEY && previousMfaEncryptionKeys.includes(MFA_ENCRYPTION_KEY)) {
   throw new Error('MFA_ENCRYPTION_KEY_PREVIOUS must be different from MFA_ENCRYPTION_KEY.')
+}
+if (IS_PRODUCTION && new Set(previousMfaEncryptionKeys).size !== previousMfaEncryptionKeys.length) {
+  throw new Error('MFA_ENCRYPTION_KEY_PREVIOUS must not contain duplicate entries.')
 }

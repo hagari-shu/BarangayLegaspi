@@ -6,9 +6,11 @@ const legacyEncryptionKey = createHash('sha256').update(JWT_SECRET).digest()
 const encryptionKey = MFA_ENCRYPTION_KEY
   ? createHash('sha256').update(MFA_ENCRYPTION_KEY).digest()
   : legacyEncryptionKey
-const previousEncryptionKey = MFA_ENCRYPTION_KEY_PREVIOUS
-  ? createHash('sha256').update(MFA_ENCRYPTION_KEY_PREVIOUS).digest()
-  : null
+const previousEncryptionKeys = MFA_ENCRYPTION_KEY_PREVIOUS
+  .split(',')
+  .map((key) => key.trim())
+  .filter(Boolean)
+  .map((key) => createHash('sha256').update(key).digest())
 
 const encodeBase32 = (bytes) => {
   let buffer = 0
@@ -77,7 +79,7 @@ export const decryptTotpSecret = (value, { allowPrevious = true } = {}) => {
   const ciphertext = Buffer.from(ciphertextValue, 'base64url')
   const keys = version === 'v1'
     ? [legacyEncryptionKey]
-    : [encryptionKey, ...(allowPrevious && previousEncryptionKey ? [previousEncryptionKey] : [])]
+    : [encryptionKey, ...(allowPrevious ? previousEncryptionKeys : [])]
 
   for (const key of keys) {
     try {

@@ -28,13 +28,21 @@ class AppServiceProvider extends ServiceProvider
                 throw new \RuntimeException('MFA_ENCRYPTION_KEY must be different from JWT_SECRET.');
             }
         }
-        $previousMfaKey = (string) config('app.mfa_encryption_key_previous');
-        if (app()->environment('production') && $previousMfaKey !== '') {
-            if (strlen($previousMfaKey) < 32) {
-                throw new \RuntimeException('MFA_ENCRYPTION_KEY_PREVIOUS must contain at least 32 characters.');
+        $previousMfaKeys = array_values(array_filter(array_map(
+            'trim',
+            explode(',', (string) config('app.mfa_encryption_key_previous'))
+        )));
+        if (app()->environment('production')) {
+            foreach ($previousMfaKeys as $previousMfaKey) {
+                if (strlen($previousMfaKey) < 32) {
+                    throw new \RuntimeException('Every MFA_ENCRYPTION_KEY_PREVIOUS entry must contain at least 32 characters.');
+                }
+                if ($mfaKey !== '' && hash_equals($mfaKey, $previousMfaKey)) {
+                    throw new \RuntimeException('MFA_ENCRYPTION_KEY_PREVIOUS entries must be different from MFA_ENCRYPTION_KEY.');
+                }
             }
-            if ($mfaKey !== '' && hash_equals($mfaKey, $previousMfaKey)) {
-                throw new \RuntimeException('MFA_ENCRYPTION_KEY_PREVIOUS must be different from MFA_ENCRYPTION_KEY.');
+            if (count($previousMfaKeys) !== count(array_unique($previousMfaKeys))) {
+                throw new \RuntimeException('MFA_ENCRYPTION_KEY_PREVIOUS must not contain duplicate entries.');
             }
         }
     }

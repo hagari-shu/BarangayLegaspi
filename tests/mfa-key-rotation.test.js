@@ -5,7 +5,10 @@ import { createCipheriv, createHash, randomBytes } from 'node:crypto'
 process.env.NODE_ENV = 'test'
 process.env.JWT_SECRET = 'legacy-jwt-secret-used-only-by-this-test'
 process.env.MFA_ENCRYPTION_KEY = 'separate-mfa-encryption-key-for-tests'
-process.env.MFA_ENCRYPTION_KEY_PREVIOUS = 'previous-mfa-encryption-key-for-tests'
+process.env.MFA_ENCRYPTION_KEY_PREVIOUS = [
+  'previous-mfa-encryption-key-for-tests',
+  'second-previous-mfa-encryption-key-for-tests',
+].join(',')
 
 const { decryptTotpSecret, encryptTotpSecret } = await import('../server/mfa.js')
 
@@ -20,7 +23,12 @@ const encryptWithKey = (secret, rawKey) => {
 const encryptLegacySecret = (secret) => encryptWithKey(secret, process.env.JWT_SECRET)
 
 const encryptPreviousMfaSecret = (secret) => {
-  const value = encryptWithKey(secret, process.env.MFA_ENCRYPTION_KEY_PREVIOUS)
+  const value = encryptWithKey(secret, process.env.MFA_ENCRYPTION_KEY_PREVIOUS.split(',')[0])
+  return value.replace(/^v1\./, 'v2.')
+}
+
+const encryptSecondPreviousMfaSecret = (secret) => {
+  const value = encryptWithKey(secret, process.env.MFA_ENCRYPTION_KEY_PREVIOUS.split(',')[1])
   return value.replace(/^v1\./, 'v2.')
 }
 
@@ -37,10 +45,12 @@ test('legacy v1 MFA secrets remain decryptable for backfill', () => {
   assert.equal(decryptTotpSecret(encrypted), 'JBSWY3DPEHPK3PXP')
 })
 
-test('previous v2 MFA keys decrypt for rollover and current-key checks reject old ciphertext', () => {
+test('multiple previous v2 MFA keys decrypt for rollover and current-key checks reject old ciphertext', () => {
   const encrypted = encryptPreviousMfaSecret('JBSWY3DPEHPK3PXP')
+  const encryptedWithSecondPreviousKey = encryptSecondPreviousMfaSecret('JBSWY3DPEHPK3PXP')
 
   assert.equal(decryptTotpSecret(encrypted), 'JBSWY3DPEHPK3PXP')
+  assert.equal(decryptTotpSecret(encryptedWithSecondPreviousKey), 'JBSWY3DPEHPK3PXP')
   assert.throws(() => decryptTotpSecret(encrypted, { allowPrevious: false }), /Unable to decrypt/)
 
   const rotated = encryptTotpSecret(decryptTotpSecret(encrypted))
