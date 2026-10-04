@@ -11,7 +11,7 @@ Deploy the React/Vite frontend to Vercel and the Laravel API to Render:
 
 1. Set the Vercel build command to `npm run build`.
 2. Set `VITE_API_BASE` in Vercel to the public API URL ending in `/api` (for example, `https://brgy-legaspi-api.onrender.com/api`).
-3. Deploy the API using the repository's `render.yaml`. Provide a PostgreSQL `DATABASE_URL`, Laravel `APP_KEY`, and the exact frontend URL in `CORS_ORIGINS`. Preserve the existing `JWT_SECRET` when migrating an existing database so current MFA secrets and Express-issued sessions remain compatible; use a random value of at least 32 characters for a new installation.
+3. Deploy the API using the repository's `render.yaml` (configured for Render's Free web-service plan). Provide a PostgreSQL `DATABASE_URL`, Laravel `APP_KEY`, and the exact frontend URL in `CORS_ORIGINS`. Preserve the existing `JWT_SECRET` when migrating an existing database so current MFA secrets and Express-issued sessions remain compatible; use a random value of at least 32 characters for a new installation. Free Render services sleep when idle and are intended for testing, not production workloads.
 4. Set `ADMIN_EMAIL`, `ADMIN_MOBILE`, and a strong `ADMIN_PASSWORD` before the first API login to create the bootstrap administrator. Change its password after signing in.
 5. Set `RESET_DELIVERY_URL` to an authenticated HTTPS notification service before enabling password recovery.
 
