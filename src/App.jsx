@@ -103,10 +103,6 @@ const clearStoredSession = () => {
   }
 }
 
-const ADMIN_DEFAULT_EMAIL = 'admin@barangay.gov.ph'
-const ADMIN_DEFAULT_PASSWORD = 'AdminPass123'
-const shouldAutoLoginAdmin = import.meta.env.DEV && String(import.meta.env.VITE_ALLOW_AUTO_ADMIN_LOGIN ?? 'true').toLowerCase() !== 'false'
-
 const initialProfile = {
   firstName: '',
   lastName: '',
@@ -3945,48 +3941,6 @@ function App() {
   }, [language, t.reminderMessage, t.reminderTitle])
 
   useEffect(() => {
-    let isMounted = true
-
-    const autoLoginAdmin = async () => {
-      if (session || !isMounted || !shouldAutoLoginAdmin) return
-
-      try {
-        const response = await fetch(`${API_BASE}/login`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ identifier: ADMIN_DEFAULT_EMAIL, password: ADMIN_DEFAULT_PASSWORD }),
-        })
-
-        if (!response.ok) return
-
-        const data = await response.json().catch(() => ({}))
-        if (!data?.token || !data?.user) return
-
-        const nextSession = {
-          token: data.token,
-          user: data.user,
-          identifier: ADMIN_DEFAULT_EMAIL,
-          role: data.user.role || 'admin',
-          isActive: true,
-        }
-
-        if (isMounted) {
-          setSession(nextSession)
-          writeStoredSession(nextSession)
-        }
-      } catch (error) {
-        console.error('Auto admin login failed', error)
-      }
-    }
-
-    autoLoginAdmin()
-
-    return () => {
-      isMounted = false
-    }
-  }, [session])
-
-  useEffect(() => {
     const loadUserData = async () => {
       if (!session?.token) return
 
@@ -4247,7 +4201,6 @@ function App() {
 }
 
 export default App
-
 
 
 
