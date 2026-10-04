@@ -25,7 +25,7 @@ const createTestServer = async () => {
   }
 }
 
-test('admin can approve resident payment records', async () => {
+test('payment endpoints do not expose or mutate fictitious invoice records', async () => {
   const { server, baseUrl } = await createTestServer()
 
   try {
@@ -42,6 +42,14 @@ test('admin can approve resident payment records', async () => {
     const adminSession = await adminLogin.json()
     const paymentId = 'INV-1049'
 
+    const listResponse = await fetch(`${baseUrl}/api/payments`, {
+      headers: {
+        Authorization: `Bearer ${adminSession.token}`,
+      },
+    })
+    assert.equal(listResponse.status, 200)
+    assert.deepEqual((await listResponse.json()).payments, [])
+
     const approvalResponse = await fetch(`${baseUrl}/api/payments/${paymentId}/status`, {
       method: 'PATCH',
       headers: {
@@ -51,20 +59,8 @@ test('admin can approve resident payment records', async () => {
       body: JSON.stringify({ status: 'Approved' }),
     })
 
-    assert.equal(approvalResponse.status, 200)
-    const approvalData = await approvalResponse.json()
-    assert.equal(approvalData.payment.id, paymentId)
-    assert.equal(approvalData.payment.status, 'Approved')
-
-    const listResponse = await fetch(`${baseUrl}/api/payments`, {
-      headers: {
-        Authorization: `Bearer ${adminSession.token}`,
-      },
-    })
-
-    assert.equal(listResponse.status, 200)
-    const listData = await listResponse.json()
-    assert.ok(listData.payments.some((payment) => payment.id === paymentId && payment.status === 'Approved'))
+    assert.equal(approvalResponse.status, 404)
+    assert.equal((await approvalResponse.json()).message, 'Payment record not found.')
   } finally {
     await new Promise((resolve, reject) => {
       server.close((error) => (error ? reject(error) : resolve()))

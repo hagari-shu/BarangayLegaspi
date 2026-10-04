@@ -1730,14 +1730,18 @@ function PaymentsPage({ payments, onLogout, language, setLanguage }) {
                 </tr>
               </thead>
               <tbody>
-                {(payments || []).map((payment) => (
-                  <tr key={payment.id}>
-                    <td>{payment.id}</td>
-                    <td>{payment.label}</td>
-                    <td><span className={'status-badge ' + String(payment.status).toLowerCase()}>{payment.status}</span></td>
-                    <td>{payment.amount}</td>
-                  </tr>
-                ))}
+                {(payments || []).length > 0 ? (payments || []).map((payment) => (
+                    <tr key={payment.id}>
+                      <td>{payment.id}</td>
+                      <td>{payment.label}</td>
+                      <td><span className={'status-badge ' + String(payment.status).toLowerCase()}>{payment.status}</span></td>
+                      <td>{payment.amount}</td>
+                    </tr>
+                  )) : (
+                    <tr>
+                      <td colSpan={4} className="empty-state">{t.noPaymentsMatchSearch}</td>
+                    </tr>
+                  )}
               </tbody>
             </table>
           </div>
@@ -4230,7 +4234,6 @@ function App() {
 }
 
 export default App
-
 
 
 

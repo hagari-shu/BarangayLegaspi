@@ -17,6 +17,10 @@ Deploy the React/Vite frontend to Vercel and the Laravel API to Render:
 
 The API migration preserves the `/api` routes and PostgreSQL data model. Laravel runs the schema migration on container startup. Back up the database before the first Laravel deployment and review the migration against a staging copy first. Keep database credentials, application keys, and webhook secrets in deployment environment variables, never in source control.
 
+Payment records remain empty until a real billing/payment source is integrated. The previous API's hard-coded invoice examples were demonstration data, not resident charges; neither API should create or display them as real payments.
+
+Keep the Vercel `VITE_API_BASE` pointed at the existing Node API until authenticated resident, staff, and administrator workflows have been verified against Laravel. The public Laravel health and read endpoints are live, but a healthy database connection alone is not a cutover sign-off.
+
 ### Coordinated MFA/JWT key rotation
 
 Node-issued sessions are signed with `JWT_SECRET` and expire after seven days. Do not accept tokens signed with a compromised previous key during rotation. Existing MFA secrets are stored as `v1` ciphertext encrypted using the JWT key; both APIs support a separate `MFA_ENCRYPTION_KEY` and `v2` ciphertext for a controlled migration.

@@ -81,12 +81,6 @@ const residentEvents = [
   { title: 'Senior citizen support session', date: '2026-09-18', location: 'Barangay Hall' },
 ]
 
-const paymentRecords = [
-  { id: 'INV-1042', label: 'Barangay permit', status: 'Paid', amount: '₱250.00' },
-  { id: 'INV-1049', label: 'Medical assistance', status: 'Pending', amount: '₱1,200.00' },
-  { id: 'INV-1056', label: 'Community fee', status: 'Paid', amount: '₱180.00' },
-]
-
 const reminderStore = new Map()
 
 export async function seedDemoResident() {
@@ -779,7 +773,7 @@ export function createApp() {
         services: serviceCatalog,
         announcements,
         events: residentEvents,
-        payments: paymentRecords,
+        payments: [],
         summary: {
           totalRequests: requests.length,
           pending: requests.filter((item) => item.status !== 'Approved').length,
@@ -903,12 +897,7 @@ export function createApp() {
         return res.status(403).json({ message: 'Account access is disabled.' })
       }
 
-      const normalizedPayments = paymentRecords.map((payment) => ({
-        ...payment,
-        status: payment.status || 'Pending',
-      }))
-
-      return res.json({ payments: normalizedPayments })
+      return res.json({ payments: [] })
     } catch {
       return res.status(401).json({ message: 'Invalid or expired token.' })
     }
@@ -935,22 +924,7 @@ export function createApp() {
         return res.status(400).json({ message: 'Payment ID and status are required.' })
       }
 
-      const paymentIndex = paymentRecords.findIndex((entry) => entry.id === paymentId)
-      if (paymentIndex === -1) {
-        return res.status(404).json({ message: 'Payment record not found.' })
-      }
-
-      paymentRecords[paymentIndex] = {
-        ...paymentRecords[paymentIndex],
-        status: nextStatus,
-      }
-
-      await writeAudit(actor.user, 'payment.updated', 'payment', paymentId, { status: nextStatus })
-
-      return res.json({
-        payment: paymentRecords[paymentIndex],
-        message: 'Payment status updated successfully.',
-      })
+      return res.status(404).json({ message: 'Payment record not found.' })
     } catch {
       return res.status(401).json({ message: 'Invalid or expired token.' })
     }
