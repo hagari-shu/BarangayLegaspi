@@ -1578,6 +1578,10 @@ class ApiController extends Controller
             throw new \RuntimeException('MFA encryption key is not configured.');
         }
         $secret = openssl_decrypt($ciphertext, 'aes-256-gcm', hash('sha256', $encryptionSecret, true), OPENSSL_RAW_DATA, $iv, $tag);
+        $previousKey = (string) config('app.mfa_encryption_key_previous');
+        if ($secret === false && $parts[0] === 'v2' && $previousKey !== '' && !hash_equals($encryptionSecret, $previousKey)) {
+            $secret = openssl_decrypt($ciphertext, 'aes-256-gcm', hash('sha256', $previousKey, true), OPENSSL_RAW_DATA, $iv, $tag);
+        }
         if ($secret === false) {
             throw new \RuntimeException('Unable to decrypt authenticator secret.');
         }

@@ -1,11 +1,14 @@
 import { createCipheriv, createDecipheriv, createHmac, createHash, randomBytes, timingSafeEqual } from 'node:crypto'
-import { JWT_SECRET, MFA_ENCRYPTION_KEY } from './config.js'
+import { JWT_SECRET, MFA_ENCRYPTION_KEY, MFA_ENCRYPTION_KEY_PREVIOUS } from './config.js'
 
 const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'
 const legacyEncryptionKey = createHash('sha256').update(JWT_SECRET).digest()
 const encryptionKey = MFA_ENCRYPTION_KEY
   ? createHash('sha256').update(MFA_ENCRYPTION_KEY).digest()
   : legacyEncryptionKey
+const previousEncryptionKey = MFA_ENCRYPTION_KEY_PREVIOUS
+  ? createHash('sha256').update(MFA_ENCRYPTION_KEY_PREVIOUS).digest()
+  : null
 
 const encodeBase32 = (bytes) => {
   let buffer = 0
@@ -60,7 +63,7 @@ export const encryptTotpSecret = (secret) => {
   return `${version}.${iv.toString('base64url')}.${cipher.getAuthTag().toString('base64url')}.${ciphertext.toString('base64url')}`
 }
 
-export const decryptTotpSecret = (value) => {
+export const decryptTotpSecret = (value, { allowPrevious = true } = {}) => {
   const parts = String(value || '').split('.')
   const [version, ivValue, tagValue, ciphertextValue] = parts
   if (parts.length !== 4 || !['v1', 'v2'].includes(version) || !ivValue || !tagValue || !ciphertextValue) {
@@ -69,13 +72,26 @@ export const decryptTotpSecret = (value) => {
   if (version === 'v2' && !MFA_ENCRYPTION_KEY) {
     throw new Error('MFA_ENCRYPTION_KEY is required to decrypt this secret.')
   }
-  const key = version === 'v1' ? legacyEncryptionKey : encryptionKey
-  const decipher = createDecipheriv('aes-256-gcm', key, Buffer.from(ivValue, 'base64url'))
-  decipher.setAuthTag(Buffer.from(tagValue, 'base64url'))
-  return Buffer.concat([
-    decipher.update(Buffer.from(ciphertextValue, 'base64url')),
-    decipher.final(),
-  ]).toString('utf8')
+  const iv = Buffer.from(ivValue, 'base64url')
+  const tag = Buffer.from(tagValue, 'base64url')
+  const ciphertext = Buffer.from(ciphertextValue, 'base64url')
+  const keys = version === 'v1'
+    ? [legacyEncryptionKey]
+    : [encryptionKey, ...(allowPrevious && previousEncryptionKey ? [previousEncryptionKey] : [])]
+
+  for (const key of keys) {
+    try {
+      const decipher = createDecipheriv('aes-256-gcm', key, iv)
+      decipher.setAuthTag(tag)
+      return Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString('utf8')
+    } catch (error) {
+      if (key === keys.at(-1)) {
+        throw new Error('Unable to decrypt authenticator secret.', { cause: error })
+      }
+    }
+  }
+
+  throw new Error('Unable to decrypt authenticator secret.')
 }
 
 const totpAtStep = (secret, step) => {

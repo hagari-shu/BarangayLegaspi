@@ -23,12 +23,12 @@ Keep the Vercel `VITE_API_BASE` pointed at the existing Node API until authentic
 
 ### Coordinated MFA/JWT key rotation
 
-Node-issued sessions are signed with `JWT_SECRET` and expire after seven days. Do not accept tokens signed with a compromised previous key during rotation. Existing MFA secrets are stored as `v1` ciphertext encrypted using the JWT key; both APIs support a separate `MFA_ENCRYPTION_KEY` and `v2` ciphertext for a controlled migration.
+Node-issued sessions are signed with `JWT_SECRET` and expire after seven days. Do not accept tokens signed with a compromised previous key during rotation. Existing MFA secrets are stored as `v1` ciphertext encrypted using the JWT key; both APIs support a separate `MFA_ENCRYPTION_KEY` and `v2` ciphertext for a controlled migration. A temporary `MFA_ENCRYPTION_KEY_PREVIOUS` is supported only to re-encrypt records after an MFA key replacement.
 
 1. Back up PostgreSQL and verify the backup before changing service secrets.
 2. Deploy the backward-compatible API code while leaving `MFA_ENCRYPTION_KEY` unset. Confirm the production API remains healthy.
-3. Set a new, distinct random `MFA_ENCRYPTION_KEY` (at least 32 characters) on the active API service. Keep the current JWT key temporarily so the service can still read existing `v1` records; new MFA records are written as `v2`.
-4. In the active Node service environment, set `DATABASE_URL` and both keys, then run `npm run mfa:rotate-key` to validate the legacy records without changing them. Review only the record counts. After a backup, run `npm run mfa:rotate-key -- --apply` and repeat the dry run to verify no `v1` records remain. The command never prints decrypted values and is safe to rerun if interrupted.
+3. Set the old MFA key as `MFA_ENCRYPTION_KEY_PREVIOUS` and a new, distinct random key as `MFA_ENCRYPTION_KEY` on both API services. Keep the current JWT key temporarily so `v1` records and sessions remain readable; new MFA records are written as `v2` using the new key.
+4. In the active Node service environment, run `npm run mfa:rotate-key` to validate records without changing them. Review only the record counts. After verifying a backup, run `npm run mfa:rotate-key -- --apply`; it re-encrypts both `v1` and old `v2` records and verifies every record with only the new key. Remove `MFA_ENCRYPTION_KEY_PREVIOUS` from both services after confirming the deploy. The command never prints decrypted values and detects concurrent edits.
 5. Replace `JWT_SECRET` with a new random value on the Node service and redeploy. This intentionally invalidates all existing JWT sessions; users sign in again. Do not configure a previous-key JWT fallback.
 6. Configure Laravel with the same new `JWT_SECRET` and `MFA_ENCRYPTION_KEY`, then validate representative login and MFA flows before any frontend cutover.
 
