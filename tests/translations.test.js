@@ -6,6 +6,7 @@ import translations from '../src/translations.js'
 test('filipino translation includes resident and admin labels', () => {
   const fil = translations.fil
 
+  assert.deepEqual(Object.keys(fil).sort(), Object.keys(translations.en).sort())
   assert.equal(fil.residentPortal, 'Portal ng Residente')
   assert.equal(fil.requestStatusTracker, 'Pagsubaybay sa kalagayan ng kahilingan')
   assert.equal(fil.requestHistory, 'Kasaysayan ng mga kahilingan')
@@ -17,9 +18,36 @@ test('filipino translation includes resident and admin labels', () => {
   assert.equal(fil.physicalCopy, 'Pisikal na kopya')
   assert.equal(fil.dashboard, 'Dashboard')
   assert.equal(fil.overview, 'Pangkalahatang-ideya')
-  assert.equal(fil.staffPortal, 'Portal ng Staff')
-  assert.equal(fil.adminConsole, 'Admin Console')
+  assert.equal(fil.staffPortal, 'Portal ng Kawani')
+  assert.equal(fil.adminConsole, 'Console ng administrador')
   assert.ok(fil.mauWelcome.includes('Mau'))
+})
+
+test('Filipino role dashboards have translated controls and accessible navigation labels', () => {
+  const { fil } = translations
+
+  assert.equal(fil.languageSelectionLabel, 'Pumili ng wika')
+  assert.equal(fil.quickAccessLabel, 'Mabilisang mga link')
+  assert.equal(fil.staffNavigationLabel, 'Mga pahina ng kawani')
+  assert.equal(fil.adminNavigationLabel, 'Mga pahina ng administrador')
+  assert.equal(fil.queue, 'Pila ng mga kahilingan')
+  assert.equal(fil.approvals, 'Mga pag-apruba')
+  assert.equal(fil.needsReview, 'Kailangang suriin')
+  assert.equal(fil.averageTurnaround, 'Karaniwang tagal ng pagproseso')
+  assert.equal(fil.requestQueueSearch, 'Maghanap ayon sa residente, serbisyo, o layunin')
+  assert.equal(fil.archiveLastDay, 'I-archive ang nakalipas na 24 oras')
+})
+
+test('Filipino resident, staff, and admin dashboard copy is localized', () => {
+  const { fil } = translations
+
+  assert.equal(fil.residentDetailsComplete, 'Kumpleto na ang mga detalye ng residente')
+  assert.equal(fil.waitingForAdminVerification, 'Naghihintay ng beripikasyon ng administrador')
+  assert.equal(fil.noRequestSubmitted, 'Wala pang isinumiteng kahilingan')
+  assert.equal(fil.noRequestsMatchFilters, 'Walang kahilingang tumutugma sa mga piniling filter.')
+  assert.equal(fil.staffNoteFor, 'Tala ng kawani para sa {service}')
+  assert.equal(fil.residentManagement, 'Pamamahala sa Resident')
+  assert.equal(fil.noEmergencyReports, 'Walang naitalang ulat sa emergency.')
 })
 
 test('homepage header actions are localized', () => {

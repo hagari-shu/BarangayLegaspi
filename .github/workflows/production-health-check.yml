@@ -1,0 +1,69 @@
+name: Production health check
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/production-health-check.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  check-production:
+    name: Check production services
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Check production frontend
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --retry 2 --retry-delay 5 --max-time 25 \
+            --output /dev/null \
+            --write-out 'Production frontend returned HTTP %{http_code} in %{time_total}s\n' \
+            https://barangay-legaspi.vercel.app/
+
+      - name: Check API health and PostgreSQL
+        run: |
+          set -euo pipefail
+          body="$(curl --fail --silent --show-error --retry 2 --retry-delay 5 --max-time 25 \
+            https://brgy-legaspi-laravel.onrender.com/api/health)"
+          printf '%s' "$body" | node -e '
+            let health;
+            try { health = JSON.parse(require("fs").readFileSync(0, "utf8")); }
+            catch { console.error("Health endpoint did not return valid JSON."); process.exit(1); }
+            if (health.ok !== true || health.storage !== "pgsql") {
+              console.error("API health check failed or PostgreSQL is unavailable:", health);
+              process.exit(1);
+            }
+            console.log(`API healthy; storage=${health.storage}`);
+          '
+
+      - name: Check public API reads
+        run: |
+          set -euo pipefail
+          check_collection() {
+            local endpoint="$1"
+            local key="$2"
+            local body
+            body="$(curl --fail --silent --show-error --retry 2 --retry-delay 5 --max-time 25 \
+              "https://brgy-legaspi-laravel.onrender.com/api/${endpoint}")"
+            printf '%s' "$body" | node -e '
+              const key = process.argv[1];
+              let data;
+              try { data = JSON.parse(require("fs").readFileSync(0, "utf8")); }
+              catch { console.error(`${key} endpoint did not return valid JSON.`); process.exit(1); }
+              if (!Array.isArray(data[key])) {
+                console.error(`${key} endpoint returned an unexpected response shape.`);
+                process.exit(1);
+              }
+              console.log(`${key} endpoint healthy; ${data[key].length} records`);
+            ' "$key"
+          }
+          check_collection services services
+          check_collection announcements announcements
+          check_collection events events

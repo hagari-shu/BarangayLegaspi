@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Tests\TestCase;
 
 class ApiContractTest extends TestCase
@@ -16,6 +17,30 @@ class ApiContractTest extends TestCase
             ->assertOk()
             ->assertJsonPath('ok', true)
             ->assertJsonPath('storage', 'sqlite');
+    }
+
+    public function test_client_error_reports_log_only_allowlisted_metadata(): void
+    {
+        Log::shouldReceive('warning')
+            ->once()
+            ->with('Client-side error reported', [
+                'type' => 'window-error',
+                'route' => '/admin',
+                'role' => 'unknown',
+                'language' => 'fil',
+            ]);
+
+        $this->postJson('/api/client-errors', [
+            'type' => 'window-error',
+            'route' => '/admin/users/123?email=private@example.test',
+            'language' => 'fil',
+            'message' => 'private@example.test',
+        ])->assertAccepted()->assertJsonPath('received', true);
+
+        $this->postJson('/api/client-errors', [
+            'type' => 'custom',
+            'message' => 'must not be logged',
+        ])->assertBadRequest();
     }
 
     public function test_migrations_do_not_seed_demo_payment_records(): void

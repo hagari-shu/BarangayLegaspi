@@ -54,6 +54,28 @@ class ApiController extends Controller
         }
     }
 
+    public function reportClientError(Request $request): JsonResponse
+    {
+        $type = $request->input('type');
+        if (!is_string($type) || !in_array($type, ['render', 'window-error', 'unhandled-rejection'], true)) {
+            return response()->json(['message' => 'Unsupported client error type.'], 400);
+        }
+
+        $requestedPath = parse_url((string) $request->input('route', '/'), PHP_URL_PATH);
+        $segments = explode('/', trim(is_string($requestedPath) ? $requestedPath : '/', '/'));
+        $route = ($segments[0] ?? '') === '' ? '/' : '/'.$segments[0];
+        $allowedRoutes = ['/', '/register', '/dashboard', '/requests', '/staff', '/admin', '/settings', '/events', '/payments'];
+
+        Log::warning('Client-side error reported', [
+            'type' => $type,
+            'route' => in_array($route, $allowedRoutes, true) ? $route : '/other',
+            'role' => in_array($request->input('role'), ['resident', 'staff', 'admin'], true) ? $request->input('role') : 'unknown',
+            'language' => in_array($request->input('language'), ['en', 'fil'], true) ? $request->input('language') : 'unknown',
+        ]);
+
+        return response()->json(['received' => true], 202);
+    }
+
     public function register(Request $request): JsonResponse
     {
         $firstName = $this->clean($request->input('firstName'));

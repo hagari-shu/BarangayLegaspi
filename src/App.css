@@ -85,6 +85,37 @@ textarea:focus {
   outline: none;
   border-color: var(--green-600);
   box-shadow: 0 0 0 4px rgba(31, 127, 110, 0.14);
+}
+
+.app-error-boundary {
+  display: grid;
+  min-height: 100vh;
+  align-content: center;
+  justify-items: center;
+  gap: 12px;
+  padding: 24px;
+  color: var(--text-900);
+  text-align: center;
+}
+
+.app-error-boundary h1,
+.app-error-boundary p {
+  max-width: 40rem;
+  margin: 0;
+}
+
+.app-error-boundary button {
+  min-height: 48px;
+  padding: 10px 18px;
+  border-radius: 10px;
+  background: var(--green-800);
+  color: var(--white);
+  font-weight: 700;
+}
+
+.app-error-boundary button:focus-visible {
+  outline: 3px solid var(--green-600);
+  outline-offset: 3px;
   background: #ffffff;
 }
 
@@ -884,6 +915,11 @@ textarea:focus {
   background: #edf6f3;
   color: #153f39;
   box-shadow: inset 0 0 0 1px rgba(13, 93, 76, 0.1);
+}
+
+.nav-item:focus-visible {
+  outline: 3px solid var(--green-600);
+  outline-offset: 2px;
 }
 
 .nav-icon {

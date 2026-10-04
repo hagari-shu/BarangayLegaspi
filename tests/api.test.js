@@ -120,6 +120,49 @@ test('registers a resident and waits for administrator approval', async () => {
   }
 })
 
+test('client error reports log only allowlisted metadata and omit error contents', async () => {
+  const { server, baseUrl } = await createTestServer()
+  const capturedWarnings = []
+  const originalWarn = console.warn
+  console.warn = (...args) => capturedWarnings.push(args)
+
+  try {
+    const reportResponse = await fetch(`${baseUrl}/api/client-errors`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        type: 'unhandled-rejection',
+        route: '/admin/users/123?email=private@example.com',
+        role: 'admin',
+        language: 'fil',
+        message: 'private@example.com SecurePass123!',
+      }),
+    })
+
+    assert.equal(reportResponse.status, 202)
+    assert.deepEqual(await reportResponse.json(), { received: true })
+    assert.deepEqual(capturedWarnings[0], [
+      'client-side error reported',
+      { type: 'unhandled-rejection', route: '/admin', role: 'admin', language: 'fil' },
+    ])
+    assert.equal(JSON.stringify(capturedWarnings).includes('private@example.com'), false)
+    assert.equal(JSON.stringify(capturedWarnings).includes('SecurePass123!'), false)
+
+    const invalidResponse = await fetch(`${baseUrl}/api/client-errors`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'arbitrary', message: 'do not log this' }),
+    })
+    assert.equal(invalidResponse.status, 400)
+    assert.equal(capturedWarnings.length, 1)
+  } finally {
+    console.warn = originalWarn
+    await new Promise((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()))
+    })
+  }
+})
+
 test('request lifecycle preserves copy preference, status history, and resident follow-ups', async () => {
   const { server, baseUrl } = await createTestServer()
 

@@ -4,6 +4,7 @@ import { Routes, Route, Navigate, Link, useNavigate, useLocation } from 'react-r
 import barangaySeal from './assets/barangay-seal-new.png'
 import legaspiHero from './assets/legaspi-community.png'
 import { getMauQuickOptions, getMauReply, getMauResidentAnswer, getMauWelcome } from './mau-responses'
+import { reportClientError } from './client-error-reporting'
 import translations from './translations'
 import './App.css'
 
@@ -21,7 +22,7 @@ window.fetch = (input, init = {}) => {
   try {
     const saved = typeof localStorage !== 'undefined' ? localStorage.getItem(sessionKey) : null
     const token = saved ? JSON.parse(saved).token : null
-    if (typeof input === 'string' && input.startsWith(API_BASE)) {
+    if (typeof input === 'string' && input.startsWith(API_BASE) && !input.startsWith(`${API_BASE}/client-errors`)) {
       init = init || {}
       init.headers = { ...(init.headers || {}), Authorization: token ? 'Bearer ' + token : '' }
     }
@@ -38,7 +39,20 @@ const getRequestStatusLabel = (status, t) => ({
   'Needs Information': t.statusNeedsInformation,
   Approved: t.statusCompleted,
   Rejected: t.statusRejected,
+  Available: t.availableLabel,
 }[status] || status || t.statusSubmitted)
+const getStaffPositionLabel = (position, t) => ({
+  Staff: t.staffRole,
+  Secretary: t.secretaryRole,
+  'Barangay Captain': t.barangayCaptainRole,
+  Treasurer: t.treasurerRole,
+  'Utility Worker': t.utilityWorkerRole,
+}[position] || position)
+const getStaffAvailabilityLabel = (availability, t) => ({
+  Available: t.availableLabel,
+  Busy: t.busyStatus,
+  'On Duty': t.onDutyStatus,
+}[availability] || availability)
 const nextRequestStatuses = {
   Pending: ['In Review', 'Needs Information', 'Approved', 'Rejected'],
   'In Review': ['Needs Information', 'Approved', 'Rejected'],
@@ -54,7 +68,7 @@ const isValidPassword = (value) => {
 const passwordRequirements = 'at least 8 characters, one uppercase letter, one lowercase letter, one number, and one special character'
 
 const LanguageToggle = ({ language, setLanguage }) => (
-  <div className="language-toggle" role="group" aria-label="Language selection">
+  <div className="language-toggle" role="group" aria-label={translations[language]?.languageSelectionLabel || translations.en.languageSelectionLabel}>
     <button type="button" className={language === 'en' ? 'active' : ''} aria-pressed={language === 'en'} onClick={() => setLanguage('en')}>EN</button>
     <button type="button" className={language === 'fil' ? 'active' : ''} aria-pressed={language === 'fil'} onClick={() => setLanguage('fil')}>FIL</button>
   </div>
@@ -1096,28 +1110,30 @@ function DashboardPage({ profile, requests, services, announcements, events, pay
 
   const residentChecklist = [
     {
-      label: 'Profile complete',
+      label: t.profileComplete,
       complete: Boolean(profile.firstName && profile.lastName && profile.email && profile.mobile && profile.address),
-      detail: 'Resident details are filled in',
+      detail: t.residentDetailsComplete,
     },
     {
-      label: 'Approval status ready',
+      label: t.approvalStatusReady,
       complete: profile.status === 'Active Resident',
-      detail: profile.status === 'Active Resident' ? 'Your account is active' : 'Waiting for admin verification',
+      detail: profile.status === 'Active Resident' ? t.accountActive : t.waitingForAdminVerification,
     },
     {
-      label: 'Recent request tracked',
+      label: t.recentRequestTracked,
       complete: (requests || []).length > 0,
-      detail: (requests || []).length > 0 ? `${(requests || []).length} active request${(requests || []).length === 1 ? '' : 's'}` : 'No request submitted yet',
+      detail: (requests || []).length > 0
+        ? ((requests || []).length === 1 ? t.activeRequestOne : t.activeRequestsMany).replace('{count}', String((requests || []).length))
+        : t.noRequestSubmitted,
     },
   ]
   const onboardingProgress = Math.round((residentChecklist.filter((item) => item.complete).length / residentChecklist.length) * 100)
   const residentNotifications = [
-    ...(profile.status !== 'Active Resident' ? [{ id: 'verification-pending', title: 'Verification pending', detail: 'Please wait for barangay confirmation before requesting services.' }] : []),
+    ...(profile.status !== 'Active Resident' ? [{ id: 'verification-pending', title: t.verificationPendingTitle, detail: t.waitForBarangayVerification }] : []),
     ...((requests || []).slice(0, 3).map((request) => ({
       id: `request-${request.id}`,
       title: `${request.type}: ${getRequestStatusLabel(request.status, t)}`,
-      detail: request.purpose || 'Submitted and awaiting review.',
+      detail: request.purpose || t.submittedAwaitingReview,
     }))),
     ...((announcements || []).slice(0, 2).map((announcement) => ({
       id: `announcement-${announcement.id || announcement.title}`,
@@ -1204,7 +1220,7 @@ function DashboardPage({ profile, requests, services, announcements, events, pay
             <p>{t.pendingRequests}: {pendingRequests}</p>
           </div>
 
-          <nav className="mobile-quick-nav" aria-label="Quick access">
+          <nav className="mobile-quick-nav" aria-label={t.quickAccessLabel}>
             <button type="button" onClick={() => navigate('/requests')}><span aria-hidden="true">📄</span> {t.requests}</button>
             <button type="button" onClick={() => document.getElementById('announcements-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}><span aria-hidden="true">📢</span> {t.updates}</button>
             <button type="button" onClick={() => navigate('/events')}><span aria-hidden="true">📅</span> {t.events}</button>
@@ -1239,7 +1255,7 @@ function DashboardPage({ profile, requests, services, announcements, events, pay
                 <p className="eyebrow">{t.residentProgress}</p>
                 <h2>{t.gettingStartedChecklist}</h2>
               </div>
-              <span className="progress-pill">{onboardingProgress}% complete</span>
+              <span className="progress-pill">{onboardingProgress}% {t.progressCompleteSuffix}</span>
             </div>
             <div className="progress-bar" aria-hidden="true">
               <span style={{ width: `${onboardingProgress}%` }} />
@@ -1257,11 +1273,11 @@ function DashboardPage({ profile, requests, services, announcements, events, pay
             </ul>
           </div>
 
-          <div className="stats-grid" aria-label="Resident summary">
+          <div className="stats-grid" aria-label={t.residentSummaryLabel}>
             <article className="stat-card accent">
               <div className="stat-header">
                 <span className="label">{t.requests}</span>
-                <span className="badge success">Live</span>
+                <span className="badge success">{t.live}</span>
               </div>
               <div className="stat-number">{requests.length}</div>
               <p>{t.totalSubmitted}</p>
@@ -1269,7 +1285,7 @@ function DashboardPage({ profile, requests, services, announcements, events, pay
             <article className="stat-card">
               <div className="stat-header">
                 <span className="label">{t.pending}</span>
-                <span className="badge warning">Review</span>
+                <span className="badge warning">{t.review}</span>
               </div>
               <div className="stat-number">{pendingRequests}</div>
               <p>{t.awaitingAction}</p>
@@ -1277,7 +1293,7 @@ function DashboardPage({ profile, requests, services, announcements, events, pay
             <article className="stat-card">
               <div className="stat-header">
                 <span className="label">{t.services}</span>
-                <span className="badge info">Now</span>
+                <span className="badge info">{t.now}</span>
               </div>
               <div className="stat-number">{filteredServices.length}</div>
               <p>{t.availableServices}</p>
@@ -1285,7 +1301,7 @@ function DashboardPage({ profile, requests, services, announcements, events, pay
             <article className="stat-card">
               <div className="stat-header">
                 <span className="label">{t.announcements}</span>
-                <span className="badge danger">Updated</span>
+                <span className="badge danger">{t.updated}</span>
               </div>
               <div className="stat-number">{filteredAnnouncements.length}</div>
               <p>{t.latestUpdates}</p>
@@ -1309,7 +1325,7 @@ function DashboardPage({ profile, requests, services, announcements, events, pay
                         <p>{announcement.content}</p>
                       </div>
                     </li>
-                  )) : <li><div className="empty-state">No current announcements match your search.</div></li>}
+                  )) : <li><div className="empty-state">{t.noCurrentAnnouncements}</div></li>}
                 </ul>
               </article>
 
@@ -1324,7 +1340,7 @@ function DashboardPage({ profile, requests, services, announcements, events, pay
                       key={service.title}
                       type="button"
                       className="service-item"
-                      aria-label={`Request ${service.title}`}
+                      aria-label={t.requestServiceAction.replace('{service}', service.title)}
                       onClick={() => navigate(`/requests?service=${encodeURIComponent(service.title)}`)}
                     >
                       <span className={`service-icon ${service.tone || 'green'}`}>{service.icon || '📄'}</span>
@@ -1758,7 +1774,7 @@ function RequestsPage({ requests, onSubmit, onRequestUpdated, onLogout, language
             <table className="request-table">
               <thead>
                 <tr>
-                  <th>Type</th>
+                  <th>{t.requestType}</th>
                   <th>{t.purpose}</th>
                   <th>Status</th>
                   <th>{t.deliveryMethodLabel}</th>
@@ -2397,86 +2413,91 @@ function StaffPage({ requests, staffMembers = [], announcements = [], currentUse
       </header>
 
       <main className="dashboard-main">
-        <aside className="sidebar" aria-label="Staff navigation">
-          <nav className="sidebar-nav">
-            <span 
+        <aside className="sidebar" aria-label={t.staffNavigationLabel}>
+          <nav className="sidebar-nav" aria-label={t.staffNavigationLabel}>
+            <button
+              type="button"
               className={`nav-item ${activeTab === 'queue' ? 'active' : ''}`}
+              aria-current={activeTab === 'queue' ? 'page' : undefined}
               onClick={() => setActiveTab('queue')}
-              style={{cursor: 'pointer'}}
             >
               <span className="nav-icon">📄</span><span>{t.queue}</span>
-            </span>
-            <span 
+            </button>
+            <button
+              type="button"
               className={`nav-item ${activeTab === 'approvals' ? 'active' : ''}`}
+              aria-current={activeTab === 'approvals' ? 'page' : undefined}
               onClick={() => setActiveTab('approvals')}
-              style={{cursor: 'pointer'}}
             >
               <span className="nav-icon">✓</span><span>{t.approvals}</span>
-            </span>
-            <span 
+            </button>
+            <button
+              type="button"
               className={`nav-item ${activeTab === 'reports' ? 'active' : ''}`}
+              aria-current={activeTab === 'reports' ? 'page' : undefined}
               onClick={() => setActiveTab('reports')}
-              style={{cursor: 'pointer'}}
             >
               <span className="nav-icon">📊</span><span>{t.reports}</span>
-            </span>
-            <span 
+            </button>
+            <button
+              type="button"
               className={`nav-item ${activeTab === 'announcements' ? 'active' : ''}`}
+              aria-current={activeTab === 'announcements' ? 'page' : undefined}
               onClick={() => setActiveTab('announcements')}
-              style={{cursor: 'pointer'}}
             >
               <span className="nav-icon">📣</span><span>{t.announcements}</span>
-            </span>
-            <span 
+            </button>
+            <button
+              type="button"
               className={`nav-item ${activeTab === 'staff' ? 'active' : ''}`}
+              aria-current={activeTab === 'staff' ? 'page' : undefined}
               onClick={() => setActiveTab('staff')}
-              style={{cursor: 'pointer'}}
             >
               <span className="nav-icon">👥</span><span>{t.staffDirectory}</span>
-            </span>
+            </button>
           </nav>
         </aside>
 
-        <section className="content-panel" aria-label="Staff overview">
+        <section className="content-panel" aria-label={t.staffOverviewLabel}>
           <div className="welcome-row">
             <div>
               <p className="eyebrow">{t.operations}</p>
-              <h1>{activeTab === 'queue' ? t.residentRequestReview : activeTab === 'reports' ? t.serviceReports : activeTab === 'announcements' ? t.announcements : activeTab === 'staff' ? t.staffDirectory : 'Approvals Management'}</h1>
+              <h1>{activeTab === 'queue' ? t.residentRequestReview : activeTab === 'reports' ? t.serviceReports : activeTab === 'announcements' ? t.announcements : activeTab === 'staff' ? t.staffDirectory : t.approvalsManagement}</h1>
             </div>
             <span className="counter-pill">{activeTab === 'queue' ? totalRequests : activeTab === 'approvals' ? approvedCount : ''} {activeTab === 'queue' ? t.requests : activeTab === 'approvals' ? t.processed : ''}</span>
           </div>
 
-          <div className="stats-grid" aria-label="Staff summary">
+          <div className="stats-grid" aria-label={t.staffSummaryLabel}>
             <article className="stat-card accent">
               <div className="stat-header">
-                <span className="label">Pending</span>
+                <span className="label">{t.pending}</span>
               </div>
               <div className="stat-number">{pendingCount}</div>
-              <p>Needs review</p>
+              <p>{t.needsReview}</p>
             </article>
 
             <article className="stat-card">
               <div className="stat-header">
-                <span className="label">Approved</span>
+                <span className="label">{t.approved}</span>
               </div>
               <div className="stat-number">{approvedCount}</div>
-              <p>Completed</p>
+              <p>{t.completed}</p>
             </article>
 
             <article className="stat-card">
               <div className="stat-header">
-                <span className="label">Response</span>
+                <span className="label">{t.responseTime}</span>
               </div>
               <div className="stat-number">2h</div>
-              <p>Average turnaround</p>
+              <p>{t.averageTurnaround}</p>
             </article>
 
             <article className="stat-card">
               <div className="stat-header">
-                <span className="label">On Queue</span>
+                <span className="label">{t.onQueue}</span>
               </div>
               <div className="stat-number">{Math.max(totalRequests - approvedCount, 0)}</div>
-              <p>Active cases</p>
+              <p>{t.activeCases}</p>
             </article>
           </div>
 
@@ -2499,8 +2520,8 @@ function StaffPage({ requests, staffMembers = [], announcements = [], currentUse
 
                   {openRequestPanel === 'queue' && <>
                   <div className="staff-queue-filters">
-                    <input type="search" value={queueSearch} onChange={(event) => setQueueSearch(event.target.value)} placeholder="Search resident, service, or purpose" aria-label="Search request queue" />
-                    <select value={queueStatus} onChange={(event) => setQueueStatus(event.target.value)} aria-label="Filter request status">
+                    <input type="search" value={queueSearch} onChange={(event) => setQueueSearch(event.target.value)} placeholder={t.requestQueueSearch} aria-label={t.requestQueueSearch} />
+                    <select value={queueStatus} onChange={(event) => setQueueStatus(event.target.value)} aria-label={t.requestStatusFilter}>
                       <option value="active">{t.activeQueue}</option>
                       <option value="all">{t.allStatuses}</option>
                       <option value="Pending">{t.pending}</option>
@@ -2508,8 +2529,8 @@ function StaffPage({ requests, staffMembers = [], announcements = [], currentUse
                         <option key={status} value={status}>{getRequestStatusLabel(status, t)}</option>
                       ))}
                     </select>
-                    <select value={queueZone} onChange={(event) => setQueueZone(event.target.value)} aria-label="Filter request zone">
-                      <option value="all">All zones</option>
+                    <select value={queueZone} onChange={(event) => setQueueZone(event.target.value)} aria-label={t.requestZoneFilter}>
+                      <option value="all">{t.allZonesLabel}</option>
                       {[1, 2, 3, 4, 5, 6, 7].map((zone) => <option key={zone} value={String(zone)}>Zone {zone}</option>)}
                     </select>
                   </div>
@@ -2524,14 +2545,14 @@ function StaffPage({ requests, staffMembers = [], announcements = [], currentUse
                           <th>{t.deliveryMethodLabel}</th>
                           <th>{t.latestFollowUp}</th>
                           <th>{t.requestStatusHistory}</th>
-                          <th>Priority</th>
-                          <th>Actions</th>
+                          <th>{t.priority}</th>
+                          <th>{t.actionsLabel}</th>
                         </tr>
                       </thead>
                       <tbody>
                         {filteredQueueRequests.map((item) => (
                           <tr key={item.id}>
-                            <td>{item.first_name || item.firstName || 'Resident'} {item.last_name || item.lastName || ''}</td>
+                            <td>{item.first_name || item.firstName || t.resident} {item.last_name || item.lastName || ''}</td>
                             <td>{item.type}</td>
                             <td>{item.purpose}</td>
                             <td><span className={`status-badge ${(item.status || '').toLowerCase().replace(/\s+/g, '-')}`}>{getRequestStatusLabel(item.status, t)}</span></td>
@@ -2541,26 +2562,26 @@ function StaffPage({ requests, staffMembers = [], announcements = [], currentUse
                             </td>
                             <td>{(item.followUps || item.follow_ups || []).slice(-1)[0]?.message || '—'}</td>
                             <td><details className="request-history-details"><summary>{t.requestStatusHistory}</summary><RequestHistory history={item.statusHistory || item.status_history} t={t} /></details></td>
-                            <td><span className={`priority-badge ${item.type === 'Emergency Help' ? 'urgent' : 'normal'}`}>{item.type === 'Emergency Help' ? 'Urgent' : 'Normal'}</span></td>
+                            <td><span className={`priority-badge ${item.type === 'Emergency Help' ? 'urgent' : 'normal'}`}>{item.type === 'Emergency Help' ? t.urgentLabel : t.normalLabel}</span></td>
                             <td>
                               {['Approved', 'Rejected'].includes(item.status)
                                 ? <span>{getRequestStatusLabel(item.status, t)}</span>
                                 : (
                                   <form className="request-status-action-form" onSubmit={(event) => handleRequestStatusSubmit(event, item)}>
                                     <select
-                                      aria-label={`New status for ${item.type}`}
+                                      aria-label={t.newStatusFor.replace('{service}', item.type)}
                                       value={requestStatusDrafts[item.id] || ''}
                                       onChange={(event) => setRequestStatusDrafts((current) => ({ ...current, [item.id]: event.target.value }))}
                                       required
                                     >
-                                      <option value="">Select status</option>
+                                      <option value="">{t.selectStatus}</option>
                                       <option value="In Review">{t.statusUnderReview}</option>
                                       <option value="Needs Information">{t.statusNeedsInformation}</option>
                                       <option value="Approved">{t.statusCompleted}</option>
                                       <option value="Rejected">{t.statusRejected}</option>
                                     </select>
                                     <textarea
-                                      aria-label={`Staff note for ${item.type}`}
+                                      aria-label={t.staffNoteFor.replace('{service}', item.type)}
                                       value={requestStatusNotes[item.id] || ''}
                                       onChange={(event) => setRequestStatusNotes((current) => ({ ...current, [item.id]: event.target.value }))}
                                       placeholder={t.statusNoteLabel}
@@ -2575,7 +2596,7 @@ function StaffPage({ requests, staffMembers = [], announcements = [], currentUse
                         ))}
                       </tbody>
                     </table>
-                    {filteredQueueRequests.length === 0 && <div className="empty-state">No requests match the selected filters.</div>}
+                    {filteredQueueRequests.length === 0 && <div className="empty-state">{t.noRequestsMatchFilters}</div>}
                   </div>
                   </>}
 
@@ -2592,7 +2613,7 @@ function StaffPage({ requests, staffMembers = [], announcements = [], currentUse
                   >
                     <span>
                       <h2>{t.approvedRequests}</h2>
-                      <span className="soft-label">{approvedCount} completed</span>
+                      <span className="soft-label">{approvedCount} {t.completed}</span>
                     </span>
                     <span className={`collapse-chevron ${openRequestPanel === 'approvals' ? 'open' : ''}`}>▾</span>
                   </button>
@@ -2601,17 +2622,17 @@ function StaffPage({ requests, staffMembers = [], announcements = [], currentUse
                     <table className="request-table">
                       <thead>
                         <tr>
-                          <th>Resident</th>
-                          <th>Type</th>
-                          <th>Purpose</th>
-                          <th>Status</th>
-                          <th>Approved</th>
+                          <th>{t.resident}</th>
+                          <th>{t.requestType}</th>
+                          <th>{t.purpose}</th>
+                          <th>{t.status}</th>
+                          <th>{t.approved}</th>
                         </tr>
                       </thead>
                       <tbody>
                         {requests.filter((item) => item.status === 'Approved').map((item) => (
                           <tr key={item.id}>
-                            <td>{item.first_name || item.firstName || 'Resident'} {item.last_name || item.lastName || ''}</td>
+                            <td>{item.first_name || item.firstName || t.resident} {item.last_name || item.lastName || ''}</td>
                             <td>{item.type}</td>
                             <td>{item.purpose}</td>
                             <td><span className={`status-badge approved`}>{getRequestStatusLabel(item.status, t)}</span></td>
@@ -2628,22 +2649,22 @@ function StaffPage({ requests, staffMembers = [], announcements = [], currentUse
               {activeTab === 'reports' && (
                 <article className="panel-card">
                   <div className="panel-header">
-                    <h2>Service Reports</h2>
-                    <span className="soft-label">Monthly statistics</span>
+                    <h2>{t.serviceReports}</h2>
+                    <span className="soft-label">{t.monthlyStatistics}</span>
                   </div>
 
                   <div className="report-grid">
                     <div className="report-item">
                       <div className="report-badge green">📈</div>
                       <div>
-                        <h4>Total Requests Processed</h4>
+                        <h4>{t.totalRequestsProcessed}</h4>
                         <p className="report-value">{totalRequests}</p>
                       </div>
                     </div>
                     <div className="report-item">
                       <div className="report-badge blue">✓</div>
                       <div>
-                        <h4>Approved Requests</h4>
+                        <h4>{t.approvedRequests}</h4>
                         <p className="report-value">{approvedCount}</p>
                       </div>
                     </div>
@@ -2677,7 +2698,7 @@ function StaffPage({ requests, staffMembers = [], announcements = [], currentUse
               {activeTab === 'announcements' && (
                 <article className="panel-card">
                   <div className="panel-header">
-                    <h2>Announcements</h2>
+                    <h2>{t.announcements}</h2>
                     <span className="soft-label">{announcements.length} active</span>
                   </div>
 
@@ -2726,7 +2747,7 @@ function StaffPage({ requests, staffMembers = [], announcements = [], currentUse
                       </div>
                     </div>
                     <div className="editor-actions">
-                      <button type="submit" className="primary-btn small">Publish Announcement</button>
+                      <button type="submit" className="primary-btn small">{t.publishAnnouncement}</button>
                     </div>
                   </form>
 
@@ -2736,7 +2757,7 @@ function StaffPage({ requests, staffMembers = [], announcements = [], currentUse
                         <div className={'ann-badge ' + item.tag}></div>
                         <div className="ann-content">
                           <strong>{item.title}</strong>
-                          <p>{item.content || 'No additional content'}</p>
+                          <p>{item.content || t.noAdditionalContent}</p>
                           <small>{item.date}</small>
                           <small>{(item.socialChannels || []).length > 0 ? `${t.socialChannelsSelectedLabel}: ${item.socialChannels.join(', ')}` : t.internalNoticeOnly}</small>
                         </div>
@@ -2744,12 +2765,12 @@ function StaffPage({ requests, staffMembers = [], announcements = [], currentUse
                           type="button"
                           className="small-action danger"
                           onClick={() => {
-                            if (window.confirm('Delete this announcement?')) {
+                            if (window.confirm(t.deleteAnnouncementConfirm)) {
                               onDeleteAnnouncement?.(item.id || item.title)
                             }
                           }}
                         >
-                          Delete
+                          {t.delete}
                         </button>
                       </div>
                     ))}
@@ -2760,50 +2781,50 @@ function StaffPage({ requests, staffMembers = [], announcements = [], currentUse
               {activeTab === 'staff' && (
                 <article className="panel-card">
                   <div className="panel-header">
-                    <h2>Staff Directory</h2>
-                    <span className="soft-label">{staffMembers.length} staff members available</span>
+                    <h2>{t.staffDirectory}</h2>
+                    <span className="soft-label">{staffMembers.length} {t.staffMembersAvailable}</span>
                   </div>
 
                   <form className="editor-panel" onSubmit={handleStaffSubmit}>
                     <div className="editor-grid">
                       <div className="input-block">
-                        <label>First Name</label>
-                        <input type="text" value={staffForm.firstName} onChange={(event) => setStaffForm((prev) => ({ ...prev, firstName: event.target.value }))} placeholder="First name" />
+                        <label>{t.firstName}</label>
+                        <input type="text" value={staffForm.firstName} onChange={(event) => setStaffForm((prev) => ({ ...prev, firstName: event.target.value }))} placeholder={t.firstName} />
                       </div>
                       <div className="input-block">
-                        <label>Last Name</label>
-                        <input type="text" value={staffForm.lastName} onChange={(event) => setStaffForm((prev) => ({ ...prev, lastName: event.target.value }))} placeholder="Last name" />
+                        <label>{t.lastName}</label>
+                        <input type="text" value={staffForm.lastName} onChange={(event) => setStaffForm((prev) => ({ ...prev, lastName: event.target.value }))} placeholder={t.lastName} />
                       </div>
                       <div className="input-block">
-                        <label>Position</label>
+                        <label>{t.positionLabel}</label>
                         <select value={staffForm.position} onChange={(event) => setStaffForm((prev) => ({ ...prev, position: event.target.value }))}>
-                          <option value="Staff">Staff</option>
-                          <option value="Secretary">Secretary</option>
-                          <option value="Barangay Captain">Barangay Captain</option>
-                          <option value="Treasurer">Treasurer</option>
-                          <option value="Utility Worker">Utility Worker</option>
+                          <option value="Staff">{t.staffRole}</option>
+                          <option value="Secretary">{t.secretaryRole}</option>
+                          <option value="Barangay Captain">{t.barangayCaptainRole}</option>
+                          <option value="Treasurer">{t.treasurerRole}</option>
+                          <option value="Utility Worker">{t.utilityWorkerRole}</option>
                         </select>
                       </div>
                       <div className="input-block">
-                        <label>Availability</label>
+                        <label>{t.availabilityLabel}</label>
                         <select value={staffForm.availability} onChange={(event) => setStaffForm((prev) => ({ ...prev, availability: event.target.value }))}>
-                          <option value="Available">Available</option>
-                          <option value="Busy">Busy</option>
-                          <option value="On Duty">On Duty</option>
+                          <option value="Available">{t.availableLabel}</option>
+                          <option value="Busy">{t.busyStatus}</option>
+                          <option value="On Duty">{t.onDutyStatus}</option>
                         </select>
                       </div>
                       <div className="input-block">
-                        <label>Email</label>
+                        <label>{t.email}</label>
                         <input type="email" value={staffForm.email} onChange={(event) => setStaffForm((prev) => ({ ...prev, email: event.target.value }))} placeholder="name@barangay.gov.ph" />
                       </div>
                       <div className="input-block">
-                        <label>Mobile</label>
+                        <label>{t.mobile}</label>
                         <input type="text" value={staffForm.mobile} onChange={(event) => setStaffForm((prev) => ({ ...prev, mobile: event.target.value }))} placeholder="09XXXXXXXXX" />
                       </div>
-                      <PasswordField id="staff-initial-password" label="Initial Password" value={staffForm.password} onChange={(event) => setStaffForm((prev) => ({ ...prev, password: event.target.value }))} placeholder="Create staff password" helpText={`${passwordRequirements}.`} />
+                      <PasswordField id="staff-initial-password" label={t.initialPassword} value={staffForm.password} onChange={(event) => setStaffForm((prev) => ({ ...prev, password: event.target.value }))} placeholder={t.staffPasswordPlaceholder} helpText={`${passwordRequirements}.`} />
                     </div>
                     <div className="editor-actions">
-                      <button type="submit" className="primary-btn small">Add Staff Member</button>
+                      <button type="submit" className="primary-btn small">{t.addStaffMember}</button>
                     </div>
                   </form>
 
@@ -2813,10 +2834,10 @@ function StaffPage({ requests, staffMembers = [], announcements = [], currentUse
                         <div className="staff-avatar">{(member.firstName || 'S').charAt(0)}</div>
                         <div className="staff-info">
                           <h4>{member.firstName} {member.lastName}</h4>
-                          <p className="position">{member.position}</p>
+                          <p className="position">{getStaffPositionLabel(member.position, t)}</p>
                           <p className="availability">
                             <span className={'availability-badge ' + (member.availability === 'Available' ? 'available' : 'unavailable')}>
-                              {member.availability}
+                              {getStaffAvailabilityLabel(member.availability, t)}
                             </span>
                           </p>
                           <p className="contact">{member.mobile}</p>
@@ -2827,12 +2848,12 @@ function StaffPage({ requests, staffMembers = [], announcements = [], currentUse
                           className="small-action danger"
                           onClick={(event) => {
                             event.stopPropagation()
-                            if (window.confirm(`Delete ${member.firstName} ${member.lastName} from the staff directory?`)) {
+                            if (window.confirm(t.deleteStaffConfirm.replace('{name}', `${member.firstName} ${member.lastName}`))) {
                               onDeleteStaffMember?.(member.id)
                             }
                           }}
                         >
-                          Delete
+                          {t.delete}
                         </button>
                       </div>
                     ))}
@@ -2844,7 +2865,7 @@ function StaffPage({ requests, staffMembers = [], announcements = [], currentUse
             <aside className="side-column">
               <article className="panel-card stack-card records-panel">
                 <div className="panel-header left-align">
-                  <h2>Records</h2>
+                  <h2>{t.records}</h2>
                 </div>
 
                 <div className="records-stack">
@@ -2853,10 +2874,10 @@ function StaffPage({ requests, staffMembers = [], announcements = [], currentUse
                     className={`record-panel-card ${activeRecordsPanel === 'queue' ? 'selected' : ''}`}
                     onClick={() => setActiveRecordsPanel((prev) => prev === 'queue' ? null : 'queue')}
                   >
-                    <span className="record-panel-title">On Queue &amp;<br />Approvals</span>
+                    <span className="record-panel-title">{t.requestsInQueue}</span>
                     <span className="record-panel-counts">
-                      <span>Pending <strong>{pendingCount}</strong></span>
-                      <span>Approved <strong>{approvedCount}</strong></span>
+                      <span>{t.pending} <strong>{pendingCount}</strong></span>
+                      <span>{t.approved} <strong>{approvedCount}</strong></span>
                     </span>
                   </button>
 
@@ -2869,19 +2890,19 @@ function StaffPage({ requests, staffMembers = [], announcements = [], currentUse
                             {requests.slice(0, 6).map((item) => (
                               <li key={item.id}><span>{item.type}</span><strong>{getRequestStatusLabel(item.status, t)}</strong></li>
                             ))}
-                            {totalRequests > 6 && <li className="summary-item">+ {totalRequests - 6} more requests waiting</li>}
-                            {requests.length === 0 && <li className="summary-item">No requests in queue</li>}
+                            {totalRequests > 6 && <li className="summary-item">+ {totalRequests - 6} {t.moreRequestsWaiting}</li>}
+                            {requests.length === 0 && <li className="summary-item">{t.queueEmpty}</li>}
                           </ul>
                         </div>
 
                         <div className="record-section">
-                          <h4>Approvals</h4>
+                          <h4>{t.approvals}</h4>
                           <ul>
                             {requests.filter((item) => item.status === 'Approved').slice(0, 6).map((item) => (
                               <li key={item.id}><span>{item.type}</span><strong>{getRequestStatusLabel(item.status, t)}</strong></li>
                             ))}
-                            {approvedCount > 6 && <li className="summary-item">+ {approvedCount - 6} more approvals saved</li>}
-                            {approvedCount === 0 && <li className="summary-item">No approvals recorded</li>}
+                            {approvedCount > 6 && <li className="summary-item">+ {approvedCount - 6} {t.moreApprovalsSaved}</li>}
+                            {approvedCount === 0 && <li className="summary-item">{t.approvalsEmpty}</li>}
                           </ul>
                         </div>
                       </div>
@@ -2893,7 +2914,7 @@ function StaffPage({ requests, staffMembers = [], announcements = [], currentUse
                     className={`record-panel-card ${activeRecordsPanel === 'archive' ? 'selected' : ''}`}
                     onClick={() => setActiveRecordsPanel((prev) => prev === 'archive' ? null : 'archive')}
                   >
-                    <span className="record-panel-title">Archive queue &amp;<br />approvals</span>
+                    <span className="record-panel-title">{t.archiveQueueApprovals}</span>
                     <span className="record-panel-count">{archiveFiles.length}</span>
                   </button>
 
@@ -2901,11 +2922,11 @@ function StaffPage({ requests, staffMembers = [], announcements = [], currentUse
                     <div className="record-dedicated-space">
                       <div className="record-details archive-record-details">
                         <div className="archive-inline-actions">
-                          <button type="button" className="secondary-btn small" onClick={() => handleArchiveQueue(1)} disabled={archiving}>Archive 24h</button>
-                          <button type="button" className="primary-btn small" onClick={() => handleArchiveQueue(0)} disabled={archiving}>Store today</button>
+                          <button type="button" className="secondary-btn small" onClick={() => handleArchiveQueue(1)} disabled={archiving}>{t.archiveLastDay}</button>
+                          <button type="button" className="primary-btn small" onClick={() => handleArchiveQueue(0)} disabled={archiving}>{t.storeToday}</button>
                         </div>
                         {archiveStatus && (
-                          <p className="archive-note">Archived {archiveStatus.count || 0} records on {new Date(archiveStatus.archivedAt || Date.now()).toLocaleDateString()}.</p>
+                          <p className="archive-note">{t.archiveSummary.replace('{count}', String(archiveStatus.count || 0)).replace('{date}', new Date(archiveStatus.archivedAt || Date.now()).toLocaleDateString(language === 'fil' ? 'fil-PH' : 'en-PH'))}</p>
                         )}
                         <div className="archive-list">
                           {archiveFiles.length > 0 ? archiveFiles.map((file) => (
@@ -2920,7 +2941,7 @@ function StaffPage({ requests, staffMembers = [], announcements = [], currentUse
                               </div>
                             </div>
                           )) : (
-                            <p className="soft-label">No archived queue records yet.</p>
+                            <p className="soft-label">{t.noArchivedQueueRecords}</p>
                           )}
                         </div>
                       </div>
@@ -2933,15 +2954,15 @@ function StaffPage({ requests, staffMembers = [], announcements = [], currentUse
                 <div className="profile-head">
                   <div className="profile-avatar">S</div>
                   <div>
-                    <h3>Staff Highlights</h3>
-                    <span>Barangay support desk</span>
+                    <h3>{t.staffHighlights}</h3>
+                    <span>{t.staffSupportDesk}</span>
                   </div>
                 </div>
                 <dl className="profile-list">
-                  <div><dt>Shift</dt><dd>08:00 AM – 05:00 PM</dd></div>
-                  <div><dt>Desk</dt><dd>Municipal Services</dd></div>
-                  <div><dt>Priority</dt><dd>Certificate & clearance</dd></div>
-                  <div><dt>Notes</dt><dd>Keep response time under 2 hours</dd></div>
+                  <div><dt>{t.shift}</dt><dd>08:00 AM – 05:00 PM</dd></div>
+                  <div><dt>{t.desk}</dt><dd>{t.serviceDesk}</dd></div>
+                  <div><dt>{t.priority}</dt><dd>{t.certificateClearance}</dd></div>
+                  <div><dt>{t.notesLabel}</dt><dd>{t.responseTimeTarget}</dd></div>
                 </dl>
               </article>
             </aside>
@@ -3269,40 +3290,44 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
       </header>
 
       <main className="dashboard-main">
-        <aside className="sidebar" aria-label="Admin navigation">
+        <aside className="sidebar" aria-label={t.adminNavigationLabel}>
           <nav className="sidebar-nav">
-            <span 
+            <button
+              type="button"
               className={`nav-item ${activeTab === 'overview' ? 'active' : ''}`}
+              aria-current={activeTab === 'overview' ? 'page' : undefined}
               onClick={() => setActiveTab('overview')}
-              style={{cursor: 'pointer'}}
             >
               <span className="nav-icon">🧭</span><span>{t.overview}</span>
-            </span>
-            <span 
+            </button>
+            <button
+              type="button"
               className={`nav-item ${activeTab === 'residents' ? 'active' : ''}`}
+              aria-current={activeTab === 'residents' ? 'page' : undefined}
               onClick={() => setActiveTab('residents')}
-              style={{cursor: 'pointer'}}
             >
               <span className="nav-icon">👥</span><span>{t.residents}</span>
-            </span>
-            <span 
+            </button>
+            <button
+              type="button"
               className={`nav-item ${activeTab === 'access' ? 'active' : ''}`}
+              aria-current={activeTab === 'access' ? 'page' : undefined}
               onClick={() => setActiveTab('access')}
-              style={{cursor: 'pointer'}}
             >
               <span className="nav-icon">🔐</span><span>{t.access}</span>
-            </span>
-            <span 
+            </button>
+            <button
+              type="button"
               className={`nav-item ${activeTab === 'emergencies' ? 'active' : ''}`}
+              aria-current={activeTab === 'emergencies' ? 'page' : undefined}
               onClick={() => setActiveTab('emergencies')}
-              style={{cursor: 'pointer'}}
             >
               <span className="nav-icon">🚨</span><span>{t.emergencies}</span>
-            </span>
+            </button>
           </nav>
         </aside>
 
-        <section className="content-panel" aria-label="Admin overview">
+        <section className="content-panel" aria-label={t.adminOverviewLabel}>
           <div className="welcome-row">
             <div>
               <p className="eyebrow">{t.governance}</p>
@@ -3311,7 +3336,7 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
             <span className="counter-pill">{pending} {t.pending}</span>
           </div>
 
-          <div className="stats-grid" aria-label="Admin summary">
+          <div className="stats-grid" aria-label={t.adminSummaryLabel}>
             <article className="stat-card accent">
               <div className="stat-header">
                 <span className="label">{t.residents}</span>
@@ -3404,12 +3429,12 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
                           <div key={user.id} className="admin-approval-row">
                             <div>
                               <strong>{user.firstName || user.first_name} {user.lastName || user.last_name}</strong>
-                              <small>{user.mobile} • Registered {formatDateValue(user.createdAt || user.created_at)}</small>
-                              <small>{user.address || 'No address provided'} • Zone {user.zone || user.zoneNumber || 'N/A'}</small>
+                              <small>{user.mobile} • {t.registered} {formatDateValue(user.createdAt || user.created_at)}</small>
+                              <small>{user.address || t.noAddressProvided} • Zone {user.zone || user.zoneNumber || 'N/A'}</small>
                             </div>
                             <div className="action-row">
-                              <button type="button" className="small-action success" onClick={() => handleVerification(user, 'Active Resident')}>Approve</button>
-                              <button type="button" className="small-action danger" onClick={() => handleVerification(user, 'Rejected')}>Reject</button>
+                              <button type="button" className="small-action success" onClick={() => handleVerification(user, 'Active Resident')}>{t.approve}</button>
+                              <button type="button" className="small-action danger" onClick={() => handleVerification(user, 'Rejected')}>{t.reject}</button>
                             </div>
                           </div>
                         ))}
@@ -3454,25 +3479,25 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
               {activeTab === 'residents' && (
                 <article className="panel-card compact-panel">
                   <div className="panel-header">
-                    <h2>Resident Management</h2>
-                    <span className="soft-label">{filteredResidents.length} residents found</span>
+                    <h2>{t.residentManagement}</h2>
+                    <span className="soft-label">{filteredResidents.length} {t.residentsFound}</span>
                   </div>
 
                   <div className="search-and-filter">
                     <input 
                       type="text" 
-                      placeholder="🔎 Search by name..."
+                      placeholder={`🔎 ${t.searchByName}`}
                       value={searchQuery}
                       onChange={(e) => setSearchQuery(e.target.value)}
                       className="search-input"
                     />
-                    <button type="button" className="primary-btn small search-button" onClick={() => setSearchQuery((prev) => prev.trim())}>Search</button>
+                    <button type="button" className="primary-btn small search-button" onClick={() => setSearchQuery((prev) => prev.trim())}>{t.search}</button>
                     <select 
                       value={selectedZone}
                       onChange={(e) => setSelectedZone(e.target.value)}
                       className="zone-filter"
                     >
-                      <option value="all">All Zones</option>
+                      <option value="all">{t.allZones}</option>
                       <option value="1">Zone 1</option>
                       <option value="2">Zone 2</option>
                       <option value="3">Zone 3</option>
@@ -3587,7 +3612,7 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
                   <form className="editor-panel admin-create-panel" onSubmit={handleCreateAdmin}>
                     <div className="panel-header left-align">
                       <h3>Create Administrator</h3>
-                      <span className="soft-label">Admin only</span>
+                      <span className="soft-label">{t.adminOnly}</span>
                     </div>
                     <div className="editor-grid">
                       <input aria-label="Administrator first name" placeholder="First name" value={adminForm.firstName} onChange={(event) => setAdminForm((current) => ({ ...current, firstName: event.target.value }))} required />
@@ -3608,7 +3633,7 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
                       onChange={(e) => setAccessSearch(e.target.value)}
                       className="search-input"
                     />
-                    <button type="button" className="primary-btn small search-button" onClick={() => setSearchQuery(accessSearch)}>Search</button>
+                    <button type="button" className="primary-btn small search-button" onClick={() => setSearchQuery(accessSearch)}>{t.search}</button>
                   </div>
 
                   <div className="zone-group-stack">
@@ -3735,20 +3760,20 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
                         <div className="approval-list">
                           {approvals.map((a) => (
                             <div key={a.id} className="approval-item">
-                              <div className="approval-status success">Approved</div>
+                              <div className="approval-status success">{t.approved}</div>
                               <div className="approval-main">
                                 <div className="approval-row-top">
                                   <strong>{a.id}</strong>
                                   <span>{a.dateApproved ? new Date(a.dateApproved).toLocaleString() : a.dateApproved}</span>
                                 </div>
-                                <div className="approval-meta">by {a.approvedByRole}</div>
+                                <div className="approval-meta">{t.approvedBy} {a.approvedByRole}</div>
                                 <div className="approval-meta accent">{a.requestSnapshot?.type} — {a.requestSnapshot?.purpose}</div>
                               </div>
                             </div>
                           ))}
                         </div>
                       ) : (
-                        <div className="empty-state">No approvals in the recent active list.</div>
+                        <div className="empty-state">{t.noApprovals}</div>
                       )}
                     </div>
                   </div>
@@ -3759,8 +3784,8 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
               {activeTab === 'emergencies' && (
                 <article className="panel-card">
                   <div className="panel-header">
-                    <h2>Emergency Reports</h2>
-                    <span className="soft-label">{reports.length} incidents logged</span>
+                    <h2>{t.emergencyReportsTitle}</h2>
+                    <span className="soft-label">{reports.length} {t.incidentsLogged}</span>
                   </div>
 
                   <div className="reports-grid">
@@ -3784,7 +3809,7 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
 
                   {(!reports || reports.length === 0) && (
                     <div className="empty-state">
-                      <p>No emergency reports logged yet.</p>
+                      <p>{t.noEmergencyReports}</p>
                     </div>
                   )}
                 </article>
@@ -3796,22 +3821,22 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
                 <div className="profile-head">
                   <div className="profile-avatar">A</div>
                   <div>
-                    <h3>System Status</h3>
-                    <span>Live overview</span>
+                    <h3>{t.systemStatus}</h3>
+                    <span>{t.liveOverview}</span>
                   </div>
                 </div>
                 <dl className="profile-list">
-                  <div><dt>Portal</dt><dd>Operational</dd></div>
-                  <div><dt>Security</dt><dd>RBAC enabled</dd></div>
-                  <div><dt>Services</dt><dd>{requests.length} active</dd></div>
-                  <div><dt>Alerts</dt><dd>{pending} require attention</dd></div>
+                  <div><dt>{t.portal}</dt><dd>{t.operational}</dd></div>
+                  <div><dt>{t.security}</dt><dd>{t.rbacEnabled}</dd></div>
+                  <div><dt>{t.servicesLabel}</dt><dd>{requests.length} {t.activeSuffix}</dd></div>
+                  <div><dt>{t.alerts}</dt><dd>{pending} {t.requireAttention}</dd></div>
                 </dl>
               </article>
 
               <article className="panel-card archive-card">
                 <div className="panel-subhead">
-                  <h4>Archived Files</h4>
-                  <button className="secondary-btn tiny" type="button" onClick={async () => { try { const r = await fetch(`${API_BASE}/admin/archives`); if (r.ok) { setArchives((await r.json()).archives || []) } } catch (e) { console.error(e) } }}>Refresh</button>
+                  <h4>{t.archivedFiles}</h4>
+                  <button className="secondary-btn tiny" type="button" onClick={async () => { try { const r = await fetch(`${API_BASE}/admin/archives`); if (r.ok) { setArchives((await r.json()).archives || []) } } catch (e) { console.error(e) } }}>{t.refresh}</button>
                 </div>
 
                 {archives && archives.length > 0 ? (
@@ -3840,14 +3865,14 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
                               console.error('download archive error', err)
                               alert('Download failed')
                             }
-                          }}>Download</button>
-                          <button type="button" className="small-action danger" onClick={() => handleDeleteArchive(f.name)}>Delete</button>
+                          }}>{t.download}</button>
+                          <button type="button" className="small-action danger" onClick={() => handleDeleteArchive(f.name)}>{t.delete}</button>
                         </div>
                       </div>
                     ))}
                   </div>
                 ) : (
-                  <div className="empty-state">No archived files yet.</div>
+                  <div className="empty-state">{t.noArchivedFiles}</div>
                 )}
               </article>
             </aside>
@@ -4053,7 +4078,7 @@ function App() {
   const location = useLocation()
   const [language, setLanguage] = useState(() => {
     try {
-      return localStorage.getItem('brgy-legaspi-language') || 'en'
+      return localStorage.getItem('brgy-legaspi-language') === 'fil' ? 'fil' : 'en'
     } catch {
       return 'en'
     }
@@ -4094,6 +4119,26 @@ function App() {
       // Ignore storage write issues in restricted browsing environments.
     }
   }, [language])
+
+  useEffect(() => {
+    document.documentElement.lang = language
+    const portalLabel = userRole === 'admin' ? t.adminPortal : userRole === 'staff' ? t.staffPortal : t.residentPortal
+    document.title = `${t.barangayLegaspi} - ${portalLabel}`
+  }, [language, userRole, t.adminPortal, t.barangayLegaspi, t.residentPortal, t.staffPortal])
+
+  useEffect(() => {
+    const handleWindowError = (event) => {
+      if (event.error) reportClientError('window-error', language, userRole)
+    }
+    const handleUnhandledRejection = () => reportClientError('unhandled-rejection', language, userRole)
+
+    window.addEventListener('error', handleWindowError)
+    window.addEventListener('unhandledrejection', handleUnhandledRejection)
+    return () => {
+      window.removeEventListener('error', handleWindowError)
+      window.removeEventListener('unhandledrejection', handleUnhandledRejection)
+    }
+  }, [language, userRole])
 
   useEffect(() => {
     if (!session?.user?.id) return

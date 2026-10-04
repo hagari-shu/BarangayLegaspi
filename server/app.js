@@ -275,6 +275,32 @@ export function createApp() {
     return next()
   }
 
+  const clientErrorRateLimit = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 10,
+    standardHeaders: true,
+    legacyHeaders: false,
+  })
+
+  app.post('/api/client-errors', clientErrorRateLimit, (req, res) => {
+    const allowedTypes = new Set(['render', 'window-error', 'unhandled-rejection'])
+    const allowedRoutes = new Set(['/', '/register', '/dashboard', '/requests', '/staff', '/admin', '/settings', '/events', '/payments'])
+    const type = req.body?.type
+    if (!allowedTypes.has(type)) {
+      return res.status(400).json({ message: 'Unsupported client error type.' })
+    }
+
+    const requestedRoute = typeof req.body?.route === 'string' ? req.body.route.split(/[?#]/, 1)[0] : '/'
+    const routeSegment = requestedRoute.split('/').filter(Boolean)[0]
+    const route = routeSegment ? `/${routeSegment}` : '/'
+    const normalizedRoute = allowedRoutes.has(route) ? route : '/other'
+    const role = ['resident', 'staff', 'admin'].includes(req.body?.role) ? req.body.role : 'unknown'
+    const language = ['en', 'fil'].includes(req.body?.language) ? req.body.language : 'unknown'
+
+    console.warn('client-side error reported', { type, route: normalizedRoute, role, language })
+    return res.status(202).json({ received: true })
+  })
+
   app.get('/api/health', async (_req, res) => {
     try {
       if (store === pgDb) {

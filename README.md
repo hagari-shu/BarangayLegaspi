@@ -37,6 +37,14 @@ Keep Node serving traffic until rotation, database checks, and Laravel verificat
 
 Vercel continues to serve the frontend and SPA routes through `vercel.json`.
 
+### Production health monitoring
+
+The `Production health check` GitHub Actions workflow checks the public frontend, Laravel API, PostgreSQL-backed health endpoint, and public services, announcements, and events endpoints every 15 minutes. It also runs after changes to the workflow and can be started manually from the repository's Actions tab. A failed check identifies the failing service in the workflow log.
+
+Enable GitHub Actions failure notifications in your GitHub account or repository notification settings to be alerted when a scheduled check fails. The frontend reports rendering errors, uncaught browser errors, and unhandled promise rejections to the active API. Reports are rate-limited and contain only an allowlisted event type, route, language, and role; error messages, stacks, and account data are deliberately excluded. Review these warnings in the active API service logs. The frontend also shows a bilingual recovery screen if a rendering error prevents the portal from loading.
+
+These checks cover uptime and public read paths; they do not replace authenticated workflow tests, application-log review, or verified database backups.
+
 ## Local development
 
 Install Node.js dependencies from the repository root with `npm install`, then run `npm run dev`. The Vite frontend runs on port 5173 and the local Express API runs on port 3001, using the local JSON store unless `DATABASE_URL` is configured. Do not point local development or tests at the production database.
