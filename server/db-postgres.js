@@ -39,9 +39,11 @@ const normalizeRequest = (request = null) => {
   return {
     ...request,
     userId: request.userId ?? request.user_id,
+    date: request.date ?? request.createdAt ?? request.created_at,
     deliveryMethod: request.deliveryMethod ?? request.delivery_method ?? 'online',
     deliveryNote: request.deliveryNote ?? request.delivery_note ?? '',
     followUps: request.followUps ?? request.follow_ups ?? [],
+    statusHistory: request.statusHistory ?? request.status_history ?? [],
     updatedAt: request.updatedAt ?? request.updated_at ?? null,
   }
 }
@@ -113,6 +115,7 @@ export async function initDatabase() {
       delivery_method VARCHAR(30) NOT NULL DEFAULT 'online',
       delivery_note TEXT,
       follow_ups JSONB NOT NULL DEFAULT '[]'::jsonb,
+      status_history JSONB NOT NULL DEFAULT '[]'::jsonb,
       created_at TIMESTAMPTZ DEFAULT NOW()
     );
   `)
@@ -120,6 +123,7 @@ export async function initDatabase() {
   await query("ALTER TABLE requests ADD COLUMN IF NOT EXISTS delivery_method VARCHAR(30) NOT NULL DEFAULT 'online'")
   await query('ALTER TABLE requests ADD COLUMN IF NOT EXISTS delivery_note TEXT')
   await query("ALTER TABLE requests ADD COLUMN IF NOT EXISTS follow_ups JSONB NOT NULL DEFAULT '[]'::jsonb")
+  await query("ALTER TABLE requests ADD COLUMN IF NOT EXISTS status_history JSONB NOT NULL DEFAULT '[]'::jsonb")
   await query('ALTER TABLE requests ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ')
 
   await query(`
@@ -326,9 +330,9 @@ export async function updateUser(userId, updates = {}) {
 export async function createRequest(request) {
   try {
     await query(
-      `INSERT INTO requests (id, user_id, type, purpose, notes, status, delivery_method, delivery_note, follow_ups, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-      [request.id, request.userId, request.type, request.purpose, request.notes || '', request.status, request.deliveryMethod || 'online', request.deliveryNote || '', JSON.stringify(request.followUps || []), new Date(request.date || Date.now()).toISOString()]
+      `INSERT INTO requests (id, user_id, type, purpose, notes, status, delivery_method, delivery_note, follow_ups, status_history, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+      [request.id, request.userId, request.type, request.purpose, request.notes || '', request.status, request.deliveryMethod || 'online', request.deliveryNote || '', JSON.stringify(request.followUps || []), JSON.stringify(request.statusHistory || []), new Date(request.date || Date.now()).toISOString()]
     )
     return request
   } catch (error) {
@@ -339,6 +343,10 @@ export async function createRequest(request) {
     await writeDb(db)
     return request
   }
+}
+
+export async function saveRequest(request) {
+  return createRequest(request)
 }
 
 export async function deleteUser(userId) {
@@ -406,11 +414,23 @@ export async function listAllUsers() {
   }
 }
 
-export async function updateRequestStatus(requestId, status) {
+export async function updateRequestStatus(requestId, status, historyEntry) {
   try {
     const result = await query(
-      `UPDATE requests SET status = $1, updated_at = NOW() WHERE id = $2 RETURNING *`,
-      [status, requestId]
+      `UPDATE requests
+       SET status = $1,
+           status_history = COALESCE(
+             NULLIF(status_history, '[]'::jsonb),
+             jsonb_build_array(jsonb_build_object(
+               'kind', 'status',
+               'status', requests.status,
+               'createdAt', requests.created_at,
+               'actorRole', 'system'
+             ))
+           ) || $2::jsonb,
+           updated_at = NOW()
+       WHERE id = $3 RETURNING *`,
+      [status, JSON.stringify([historyEntry]), requestId]
     )
     return normalizeRequest(result.rows[0])
   } catch (error) {
@@ -430,10 +450,31 @@ export async function appendRequestFollowUp(requestId, followUp) {
   try {
     const result = await query(
       `UPDATE requests
-       SET follow_ups = COALESCE(follow_ups, '[]'::jsonb) || $1::jsonb, updated_at = $2
-       WHERE id = $3
+       SET follow_ups = COALESCE(follow_ups, '[]'::jsonb) || $1::jsonb,
+           status_history = COALESCE(
+             NULLIF(status_history, '[]'::jsonb),
+             jsonb_build_array(jsonb_build_object(
+               'kind', 'status',
+               'status', requests.status,
+               'createdAt', requests.created_at,
+               'actorRole', 'system'
+             ))
+           ) || $2::jsonb ||
+             CASE WHEN status = 'Needs Information'
+               THEN jsonb_build_array(jsonb_build_object(
+                 'kind', 'status',
+                 'status', 'In Review',
+                 'note', 'Resident provided a follow-up.',
+                 'createdAt', $3::timestamptz,
+                 'actorRole', 'system'
+               ))
+               ELSE '[]'::jsonb
+             END,
+           status = CASE WHEN status = 'Needs Information' THEN 'In Review' ELSE status END,
+           updated_at = $3
+       WHERE id = $4
        RETURNING *`,
-      [JSON.stringify([followUp]), followUp.createdAt, requestId]
+      [JSON.stringify([followUp]), JSON.stringify([{ ...followUp, kind: 'follow-up', actorRole: 'resident' }]), followUp.createdAt, requestId]
     )
     return normalizeRequest(result.rows[0])
   } catch (error) {
@@ -443,6 +484,22 @@ export async function appendRequestFollowUp(requestId, followUp) {
     if (!request) return null
     request.followUps = [...(Array.isArray(request.followUps) ? request.followUps : []), followUp]
     request.updatedAt = followUp.createdAt
+    request.statusHistory = [
+      ...(Array.isArray(request.statusHistory) && request.statusHistory.length
+        ? request.statusHistory
+        : [{ kind: 'status', status: request.status, createdAt: request.date, actorRole: 'system' }]),
+      { ...followUp, kind: 'follow-up', actorRole: 'resident' },
+    ]
+    if (request.status === 'Needs Information') {
+      request.status = 'In Review'
+      request.statusHistory.push({
+        kind: 'status',
+        status: 'In Review',
+        note: 'Resident provided a follow-up.',
+        createdAt: followUp.createdAt,
+        actorRole: 'system',
+      })
+    }
     await writeDb(db)
     return request
   }

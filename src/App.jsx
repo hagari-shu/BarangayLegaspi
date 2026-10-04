@@ -1,12 +1,13 @@
 ﻿import { useEffect, useState } from 'react'
 import { flushSync } from 'react-dom'
 import { Routes, Route, Navigate, Link, useNavigate, useLocation } from 'react-router-dom'
-import barangaySeal from './assets/barangay-seal.svg'
+import barangaySeal from './assets/barangay-seal-new.png'
+import legaspiHero from './assets/legaspi-community.png'
 import translations from './translations'
 import './App.css'
 
 const sessionKey = 'brgy-legaspi-session'
-const requestReminderStorageKey = 'brgy-legaspi-request-reminders'
+const getRequestReminderStorageKey = (userId) => `brgy-legaspi-request-reminders:${userId}`
 const API_BASE = (import.meta.env.VITE_API_BASE || (import.meta.env.DEV ? 'http://localhost:3001/api' : '')).replace(/\/$/, '')
 
 if (!API_BASE) {
@@ -30,6 +31,20 @@ window.fetch = (input, init = {}) => {
 }
 
 const sanitizeText = (value = '') => String(value).replace(/[<>]/g, '').trim()
+const getRequestStatusLabel = (status, t) => ({
+  Pending: t.statusSubmitted,
+  'In Review': t.statusUnderReview,
+  'Needs Information': t.statusNeedsInformation,
+  Approved: t.statusCompleted,
+  Rejected: t.statusRejected,
+}[status] || status || t.statusSubmitted)
+const nextRequestStatuses = {
+  Pending: ['In Review', 'Needs Information', 'Approved', 'Rejected'],
+  'In Review': ['Needs Information', 'Approved', 'Rejected'],
+  'Needs Information': ['In Review', 'Approved', 'Rejected'],
+  Approved: [],
+  Rejected: [],
+}
 const isValidIdentifier = (value) => /^[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}$|^09\d{9}$/.test(String(value).trim())
 const isValidPassword = (value) => {
   const password = String(value).trim()
@@ -78,6 +93,25 @@ function PasswordField({ id, label, value, onChange, autoComplete = 'new-passwor
   )
 }
 
+function RequestHistory({ history = [], t }) {
+  if (!Array.isArray(history) || history.length === 0) {
+    return <p className="empty-history">{t.noRequestHistory}</p>
+  }
+
+  return (
+    <ol className="request-history-list">
+      {history.map((event, index) => (
+        <li key={event.id || `${event.createdAt}-${event.kind}-${index}`}>
+          <strong>{event.kind === 'follow-up' ? t.followUpLabel : getRequestStatusLabel(event.status, t)}</strong>
+          <time dateTime={event.createdAt}>{event.createdAt ? new Date(event.createdAt).toLocaleString() : ''}</time>
+          {(event.note || event.message) && <p>{event.note === 'Resident provided a follow-up.' ? t.followUpResponseReceived : event.note || event.message}</p>}
+          {event.actorName && <small>{event.actorName}</small>}
+        </li>
+      ))}
+    </ol>
+  )
+}
+
 const readStoredSession = () => {
   try {
     const saved = localStorage.getItem(sessionKey)
@@ -116,8 +150,8 @@ const initialProfile = {
 
 const initialRequests = []
 const defaultSocialAccounts = [
-  { key: 'facebook', label: 'Facebook', connected: true },
-  { key: 'instagram', label: 'Instagram', connected: true },
+  { key: 'facebook', label: 'Facebook', connected: false },
+  { key: 'instagram', label: 'Instagram', connected: false },
   { key: 'x', label: 'X / Twitter', connected: false },
   { key: 'messenger', label: 'Messenger', connected: false },
 ]
@@ -452,7 +486,7 @@ function LoginPage({ onLogin, language, setLanguage }) {
 
   return (
     <div className="app-shell">
-      <header className="topbar" aria-label="Top bar">
+      <header className="topbar landing-topbar" aria-label="Top bar">
         <div className="topbar-inner">
           <div className="topbar-title">{t.officialResident}</div>
           <div className="topbar-location">{t.barangayLegaspi}</div>
@@ -461,28 +495,32 @@ function LoginPage({ onLogin, language, setLanguage }) {
       </header>
 
       <main className="login-screen">
-        <div className="brand-block" aria-label="Barangay brand">
-          <div className="brand-stack">
-            <img
-              className="seal-logo"
-              src={barangaySeal}
-              alt="Barangay Legaspi official seal"
-              style={{
-                borderRadius: '50%',
-                padding: '0',
-                background: 'transparent',
-                border: 'none',
-                boxShadow: 'none',
-              }}
-            />
-            <div className="brand-copy">
-              <h1>{t.barangayLegaspi}</h1>
-              <p>{t.residentPortal}</p>
+        <section className="landing-intro" aria-labelledby="landing-headline">
+          <img className="landing-image" src={legaspiHero} alt="Barangay Legaspi community display lit up at night" />
+          <div className="landing-copy">
+            <p className="landing-eyebrow">{t.officialResident}</p>
+            <h1 id="landing-headline">{t.landingHeadline}</h1>
+            <p>{t.landingDescription}</p>
+            <a className="landing-cta" href="#login-card">{t.landingCta}</a>
+          </div>
+          <ul className="landing-benefits">
+            <li><span aria-hidden="true">✓</span>{t.landingServiceRequests}</li>
+            <li><span aria-hidden="true">✓</span>{t.landingTrackRequests}</li>
+            <li><span aria-hidden="true">✓</span>{t.landingOfficialUpdates}</li>
+          </ul>
+        </section>
+        <div className="portal-entry">
+          <div className="brand-block" aria-label="Barangay brand">
+            <div className="brand-stack">
+              <img className="seal-logo" src={barangaySeal} alt="Barangay Legaspi official seal" />
+              <div className="brand-copy">
+                <h1>{t.barangayLegaspi}</h1>
+                <p>{t.residentPortal}</p>
+              </div>
             </div>
           </div>
-        </div>
 
-        <section className="login-card" aria-label="Login form">
+        <section className="login-card" id="login-card" aria-label="Login form">
           <h2>{t.signIn}</h2>
 
           {!mfaState.required ? (
@@ -592,6 +630,7 @@ function LoginPage({ onLogin, language, setLanguage }) {
             <Link to="/register" aria-label="Create resident account">{t.createResidentAccount}</Link>
           </p>
         </section>
+        </div>
 
         <footer className="page-footer">{t.barangayLegaspi} • Tayug, Pangasinan</footer>
       </main>
@@ -881,7 +920,7 @@ function DashboardPage({ profile, requests, services, announcements, events, pay
   const [profileForm, setProfileForm] = useState(profile)
   const [savingProfile, setSavingProfile] = useState(false)
   const navigate = useNavigate()
-  const pendingRequests = (requests || []).filter((item) => item.status !== 'Approved').length
+  const pendingRequests = (requests || []).filter((item) => ['Pending', 'In Review', 'Needs Information'].includes(item.status)).length
 
   useEffect(() => {
     setProfileForm(profile)
@@ -962,7 +1001,7 @@ function DashboardPage({ profile, requests, services, announcements, events, pay
     ...(profile.status !== 'Active Resident' ? [{ id: 'verification-pending', title: 'Verification pending', detail: 'Please wait for barangay confirmation before requesting services.' }] : []),
     ...((requests || []).slice(0, 3).map((request) => ({
       id: `request-${request.id}`,
-      title: `${request.type}: ${request.status || 'Pending'}`,
+      title: `${request.type}: ${getRequestStatusLabel(request.status, t)}`,
       detail: request.purpose || 'Submitted and awaiting review.',
     }))),
     ...((announcements || []).slice(0, 2).map((announcement) => ({
@@ -1179,7 +1218,7 @@ function DashboardPage({ profile, requests, services, announcements, events, pay
                         <small>{service.subtitle}</small>
                       </span>
                       <span className={`service-status ${(requests || []).find((request) => request.type === service.title && request.status !== 'Rejected')?.status?.toLowerCase() || 'available'}`}>
-                        {(requests || []).find((request) => request.type === service.title && request.status !== 'Rejected')?.status || 'Available'}
+                        {getRequestStatusLabel((requests || []).find((request) => request.type === service.title && request.status !== 'Rejected')?.status || 'Available', t)}
                       </span>
                     </button>
                   )) : <div className="empty-state">{t.noServicesMatchSearch}</div>}
@@ -1321,7 +1360,7 @@ function DashboardPage({ profile, requests, services, announcements, events, pay
   )
 }
 
-function RequestsPage({ requests, onSubmit, onRequestUpdated, onLogout, language, setLanguage }) {
+function RequestsPage({ requests, onSubmit, onRequestUpdated, onLogout, language, setLanguage, userId }) {
   const t = translations[language] || translations.en
   const requestTypes = ['Barangay Certificate', 'Barangay Clearance', 'Medical Assistance', 'Emergency Help']
   const requestedService = new URLSearchParams(window.location.search).get('service')
@@ -1338,7 +1377,7 @@ function RequestsPage({ requests, onSubmit, onRequestUpdated, onLogout, language
   const [followUpNotice, setFollowUpNotice] = useState('')
   const [reminderDates, setReminderDates] = useState(() => {
     try {
-      const reminders = JSON.parse(localStorage.getItem(requestReminderStorageKey) || '{}')
+      const reminders = JSON.parse(localStorage.getItem(getRequestReminderStorageKey(userId)) || '{}')
       return Object.fromEntries(Object.entries(reminders).map(([id, reminder]) => [id, reminder.scheduledAt]))
     } catch {
       return {}
@@ -1346,12 +1385,12 @@ function RequestsPage({ requests, onSubmit, onRequestUpdated, onLogout, language
   })
   const [reminderNotice, setReminderNotice] = useState('')
 
-  const requestStatusSteps = ['Submitted', 'In Review', 'Finalized']
   const recentRequests = [...(requests || [])].slice(0, 3)
 
   const getRequestStatusMessage = (status) => {
-    if (status === 'Approved') return 'Approved and finalized by the barangay team.'
-    if (status === 'Rejected') return 'Needs clarification or is not eligible for this request type.'
+    if (status === 'Approved') return 'Completed by the barangay team.'
+    if (status === 'Rejected') return 'This request was declined. Check the history for staff notes.'
+    if (status === 'Needs Information') return 'Barangay staff need more information. Reply below to continue.'
     if (status === 'In Review') return 'Your request is actively being reviewed by barangay staff.'
     return 'Your request has been submitted and is waiting for initial review.'
   }
@@ -1401,6 +1440,7 @@ function RequestsPage({ requests, onSubmit, onRequestUpdated, onLogout, language
         deliveryMethod: data.request.deliveryMethod || form.deliveryMethod,
         deliveryNote: data.request.deliveryNote || sanitizeText(form.deliveryNote),
         followUps: data.request.followUps || [],
+        statusHistory: data.request.statusHistory || [],
       })
 
       setSubmitted(true)
@@ -1465,14 +1505,15 @@ function RequestsPage({ requests, onSubmit, onRequestUpdated, onLogout, language
         throw new Error(data.message || 'Unable to schedule reminder.')
       }
 
-      const reminders = JSON.parse(localStorage.getItem(requestReminderStorageKey) || '{}')
+      const reminderStorageKey = getRequestReminderStorageKey(userId)
+      const reminders = JSON.parse(localStorage.getItem(reminderStorageKey) || '{}')
       reminders[request.id] = {
         requestId: request.id,
         requestType: request.type,
         scheduledAt: new Date(scheduledAt).toISOString(),
         notified: false,
       }
-      localStorage.setItem(requestReminderStorageKey, JSON.stringify(reminders))
+      localStorage.setItem(reminderStorageKey, JSON.stringify(reminders))
       setReminderNotice(request.id)
     } catch (error) {
       alert(error.message || 'Unable to save this reminder.')
@@ -1548,24 +1589,17 @@ function RequestsPage({ requests, onSubmit, onRequestUpdated, onLogout, language
                 <div key={item.id} className="request-status-card">
                   <div className="request-status-title-row">
                     <strong>{item.type}</strong>
-                    <span className={'status-badge ' + (item.status || '').toLowerCase().replace(/\s+/g, '-')}>{item.status || 'Pending'}</span>
-                  </div>
-                  <div className="status-steps" aria-label={`Status steps for ${item.type}`}>
-                    {requestStatusSteps.map((step) => {
-                      const isActive =
-                        (item.status === 'Approved' && step === 'Finalized') ||
-                        (item.status === 'Rejected' && step === 'Finalized') ||
-                        (item.status === 'In Review' && step === 'In Review') ||
-                        (!['Approved', 'Rejected', 'In Review'].includes(item.status) && step === 'Submitted')
-
-                      return <span key={`${item.id}-${step}`} className={isActive ? 'active' : ''}>{step}</span>
-                    })}
+                    <span className={'status-badge ' + (item.status || '').toLowerCase().replace(/\s+/g, '-')}>{getRequestStatusLabel(item.status, t)}</span>
                   </div>
                   <p>{getRequestStatusMessage(item.status)}</p>
                   <div className="request-delivery-summary">
                     <strong>{t.deliveryMethodLabel}:</strong> {item.deliveryMethod === 'physical' ? t.physicalCopy : t.onlineCopy}
                     {item.deliveryNote && <p>{item.deliveryNote}</p>}
                   </div>
+                  <details className="request-history-details">
+                    <summary>{t.requestStatusHistory}</summary>
+                    <RequestHistory history={item.statusHistory} t={t} />
+                  </details>
                   <form className="request-reminder-form" onSubmit={(event) => handleSetReminder(event, item)}>
                     <label htmlFor={`reminder-${item.id}`}>{t.remindMeLabel}</label>
                     <input
@@ -1605,14 +1639,16 @@ function RequestsPage({ requests, onSubmit, onRequestUpdated, onLogout, language
           </div>
 
           <div className="request-table-wrap">
-            <h3>{t.recentRequests}</h3>
+            <h3>{t.requestHistory}</h3>
             <table className="request-table">
               <thead>
                 <tr>
                   <th>Type</th>
                   <th>{t.purpose}</th>
                   <th>Status</th>
+                  <th>{t.deliveryMethodLabel}</th>
                   <th>{t.when}</th>
+                  <th>{t.requestStatusHistory}</th>
                 </tr>
               </thead>
               <tbody>
@@ -1620,8 +1656,10 @@ function RequestsPage({ requests, onSubmit, onRequestUpdated, onLogout, language
                   <tr key={item.id}>
                     <td>{item.type}</td>
                     <td>{item.purpose}</td>
-                    <td><span className={'status-badge ' + (item.status || '').toLowerCase().replace(/\s+/g, '-')}>{item.status}</span></td>
+                    <td><span className={'status-badge ' + (item.status || '').toLowerCase().replace(/\s+/g, '-')}>{getRequestStatusLabel(item.status, t)}</span></td>
+                    <td>{item.deliveryMethod === 'physical' ? t.physicalCopy : t.onlineCopy}{item.deliveryNote && <small className="request-staff-note">{item.deliveryNote}</small>}</td>
                     <td>{item.date}</td>
+                    <td><details className="request-history-details"><summary>{t.requestStatusHistory}</summary><RequestHistory history={item.statusHistory} t={t} /></details></td>
                   </tr>
                 ))}
               </tbody>
@@ -2023,6 +2061,8 @@ function StaffPage({ requests, staffMembers = [], announcements = [], currentUse
   const [queueSearch, setQueueSearch] = useState('')
   const [queueStatus, setQueueStatus] = useState('active')
   const [queueZone, setQueueZone] = useState('all')
+  const [requestStatusDrafts, setRequestStatusDrafts] = useState({})
+  const [requestStatusNotes, setRequestStatusNotes] = useState({})
   const [selectedUser, setSelectedUser] = useState(null)
   const [staffForm, setStaffForm] = useState({
     firstName: '',
@@ -2033,14 +2073,7 @@ function StaffPage({ requests, staffMembers = [], announcements = [], currentUse
     mobile: '',
     password: '',
   })
-  const [connectedSocialAccounts, setConnectedSocialAccounts] = useState(() => {
-    try {
-      const saved = JSON.parse(localStorage.getItem('brgy-legaspi-social-accounts') || 'null')
-      return Array.isArray(saved) && saved.length > 0 ? saved : defaultSocialAccounts
-    } catch {
-      return defaultSocialAccounts
-    }
-  })
+  const connectedSocialAccounts = defaultSocialAccounts
   const [announcementForm, setAnnouncementForm] = useState({
     title: '',
     content: '',
@@ -2053,7 +2086,7 @@ function StaffPage({ requests, staffMembers = [], announcements = [], currentUse
   const [archiving, setArchiving] = useState(false)
   const [activeRecordsPanel, setActiveRecordsPanel] = useState(null)
 
-  const pendingCount = requests.filter((item) => item.status === 'Pending' || item.status === 'In Review').length
+  const pendingCount = requests.filter((item) => ['Pending', 'In Review', 'Needs Information'].includes(item.status)).length
   const approvedCount = requests.filter((item) => item.status === 'Approved').length
   const totalRequests = requests.length
   const filteredQueueRequests = requests.filter((item) => {
@@ -2064,6 +2097,19 @@ function StaffPage({ requests, staffMembers = [], announcements = [], currentUse
     const matchesZone = queueZone === 'all' || String(item.zone || item.zoneNumber || '') === queueZone
     return matchesSearch && matchesStatus && matchesZone
   })
+
+  const handleRequestStatusSubmit = async (event, item) => {
+    event.preventDefault()
+    const status = requestStatusDrafts[item.id]
+    if (!status) return
+    try {
+      await onProcessRequest(item.id, status, requestStatusNotes[item.id] || '')
+      setRequestStatusDrafts((current) => ({ ...current, [item.id]: '' }))
+      setRequestStatusNotes((current) => ({ ...current, [item.id]: '' }))
+    } catch (error) {
+      alert(error.message || 'Unable to update request status.')
+    }
+  }
 
   const loadArchiveFiles = async () => {
     try {
@@ -2171,14 +2217,6 @@ function StaffPage({ requests, staffMembers = [], announcements = [], currentUse
       alert(error.message || 'Unable to add staff member.')
     }
   }
-
-  useEffect(() => {
-    try {
-      localStorage.setItem('brgy-legaspi-social-accounts', JSON.stringify(connectedSocialAccounts))
-    } catch {
-      // ignore storage write failures in restricted browser contexts
-    }
-  }, [connectedSocialAccounts])
 
   const toggleAnnouncementChannel = (channelKey) => {
     setAnnouncementForm((prev) => {
@@ -2351,7 +2389,9 @@ function StaffPage({ requests, staffMembers = [], announcements = [], currentUse
                       <option value="active">{t.activeQueue}</option>
                       <option value="all">{t.allStatuses}</option>
                       <option value="Pending">{t.pending}</option>
-                      <option value="In Review">{t.pendingReview}</option>
+                      {nextRequestStatuses[item.status]?.map((status) => (
+                        <option key={status} value={status}>{getRequestStatusLabel(status, t)}</option>
+                      ))}
                     </select>
                     <select value={queueZone} onChange={(event) => setQueueZone(event.target.value)} aria-label="Filter request zone">
                       <option value="all">All zones</option>
@@ -2365,8 +2405,10 @@ function StaffPage({ requests, staffMembers = [], announcements = [], currentUse
                           <th>{t.resident}</th>
                           <th>Type</th>
                           <th>{t.purpose}</th>
+                          <th>{t.status}</th>
                           <th>{t.deliveryMethodLabel}</th>
                           <th>{t.latestFollowUp}</th>
+                          <th>{t.requestStatusHistory}</th>
                           <th>Priority</th>
                           <th>Actions</th>
                         </tr>
@@ -2377,17 +2419,42 @@ function StaffPage({ requests, staffMembers = [], announcements = [], currentUse
                             <td>{item.first_name || item.firstName || 'Resident'} {item.last_name || item.lastName || ''}</td>
                             <td>{item.type}</td>
                             <td>{item.purpose}</td>
+                            <td><span className={`status-badge ${(item.status || '').toLowerCase().replace(/\s+/g, '-')}`}>{getRequestStatusLabel(item.status, t)}</span></td>
                             <td>
                               {item.deliveryMethod === 'physical' || item.delivery_method === 'physical' ? t.physicalCopy : t.onlineCopy}
                               {(item.deliveryNote || item.delivery_note) && <small className="request-staff-note">{item.deliveryNote || item.delivery_note}</small>}
                             </td>
                             <td>{(item.followUps || item.follow_ups || []).slice(-1)[0]?.message || '—'}</td>
+                            <td><details className="request-history-details"><summary>{t.requestStatusHistory}</summary><RequestHistory history={item.statusHistory || item.status_history} t={t} /></details></td>
                             <td><span className={`priority-badge ${item.type === 'Emergency Help' ? 'urgent' : 'normal'}`}>{item.type === 'Emergency Help' ? 'Urgent' : 'Normal'}</span></td>
                             <td>
-                              <div className="action-row">
-                                <button type="button" className="small-action success" onClick={() => onProcessRequest(item.id, 'Approved')}>{t.approve}</button>
-                                <button type="button" className="small-action danger" onClick={() => onProcessRequest(item.id, 'Rejected')}>{t.reject}</button>
-                              </div>
+                              {['Approved', 'Rejected'].includes(item.status)
+                                ? <span>{getRequestStatusLabel(item.status, t)}</span>
+                                : (
+                                  <form className="request-status-action-form" onSubmit={(event) => handleRequestStatusSubmit(event, item)}>
+                                    <select
+                                      aria-label={`New status for ${item.type}`}
+                                      value={requestStatusDrafts[item.id] || ''}
+                                      onChange={(event) => setRequestStatusDrafts((current) => ({ ...current, [item.id]: event.target.value }))}
+                                      required
+                                    >
+                                      <option value="">Select status</option>
+                                      <option value="In Review">{t.statusUnderReview}</option>
+                                      <option value="Needs Information">{t.statusNeedsInformation}</option>
+                                      <option value="Approved">{t.statusCompleted}</option>
+                                      <option value="Rejected">{t.statusRejected}</option>
+                                    </select>
+                                    <textarea
+                                      aria-label={`Staff note for ${item.type}`}
+                                      value={requestStatusNotes[item.id] || ''}
+                                      onChange={(event) => setRequestStatusNotes((current) => ({ ...current, [item.id]: event.target.value }))}
+                                      placeholder={t.statusNoteLabel}
+                                      maxLength={1000}
+                                      required={requestStatusDrafts[item.id] === 'Needs Information'}
+                                    />
+                                    <button type="submit" className="small-action success">{t.requestStatusAction}</button>
+                                  </form>
+                                )}
                             </td>
                           </tr>
                         ))}
@@ -2432,7 +2499,7 @@ function StaffPage({ requests, staffMembers = [], announcements = [], currentUse
                             <td>{item.first_name || item.firstName || 'Resident'} {item.last_name || item.lastName || ''}</td>
                             <td>{item.type}</td>
                             <td>{item.purpose}</td>
-                            <td><span className={`status-badge approved`}>Approved</span></td>
+                            <td><span className={`status-badge approved`}>{getRequestStatusLabel(item.status, t)}</span></td>
                             <td><span className="soft-label">{item.date}</span></td>
                           </tr>
                         ))}
@@ -2531,9 +2598,8 @@ function StaffPage({ requests, staffMembers = [], announcements = [], currentUse
                               <label key={account.key} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 12px', border: '1px solid #d7dfe3', borderRadius: '999px', background: isSelected ? '#eafaf3' : '#f7f9fa', cursor: 'pointer' }}>
                                 <input
                                   type="checkbox"
-                                  checked={Boolean(account.connected && isSelected)}
-                                  onChange={() => { if (account.connected) toggleAnnouncementChannel(account.key) }}
-                                  disabled={!account.connected}
+                                  checked={isSelected}
+                                  onChange={() => toggleAnnouncementChannel(account.key)}
                                 />
                                 <span>{account.label}</span>
                                 <small style={{ color: account.connected ? '#0e7a5d' : '#7a7f85' }}>{account.connected ? t.connected : t.connectLater}</small>
@@ -2541,6 +2607,7 @@ function StaffPage({ requests, staffMembers = [], announcements = [], currentUse
                             )
                           })}
                         </div>
+                        <small className="request-staff-note">{t.socialIntegrationPending}</small>
                       </div>
                     </div>
                     <div className="editor-actions">
@@ -2556,7 +2623,7 @@ function StaffPage({ requests, staffMembers = [], announcements = [], currentUse
                           <strong>{item.title}</strong>
                           <p>{item.content || 'No additional content'}</p>
                           <small>{item.date}</small>
-                          <small>{(item.socialChannels || []).length > 0 ? `${t.sharedTo}: ${item.socialChannels.join(', ')}` : t.internalNoticeOnly}</small>
+                          <small>{(item.socialChannels || []).length > 0 ? `${t.socialChannelsSelectedLabel}: ${item.socialChannels.join(', ')}` : t.internalNoticeOnly}</small>
                         </div>
                         <button
                           type="button"
@@ -2685,7 +2752,7 @@ function StaffPage({ requests, staffMembers = [], announcements = [], currentUse
                           <h4>Queue</h4>
                           <ul>
                             {requests.slice(0, 6).map((item) => (
-                              <li key={item.id}><span>{item.type}</span><strong>{item.status}</strong></li>
+                              <li key={item.id}><span>{item.type}</span><strong>{getRequestStatusLabel(item.status, t)}</strong></li>
                             ))}
                             {totalRequests > 6 && <li className="summary-item">+ {totalRequests - 6} more requests waiting</li>}
                             {requests.length === 0 && <li className="summary-item">No requests in queue</li>}
@@ -2696,7 +2763,7 @@ function StaffPage({ requests, staffMembers = [], announcements = [], currentUse
                           <h4>Approvals</h4>
                           <ul>
                             {requests.filter((item) => item.status === 'Approved').slice(0, 6).map((item) => (
-                              <li key={item.id}><span>{item.type}</span><strong>Approved</strong></li>
+                              <li key={item.id}><span>{item.type}</span><strong>{getRequestStatusLabel(item.status, t)}</strong></li>
                             ))}
                             {approvedCount > 6 && <li className="summary-item">+ {approvedCount - 6} more approvals saved</li>}
                             {approvedCount === 0 && <li className="summary-item">No approvals recorded</li>}
@@ -2806,7 +2873,7 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
   const residentCount = managedUsers.filter((user) => user.role === 'resident').length
   const staffCount = managedUsers.filter((user) => user.role === 'staff').length
   const admins = managedUsers.filter((user) => user.role === 'admin').length
-  const pending = requests.filter((item) => item.status === 'Pending' || item.status === 'In Review').length
+  const pending = requests.filter((item) => ['Pending', 'In Review', 'Needs Information'].includes(item.status)).length
   const pendingVerificationUsers = managedUsers.filter((user) => user.role === 'resident' && user.status === 'Pending Verification')
   const approvedUsers = managedUsers.filter((user) => user.role === 'resident' && user.status === 'Active Resident').length
   const requestCountsByType = requests.reduce((counts, request) => {
@@ -3824,7 +3891,7 @@ function MauAssistant({ language, userRole, mobileDashboard }) {
           <div className="mau-body">
             {messages.map((message) => (
               <div key={message.id} className={`mau-message ${message.sender === 'user' ? 'user' : 'mau'}`}>
-                {message.text}
+                {message.id === 'welcome' ? t.mauWelcome : message.text}
               </div>
             ))}
           </div>
@@ -3905,9 +3972,11 @@ function App() {
   }, [language])
 
   useEffect(() => {
+    if (!session?.user?.id) return
+    const reminderStorageKey = getRequestReminderStorageKey(session.user.id)
     const checkDueReminders = () => {
       try {
-        const reminders = JSON.parse(localStorage.getItem(requestReminderStorageKey) || '{}')
+        const reminders = JSON.parse(localStorage.getItem(reminderStorageKey) || '{}')
         const dueReminders = Object.entries(reminders).filter(([, reminder]) => (
           !reminder.notified && new Date(reminder.scheduledAt).getTime() <= Date.now()
         ))
@@ -3929,7 +3998,7 @@ function App() {
           return [...current, ...dueAlerts.filter((alert) => !currentIds.has(alert.id))]
         })
         for (const [id] of dueReminders) reminders[id] = { ...reminders[id], notified: true }
-        localStorage.setItem(requestReminderStorageKey, JSON.stringify(reminders))
+        localStorage.setItem(reminderStorageKey, JSON.stringify(reminders))
       } catch (error) {
         console.error('request reminder check failed', error)
       }
@@ -3938,7 +4007,7 @@ function App() {
     checkDueReminders()
     const interval = window.setInterval(checkDueReminders, 15_000)
     return () => window.clearInterval(interval)
-  }, [language, t.reminderMessage, t.reminderTitle])
+  }, [language, session?.user?.id, t.reminderMessage, t.reminderTitle])
 
   useEffect(() => {
     const loadUserData = async () => {
@@ -4048,25 +4117,25 @@ function App() {
     setRequests((prev) => prev.map((request) => request.id === updatedRequest.id ? updatedRequest : request))
   }
 
-  const handleRequestStatus = async (requestId, status) => {
-    if (!session?.token) return
+  const handleRequestStatus = async (requestId, status, note = '') => {
+    if (!session?.token) throw new Error('Your session has expired. Please sign in again.')
 
     try {
       const response = await fetch(`${API_BASE}/requests/${requestId}/status`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status }),
+        body: JSON.stringify({ status, note }),
       })
 
+      const data = await response.json().catch(() => ({}))
       if (!response.ok) {
-        console.error('Failed to update request status', response.status)
-        return
+        throw new Error(data.message || 'Unable to update request status.')
       }
 
-      const updated = await response.json()
-      setRequests((prev) => prev.map((item) => (item.id === requestId ? { ...item, status: updated.request?.status || status } : item)))
+      setRequests((prev) => prev.map((item) => (item.id === requestId ? data.request : item)))
+      return data.request
     } catch (e) {
-      console.error('handleRequestStatus error', e)
+      throw new Error(e.message || 'Unable to update request status.')
     }
   }
 
@@ -4186,7 +4255,7 @@ function App() {
         <Route path="/" element={isAuthenticated ? <Navigate to={userRole === 'staff' ? '/staff' : userRole === 'admin' ? '/admin' : '/dashboard'} replace /> : <LoginPage onLogin={handleLogin} language={language} setLanguage={switchLanguage} />} />
         <Route path="/register" element={isAuthenticated ? <Navigate to={userRole === 'staff' ? '/staff' : userRole === 'admin' ? '/admin' : '/dashboard'} replace /> : <RegisterPage language={language} setLanguage={switchLanguage} />} />
         <Route path="/dashboard" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['resident']} userRole={userRole}><DashboardPage profile={profile} requests={requests} services={services} announcements={announcementsData} events={events} payments={payments} onLogout={handleLogout} onProfileUpdated={setProfile} language={language} setLanguage={switchLanguage} /></ProtectedRoute>} />
-        <Route path="/requests" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['resident']} userRole={userRole}><RequestsPage requests={requests} onSubmit={handleRequestSubmit} onRequestUpdated={handleRequestUpdated} onLogout={handleLogout} language={language} setLanguage={switchLanguage} /></ProtectedRoute>} />
+        <Route path="/requests" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['resident']} userRole={userRole}><RequestsPage requests={requests} onSubmit={handleRequestSubmit} onRequestUpdated={handleRequestUpdated} onLogout={handleLogout} language={language} setLanguage={switchLanguage} userId={session?.user?.id} /></ProtectedRoute>} />
         <Route path="/profile" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['resident']} userRole={userRole}><ProfilePage profile={profile} onLogout={handleLogout} language={language} setLanguage={switchLanguage} /></ProtectedRoute>} />
         <Route path="/payments" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['resident']} userRole={userRole}><PaymentsPage payments={payments} onLogout={handleLogout} language={language} setLanguage={switchLanguage} /></ProtectedRoute>} />
         <Route path="/events" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['resident']} userRole={userRole}><EventsPage events={events} onLogout={handleLogout} language={language} setLanguage={switchLanguage} /></ProtectedRoute>} />
@@ -4201,9 +4270,3 @@ function App() {
 }
 
 export default App
-
-
-
-
-
-

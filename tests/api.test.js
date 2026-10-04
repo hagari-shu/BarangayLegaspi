@@ -72,6 +72,109 @@ test('registers a resident and waits for administrator approval', async () => {
   }
 })
 
+test('request lifecycle preserves copy preference, status history, and resident follow-ups', async () => {
+  const { server, baseUrl } = await createTestServer()
+
+  try {
+    const login = async (identifier, password) => {
+      const response = await fetch(`${baseUrl}/api/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ identifier, password }),
+      })
+      assert.equal(response.status, 200)
+      return (await response.json()).token
+    }
+    const residentToken = await login('maria.delacruz@email.com', 'ResidentPass123!')
+    const staffToken = await login('admin@barangay.gov.ph', 'AdminPass123')
+
+    const createResponse = await fetch(`${baseUrl}/api/requests`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${residentToken}`,
+      },
+      body: JSON.stringify({
+        type: 'Barangay Certificate',
+        purpose: 'School enrollment',
+        deliveryMethod: 'physical',
+        deliveryNote: 'Please advise when it is ready.',
+      }),
+    })
+    assert.equal(createResponse.status, 201)
+    const { request: createdRequest } = await createResponse.json()
+    assert.equal(createdRequest.deliveryMethod, 'physical')
+    assert.equal(createdRequest.deliveryNote, 'Please advise when it is ready.')
+    assert.equal(createdRequest.statusHistory[0].status, 'Pending')
+
+    const missingNoteResponse = await fetch(`${baseUrl}/api/requests/${createdRequest.id}/status`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${staffToken}`,
+      },
+      body: JSON.stringify({ status: 'Needs Information' }),
+    })
+    assert.equal(missingNoteResponse.status, 400)
+
+    const needsInformationResponse = await fetch(`${baseUrl}/api/requests/${createdRequest.id}/status`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${staffToken}`,
+      },
+      body: JSON.stringify({ status: 'Needs Information', note: 'Please provide your school name.' }),
+    })
+    assert.equal(needsInformationResponse.status, 200)
+    const { request: needsInformationRequest } = await needsInformationResponse.json()
+    assert.equal(needsInformationRequest.status, 'Needs Information')
+    assert.equal(needsInformationRequest.statusHistory.at(-1).note, 'Please provide your school name.')
+
+    const followUpResponse = await fetch(`${baseUrl}/api/requests/${createdRequest.id}/follow-ups`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${residentToken}`,
+      },
+      body: JSON.stringify({ message: 'The school is Legaspi Elementary School.' }),
+    })
+    assert.equal(followUpResponse.status, 201)
+    const { request: followedUpRequest } = await followUpResponse.json()
+    assert.equal(followedUpRequest.status, 'In Review')
+    assert.equal(followedUpRequest.followUps.at(-1).message, 'The school is Legaspi Elementary School.')
+    assert.equal(followedUpRequest.statusHistory.at(-2).kind, 'follow-up')
+    assert.equal(followedUpRequest.statusHistory.at(-1).status, 'In Review')
+
+    const completeResponse = await fetch(`${baseUrl}/api/requests/${createdRequest.id}/status`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${staffToken}`,
+      },
+      body: JSON.stringify({ status: 'Approved' }),
+    })
+    assert.equal(completeResponse.status, 200)
+    const { request: completedRequest } = await completeResponse.json()
+    assert.equal(completedRequest.status, 'Approved')
+    assert.equal(completedRequest.deliveryMethod, 'physical')
+    assert.equal(completedRequest.statusHistory.at(-1).status, 'Approved')
+
+    const invalidTransitionResponse = await fetch(`${baseUrl}/api/requests/${createdRequest.id}/status`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${staffToken}`,
+      },
+      body: JSON.stringify({ status: 'In Review' }),
+    })
+    assert.equal(invalidTransitionResponse.status, 409)
+  } finally {
+    await new Promise((resolve, reject) => {
+      server.close((error) => error ? reject(error) : resolve())
+    })
+  }
+})
+
 test('admin can update user role and status', async () => {
   const { server, baseUrl } = await createTestServer()
   const mobile = `091${Math.floor(10000000 + Math.random() * 90000000)}`

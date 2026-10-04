@@ -110,14 +110,19 @@ export async function listAllUsers() {
   return db.users
 }
 
-export async function updateRequestStatus(requestId, status) {
+export async function updateRequestStatus(requestId, status, historyEntry) {
   const db = await readDb()
   const request = db.requests.find((item) => item.id === requestId)
   if (!request) return null
   const previous = request.status
   request.status = status
   request.updatedAt = new Date().toISOString()
-  // record a simple history on the request itself
+  request.statusHistory = [
+    ...(Array.isArray(request.statusHistory) && request.statusHistory.length
+      ? request.statusHistory
+      : [{ kind: 'status', status: previous, createdAt: request.date, actorRole: 'system' }]),
+    historyEntry,
+  ]
   db.requests = db.requests.map((r) => (r.id === requestId ? request : r))
   await writeDb(db)
   return { ...request, previousStatus: previous }
@@ -129,6 +134,22 @@ export async function appendRequestFollowUp(requestId, followUp) {
   if (!request) return null
   request.followUps = [...(Array.isArray(request.followUps) ? request.followUps : []), followUp]
   request.updatedAt = followUp.createdAt
+  request.statusHistory = [
+    ...(Array.isArray(request.statusHistory) && request.statusHistory.length
+      ? request.statusHistory
+      : [{ kind: 'status', status: request.status, createdAt: request.date, actorRole: 'system' }]),
+    { ...followUp, kind: 'follow-up', actorRole: 'resident' },
+  ]
+  if (request.status === 'Needs Information') {
+    request.status = 'In Review'
+    request.statusHistory.push({
+      kind: 'status',
+      status: 'In Review',
+      note: 'Resident provided a follow-up.',
+      createdAt: followUp.createdAt,
+      actorRole: 'system',
+    })
+  }
   await writeDb(db)
   return request
 }

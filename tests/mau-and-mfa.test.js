@@ -2,11 +2,15 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import translations from '../src/translations.js'
 
-test('translation catalog includes Mau help and MFA labels', () => {
+test('translation catalog keeps the Mau name and includes MFA labels', () => {
   const en = translations.en
   const fil = translations.fil
 
-  assert.match(en.mauWelcome || '', /Mau/i)
+  for (const locale of [en, fil]) {
+    for (const label of ['mauWelcome', 'mauPlaceholder', 'mauAsk', 'mauOpenLabel', 'mauCloseLabel']) {
+      assert.match(locale[label] || '', /\bMau\b/)
+    }
+  }
   assert.ok(en.mauError)
   assert.ok(en.mauOptionsLabel)
   assert.ok(en.mauSuggestions)

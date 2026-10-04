@@ -776,8 +776,8 @@ export function createApp() {
         payments: [],
         summary: {
           totalRequests: requests.length,
-          pending: requests.filter((item) => item.status !== 'Approved').length,
-          activeCases: requests.filter((item) => item.status === 'Pending').length,
+          pending: requests.filter((item) => ['Pending', 'In Review', 'Needs Information'].includes(item.status)).length,
+          activeCases: requests.filter((item) => ['Pending', 'In Review', 'Needs Information'].includes(item.status)).length,
           nextEvent: residentEvents[0],
         },
         user: sanitizeUserRecord(user),
@@ -1035,7 +1035,7 @@ export function createApp() {
           totalStaff: sanitizedUsers.filter((user) => user.role === 'staff').length,
           totalAdmins: sanitizedUsers.filter((user) => user.role === 'admin').length,
           totalRequests: requests.length,
-          pendingRequests: requests.filter((item) => item.status === 'Pending').length,
+          pendingRequests: requests.filter((item) => ['Pending', 'In Review', 'Needs Information'].includes(item.status)).length,
         },
       })
     } catch {
@@ -1833,8 +1833,15 @@ export function createApp() {
       }
 
       const status = sanitizeText(req.body?.status)
-      if (!['Pending', 'Approved', 'Rejected', 'In Review'].includes(status)) {
+      if (!['Pending', 'In Review', 'Needs Information', 'Approved', 'Rejected'].includes(status)) {
         return res.status(400).json({ message: 'Invalid status value.' })
+      }
+      const note = sanitizeText(req.body?.note || '')
+      if (note.length > 1000) {
+        return res.status(400).json({ message: 'Status note must be 1000 characters or fewer.' })
+      }
+      if (status === 'Needs Information' && !note) {
+        return res.status(400).json({ message: 'Add a note explaining what information is needed.' })
       }
 
       const existingRequest = (await store.listAllRequests?.() || []).find((request) => request.id === req.params.id)
@@ -1843,12 +1850,13 @@ export function createApp() {
       }
 
       const allowedTransitions = {
-        Pending: ['In Review', 'Approved', 'Rejected'],
-        'In Review': ['Approved', 'Rejected'],
+        Pending: ['In Review', 'Needs Information', 'Approved', 'Rejected'],
+        'In Review': ['Needs Information', 'Approved', 'Rejected'],
+        'Needs Information': ['In Review', 'Approved', 'Rejected'],
         Approved: [],
         Rejected: [],
       }
-      if (!allowedTransitions[existingRequest.status].includes(status)) {
+      if (!(allowedTransitions[existingRequest.status] || []).includes(status)) {
         return res.status(409).json({ message: `Cannot change a ${existingRequest.status} request to ${status}.` })
       }
 
@@ -1859,7 +1867,16 @@ export function createApp() {
         }
       }
 
-      const updated = await store.updateRequestStatus?.(req.params.id, status)
+      const historyEntry = {
+        id: randomUUID(),
+        kind: 'status',
+        status,
+        note,
+        createdAt: new Date().toISOString(),
+        actorRole: actor.role,
+        actorName: `${actor.firstName || ''} ${actor.lastName || ''}`.trim(),
+      }
+      const updated = await store.updateRequestStatus?.(req.params.id, status, historyEntry)
       if (!updated) {
         return res.status(404).json({ message: 'Request not found.' })
       }
@@ -1939,6 +1956,15 @@ export function createApp() {
         followUps: [],
         status: 'Pending',
         date: new Date().toISOString(),
+        statusHistory: [{
+          id: randomUUID(),
+          kind: 'status',
+          status: 'Pending',
+          note: '',
+          createdAt: new Date().toISOString(),
+          actorRole: user.role,
+          actorName: `${user.firstName || ''} ${user.lastName || ''}`.trim(),
+        }],
       }
 
       await store.saveRequest(request)
@@ -2031,7 +2057,12 @@ export function createApp() {
         return res.status(404).json({ message: 'Request not found.' })
       }
 
-      const followUp = { id: randomUUID(), message, createdAt: new Date().toISOString() }
+      const followUp = {
+        id: randomUUID(),
+        message,
+        createdAt: new Date().toISOString(),
+        actorName: `${actor.user.firstName || ''} ${actor.user.lastName || ''}`.trim(),
+      }
       const updatedRequest = await store.appendRequestFollowUp?.(req.params.id, followUp)
       if (!updatedRequest) return res.status(404).json({ message: 'Request not found.' })
 
