@@ -30,5 +30,28 @@ test('mau assistant includes locale-aware labels and reply metadata', () => {
   assert.ok(en.mauWelcome.includes('Mau'))
   assert.ok(fil.mauWelcome.includes('Mau'))
   assert.equal(typeof en.mauHelper, 'string')
-  assert.ok(fil.mauHelper.toLowerCase().includes('barangay'))
+  assert.ok(fil.mauHelper.toLowerCase().includes('barangay legaspi'))
+})
+
+test('Facebook group and profile links have localized labels', () => {
+  for (const locale of [translations.en, translations.fil]) {
+    assert.ok(locale.socialMediaLinks)
+    assert.ok(locale.facebookGroup)
+    assert.ok(locale.facebookGroupHint)
+    assert.ok(locale.facebookProfile)
+    assert.ok(locale.facebookProfileHint)
+  }
+})
+
+test('captain photo controls and profile details have localized labels', () => {
+  for (const locale of [translations.en, translations.fil]) {
+    assert.ok(locale.captainIdentification)
+    assert.ok(locale.captainPhotoLabel)
+    assert.ok(locale.captainPortraitAlt)
+    assert.ok(locale.addCaptainPhoto)
+    assert.ok(locale.captainRole)
+    assert.ok(locale.captainLocation)
+    assert.ok(locale.captainPhotoInvalid)
+    assert.ok(locale.captainPhotoTooLarge)
+  }
 })

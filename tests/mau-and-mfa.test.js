@@ -7,7 +7,7 @@ test('translation catalog keeps the Mau name and includes MFA labels', () => {
   const fil = translations.fil
 
   for (const locale of [en, fil]) {
-    for (const label of ['mauWelcome', 'mauPlaceholder', 'mauAsk', 'mauOpenLabel', 'mauCloseLabel']) {
+    for (const label of ['mauWelcome', 'mauSignInHelp', 'mauPlaceholder', 'mauAsk', 'mauOpenLabel', 'mauCloseLabel']) {
       assert.match(locale[label] || '', /\bMau\b/)
     }
   }

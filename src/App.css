@@ -4233,36 +4233,47 @@ textarea:focus {
   z-index: 1000;
   display: inline-flex;
   align-items: center;
-  gap: 10px;
-  padding: 10px 16px 10px 10px;
+  gap: 12px;
+  min-height: 58px;
+  padding: 12px 20px 12px 12px;
   border-radius: 999px;
   background: linear-gradient(180deg, #0e5d4d 0%, #0b4d42 100%);
   color: #ffffff;
-  font-weight: 700;
-  box-shadow: 0 16px 32px rgba(11, 74, 62, 0.24);
+  font-size: 1rem;
+  font-weight: 800;
+  box-shadow: 0 18px 38px rgba(11, 74, 62, 0.3);
+  transition: transform 160ms ease, box-shadow 160ms ease;
+}
+
+.mau-launcher:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 22px 44px rgba(11, 74, 62, 0.34);
 }
 
 .mau-launcher-badge {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
+  width: 34px;
+  height: 34px;
   border-radius: 50%;
   background: rgba(255, 255, 255, 0.18);
-  font-size: 0.9rem;
+  font-size: 1rem;
 }
 
 .mau-assistant {
   position: fixed;
   right: 22px;
-  bottom: 88px;
+  bottom: 98px;
   z-index: 1000;
-  width: min(360px, calc(100vw - 24px));
+  display: flex;
+  width: min(460px, calc(100vw - 32px));
+  max-height: min(680px, calc(100dvh - 132px));
+  flex-direction: column;
   background: #ffffff;
   border: 1px solid rgba(15, 105, 90, 0.12);
-  border-radius: 18px;
-  box-shadow: 0 20px 40px rgba(11, 74, 62, 0.16);
+  border-radius: 22px;
+  box-shadow: 0 24px 64px rgba(11, 74, 62, 0.24);
   overflow: hidden;
 }
 
@@ -4270,7 +4281,8 @@ textarea:focus {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 14px 16px;
+  min-height: 76px;
+  padding: 16px 20px;
   background: linear-gradient(180deg, #0c5448 0%, #0b4d42 100%);
   color: #ffffff;
 }
@@ -4282,20 +4294,24 @@ textarea:focus {
 
 .mau-header small {
   opacity: 0.76;
+  margin-top: 3px;
+  font-size: 0.9rem;
 }
 
 .mau-avatar {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 34px;
-  height: 34px;
+  width: 44px;
+  height: 44px;
   border-radius: 50%;
   background: rgba(255, 255, 255, 0.18);
   font-weight: 800;
 }
 
 .mau-close {
+  min-height: 44px;
+  min-width: 44px;
   margin-left: auto;
   background: transparent;
   color: #ffffff;
@@ -4304,21 +4320,23 @@ textarea:focus {
 }
 
 .mau-body {
-  max-height: 280px;
+  min-height: 200px;
+  max-height: min(420px, 42vh);
+  flex: 1 1 auto;
   overflow-y: auto;
-  padding: 14px 12px 8px;
+  padding: 20px 18px 14px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 14px;
   background: #f7faf8;
 }
 
 .mau-message {
-  max-width: 82%;
-  padding: 10px 12px;
-  border-radius: 12px;
-  line-height: 1.5;
-  font-size: 0.93rem;
+  max-width: 88%;
+  padding: 13px 16px;
+  border-radius: 16px;
+  line-height: 1.55;
+  font-size: 1rem;
 }
 
 .mau-message.mau {
@@ -4339,12 +4357,12 @@ textarea:focus {
   display: flex;
   gap: 8px;
   align-items: center;
-  padding: 10px 12px 12px;
+  padding: 14px 16px 16px;
   background: #ffffff;
 }
 
 .mau-form input {
-  min-height: 42px;
+  min-height: 50px;
   flex: 1;
   padding: 0 14px;
 }
@@ -4361,15 +4379,15 @@ textarea:focus {
 }
 
 .mau-options {
-  padding: 8px 12px 10px;
+  padding: 12px 16px 14px;
   background: #f7faf8;
 }
 
 .mau-options > span {
   display: block;
-  margin-bottom: 7px;
+  margin-bottom: 10px;
   color: var(--text-500);
-  font-size: 0.72rem;
+  font-size: 0.8rem;
   font-weight: 700;
   text-transform: uppercase;
 }
@@ -4381,13 +4399,13 @@ textarea:focus {
 }
 
 .mau-option {
-  min-height: 32px;
-  padding: 6px 9px;
+  min-height: 42px;
+  padding: 9px 12px;
   border: 1px solid rgba(15, 105, 90, 0.2);
   border-radius: 16px;
   background: #ffffff;
   color: var(--green-900);
-  font-size: 0.75rem;
+  font-size: 0.88rem;
   text-align: left;
 }
 
@@ -4935,20 +4953,20 @@ textarea:focus {
 .login-screen {
   display: block;
   min-height: calc(100vh - 72px);
-  padding: 38px 28px 24px;
+  padding: 42px 40px 32px;
 }
 
 .landing-intro {
   position: relative;
   isolation: isolate;
   display: grid;
-  grid-template-columns: minmax(0, 1.35fr) minmax(240px, 0.75fr);
+  grid-template-columns: minmax(0, 1.35fr) minmax(280px, 0.75fr);
   align-items: center;
   gap: 42px;
-  width: min(100%, 1180px);
-  min-height: 420px;
+  width: min(100%, 1360px);
+  min-height: 500px;
   margin: 0 auto;
-  padding: clamp(36px, 5vw, 64px);
+  padding: clamp(44px, 5.2vw, 76px);
   overflow: hidden;
   border: 0;
   border-radius: 28px;
@@ -4975,7 +4993,7 @@ textarea:focus {
 }
 
 .landing-copy {
-  max-width: 640px;
+  max-width: 740px;
 }
 
 .landing-eyebrow {
@@ -4983,28 +5001,28 @@ textarea:focus {
 }
 
 .landing-copy h1 {
-  max-width: 600px;
+  max-width: 700px;
   color: #fff;
-  font-size: clamp(2.35rem, 5vw, 4rem);
+  font-size: clamp(3rem, 5.4vw, 5rem);
 }
 
 .landing-copy > p:last-of-type {
-  max-width: 540px;
+  max-width: 620px;
   color: rgba(255, 255, 255, 0.86);
-  font-size: clamp(1rem, 1.4vw, 1.12rem);
+  font-size: clamp(1.15rem, 1.55vw, 1.35rem);
 }
 
 .landing-cta {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 48px;
-  margin-top: 24px;
-  padding: 0 22px;
+  min-height: 58px;
+  margin-top: 28px;
+  padding: 0 28px;
   border-radius: 10px;
   background: #fff;
   color: var(--green-900);
-  font-size: 0.96rem;
+  font-size: 1.08rem;
   font-weight: 800;
   text-decoration: none;
   box-shadow: 0 8px 22px rgba(0, 0, 0, 0.16);
@@ -5023,7 +5041,7 @@ textarea:focus {
 
 .landing-benefits {
   gap: 0;
-  padding: 20px 22px;
+  padding: 24px 28px;
   border: 1px solid rgba(255, 255, 255, 0.24);
   border-radius: 18px;
   background: rgba(8, 34, 29, 0.45);
@@ -5032,9 +5050,9 @@ textarea:focus {
 
 .landing-benefits li {
   align-items: center;
-  padding: 12px 0;
+  padding: 16px 0;
   color: #fff;
-  font-size: 0.94rem;
+  font-size: 1.08rem;
 }
 
 .landing-benefits li + li {
@@ -5048,59 +5066,894 @@ textarea:focus {
 
 .portal-entry {
   display: grid;
-  grid-template-columns: minmax(0, 0.82fr) minmax(360px, 1fr);
-  align-items: center;
-  gap: clamp(28px, 6vw, 84px);
-  width: min(100%, 920px);
-  margin: 38px auto 0;
+  grid-template-columns: minmax(0, 1fr) minmax(460px, 1fr);
+  align-items: start;
+  gap: clamp(28px, 4vw, 56px);
+  width: min(100%, 1200px);
+  margin: 48px auto 0;
 }
 
 .portal-entry .brand-block {
-  width: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 12px;
+  width: 100%;
+  min-height: 0;
   margin: 0;
+  padding: 0;
 }
 
-.portal-entry .brand-stack {
-  gap: 22px;
-  text-align: left;
+.portal-entry .brand-block::before,
+.portal-entry .brand-block::after {
+  display: none;
+}
+
+.brand-logo-frame {
+  display: grid;
+  width: 100%;
+  height: clamp(160px, 20.8vw, 300px);
+  place-items: center;
+  padding: 16px;
+  overflow: hidden;
+  border: 1px solid rgba(244, 185, 66, 0.7);
+  border-radius: 24px;
+  background:
+    radial-gradient(circle at 50% 0%, rgba(244, 185, 66, 0.2), transparent 60%),
+    linear-gradient(145deg, #123f35 0%, #0a382f 100%);
+  box-shadow: 0 16px 32px rgba(19, 50, 42, 0.14);
+}
+
+.portal-entry .brand-logo-frame .seal-logo {
+  width: min(100%, 260px);
+  max-width: 100%;
+  max-height: 100%;
+  height: auto;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  object-fit: contain;
+  background: #fff;
+  box-shadow: 0 0 0 6px rgba(255, 255, 255, 0.14), 0 10px 24px rgba(0, 0, 0, 0.18);
 }
 
 .portal-entry .brand-copy {
+  display: flex;
+  flex-direction: column;
   align-items: flex-start;
+  justify-content: center;
+  min-width: 0;
+  min-height: 0;
+  padding: 22px 24px;
+  border: 1px solid rgba(21, 79, 62, 0.14);
+  border-radius: 24px;
+  background:
+    radial-gradient(circle at 100% 0%, rgba(244, 185, 66, 0.16), transparent 44%),
+    linear-gradient(145deg, #fffdf7 0%, #f1f7f2 100%);
+  box-shadow: 0 16px 32px rgba(19, 50, 42, 0.08);
+  color: #fff;
   text-align: left;
 }
 
+.brand-kicker {
+  color: var(--green-900);
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
 .portal-entry .brand-copy h1 {
-  font-size: clamp(1.7rem, 3vw, 2.2rem);
+  margin: 14px 0 0;
+  color: var(--green-900);
+  font-size: clamp(2rem, 3vw, 2.8rem);
+  font-weight: 800;
+  letter-spacing: -0.045em;
+  line-height: 1.02;
 }
 
 .portal-entry .brand-copy p {
+  margin: 10px 0 0;
   color: var(--text-700);
-  font-size: 1rem;
+  font-size: 1.18rem;
+  font-weight: 700;
 }
 
-.portal-entry .seal-logo {
-  width: 104px;
-  height: 104px;
+.brand-location {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(11, 74, 62, 0.16);
+  color: var(--green-800);
+  font-size: 0.95rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.captain-card {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 18px;
+  border: 1px solid rgba(21, 79, 62, 0.14);
+  border-radius: 20px;
+  background:
+    radial-gradient(circle at 100% 0%, rgba(244, 185, 66, 0.14), transparent 44%),
+    #fff;
+  box-shadow: 0 14px 30px rgba(19, 50, 42, 0.08);
+}
+
+.captain-photo-picker {
+  position: relative;
+  display: flex;
+  width: 112px;
+  height: 112px;
+  flex: 0 0 112px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  overflow: hidden;
+  border: 2px dashed #6d9b83;
+  border-radius: 18px;
+  background: #eff6f0;
+  color: var(--green-900);
+  cursor: pointer;
+  text-align: center;
+  transition: border-color 160ms ease, background-color 160ms ease;
+}
+
+.captain-photo-picker:hover {
+  border-color: #bd8e20;
+  background: #fff9e9;
+}
+
+.captain-photo-picker:focus-within {
+  outline: 3px solid #f4b942;
+  outline-offset: 3px;
+}
+
+.captain-photo-picker input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  clip-path: inset(50%);
+}
+
+.captain-photo-picker svg {
+  width: 34px;
+  height: 34px;
+  fill: #537d65;
+}
+
+.captain-photo-picker span {
+  padding: 0 6px;
+  font-size: 0.85rem;
+  font-weight: 800;
+  line-height: 1.25;
+}
+
+.captain-photo-picker img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.captain-details {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.captain-role {
+  color: var(--green-800);
+  font-size: 0.88rem;
+  font-weight: 800;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.captain-details strong {
+  color: var(--green-900);
+  font-size: clamp(1.3rem, 2.4vw, 1.75rem);
+  font-weight: 800;
+  line-height: 1.15;
+}
+
+.captain-location {
+  color: var(--text-700);
+  font-size: 1rem;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.captain-photo-error {
+  color: #9c3a32;
+  font-size: 0.9rem;
+  font-weight: 700;
+  line-height: 1.4;
 }
 
 .portal-entry .login-card {
   width: 100%;
   margin: 0;
-  border: 1px solid #e1e8e3;
-  border-radius: 18px;
-  background: #fff;
-  box-shadow: 0 14px 38px rgba(19, 50, 42, 0.08);
+  padding: 40px 42px 34px;
+  border: 1px solid #dce8e0;
+  border-radius: 24px;
+  background:
+    radial-gradient(ellipse at 100% 0%, rgba(223, 238, 233, 0.6), transparent 42%),
+    #fff;
+  box-shadow: 0 24px 60px rgba(19, 50, 42, 0.12);
 }
 
 .portal-entry .login-card h2 {
+  margin-bottom: 24px;
+  font-size: clamp(1.8rem, 2.5vw, 2.15rem);
+  line-height: 1.18;
   text-align: left;
+}
+
+.login-mau-help {
+  display: flex;
+  width: 100%;
+  min-height: 60px;
+  align-items: center;
+  gap: 11px;
+  margin: 0 0 28px;
+  padding: 12px 16px;
+  border: 1px solid #c8e2d5;
+  border-radius: 12px;
+  background: #f0f8f3;
+  color: var(--green-900);
+  font-size: 1.08rem;
+  font-weight: 800;
+  line-height: 1.4;
+  text-align: left;
+  transition: border-color 160ms ease, background-color 160ms ease, transform 160ms ease;
+}
+
+.login-mau-help:hover {
+  transform: translateY(-1px);
+  border-color: #87bba1;
+  background: #e6f3eb;
+}
+
+.login-mau-help:focus-visible,
+.mau-launcher:focus-visible,
+.mau-close:focus-visible,
+.mau-option:focus-visible,
+.mau-send:focus-visible {
+  outline: 3px solid #f4b942;
+  outline-offset: 3px;
+}
+
+.login-mau-help-icon {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 30px;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--green-900);
+  color: #fff;
+  font-size: 1rem;
+  font-weight: 800;
+}
+
+.portal-entry .login-card .field-group label,
+.portal-entry .login-card .label-row label {
+  margin-bottom: 10px;
+  font-size: 1.08rem;
+  font-weight: 700;
+}
+
+.portal-entry .login-card .text-button {
+  font-size: 1rem;
+  font-weight: 700;
+}
+
+.portal-entry .login-card input:not([type="checkbox"]) {
+  min-height: 64px;
+  padding-right: 16px;
+  border-color: #cbd6d7;
+  border-radius: 12px;
+  font-size: 1.12rem;
+}
+
+.portal-entry .login-card .password-wrap input {
+  padding-right: 54px;
+}
+
+.portal-entry .login-card .primary-btn {
+  min-height: 64px;
+  border-radius: 12px;
+  font-size: 1.18rem;
+  font-weight: 800;
+}
+
+.portal-entry .login-card .remember-row {
+  margin: 8px 0 24px;
+}
+
+.portal-entry .login-card .checkbox-label {
+  gap: 12px;
+  font-size: 1.05rem;
+}
+
+.portal-entry .login-card .checkbox-label input {
+  width: 21px;
+  height: 21px;
+}
+
+.portal-entry .login-card .login-helper,
+.portal-entry .login-card .approval-notice,
+.portal-entry .login-card .signup-line {
+  font-size: 1.02rem;
+  line-height: 1.55;
+}
+
+.portal-entry .login-card .login-helper {
+  padding: 17px 18px;
+}
+
+.portal-entry .login-card .login-helper p {
+  font-size: 1rem;
+}
+
+.portal-entry .login-card .helper-pill {
+  font-size: 0.8rem;
+}
+
+.portal-entry .login-card .approval-notice {
+  padding: 14px 16px;
+}
+
+.brand-social-links {
+  display: grid;
+  gap: 10px;
+}
+
+.brand-social-links .social-reference-link {
+  display: flex;
+  min-height: 68px;
+  align-items: center;
+  gap: 14px;
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px solid #d8e2ed;
+  border-radius: 14px;
+  background: #f5f8fc;
+  color: #153b70;
+  text-decoration: none;
+  transition: border-color 160ms ease, background-color 160ms ease, transform 160ms ease;
+}
+
+.brand-social-links .social-reference-link:hover {
+  transform: translateY(-1px);
+  border-color: #a9c1dd;
+  background: #edf4fb;
+}
+
+.brand-social-links .social-reference-link:focus-visible {
+  outline: 3px solid #1877f2;
+  outline-offset: 3px;
+}
+
+.brand-social-links .social-reference-icon {
+  display: grid;
+  width: 42px;
+  height: 42px;
+  flex: 0 0 42px;
+  place-items: center;
+  border-radius: 50%;
+  background: #1877f2;
+  color: #fff;
+  font-family: Arial, sans-serif;
+  font-size: 1.8rem;
+  font-weight: 800;
+}
+
+.brand-social-links .social-reference-link > span:nth-child(2) {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.brand-social-links .social-reference-link strong {
+  font-size: 1rem;
+  line-height: 1.35;
+}
+
+.brand-social-links .social-reference-link small {
+  color: #526b8c;
+  font-size: 0.88rem;
+  line-height: 1.35;
+}
+
+.brand-social-links .social-reference-external {
+  font-size: 1.3rem;
+  font-weight: 800;
+}
+
+.mau-close {
+  display: grid;
+  width: 44px;
+  height: 44px;
+  flex: 0 0 44px;
+  place-items: center;
+  border-radius: 10px;
+}
+
+.mau-form input {
+  min-width: 0;
+  min-height: 48px;
+}
+
+.mau-send {
+  min-height: 48px;
+}
+
+.mau-launcher {
+  border: 1px solid rgba(244, 185, 66, 0.68);
+  background: linear-gradient(135deg, #123f35 0%, #0b4d42 70%, #0a3c35 100%);
+}
+
+.mau-launcher-badge {
+  overflow: hidden;
+  padding: 2px;
+  border: 2px solid #f4b942;
+  background: #fff;
+}
+
+.mau-launcher-badge img,
+.mau-avatar img {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.mau-assistant {
+  border: 1px solid rgba(244, 185, 66, 0.58);
+  box-shadow: 0 26px 70px rgba(10, 48, 41, 0.3);
+}
+
+.mau-header {
+  position: relative;
+  background:
+    radial-gradient(circle at 86% -18%, rgba(244, 185, 66, 0.2), transparent 42%),
+    linear-gradient(125deg, #123f35 0%, #0b4d42 68%, #0a3c35 100%);
+}
+
+.mau-header::after {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 3px;
+  background: linear-gradient(90deg, #f4b942 0%, #f8d887 45%, rgba(248, 216, 135, 0) 100%);
+  content: '';
+}
+
+.mau-header strong {
+  font-size: 1.16rem;
+  letter-spacing: 0.01em;
+}
+
+.mau-header small {
+  color: #f4dfad;
+  opacity: 1;
+}
+
+.mau-avatar {
+  width: 52px;
+  height: 52px;
+  flex: 0 0 52px;
+  padding: 3px;
+  border: 2px solid #f4b942;
+  background: #fff;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+}
+
+.mau-body,
+.mau-options {
+  background: #f5f8f5;
+}
+
+.mau-message.mau {
+  border: 1px solid #d2e5d9;
+  border-bottom-left-radius: 5px;
+  background: #fff;
+  box-shadow: 0 3px 10px rgba(11, 74, 62, 0.06);
+}
+
+.mau-message.user {
+  border: 1px solid #0b4d42;
+  background: linear-gradient(140deg, #12614f, #0b4d42);
+}
+
+.mau-options {
+  border-top: 1px solid #e3ebe5;
+}
+
+.mau-options > span {
+  color: var(--green-900);
+  letter-spacing: 0.06em;
+}
+
+.mau-option {
+  border-color: #d7e4dc;
+  border-radius: 12px;
+  box-shadow: 0 2px 6px rgba(11, 74, 62, 0.05);
+}
+
+.mau-option:hover,
+.mau-option:focus-visible {
+  border-color: #e2b94f;
+  background: #fffaf0;
+}
+
+.mau-form {
+  border-top: 1px solid #e3ebe5;
+}
+
+.mau-form input:focus-visible {
+  border-color: #c69a31;
+  box-shadow: 0 0 0 4px rgba(244, 185, 66, 0.2);
+}
+
+.mau-send {
+  border: 1px solid rgba(244, 185, 66, 0.64);
+  background: linear-gradient(180deg, #0e5d4d 0%, #0b4d42 100%);
+  font-weight: 800;
+}
+
+.mau-launcher {
+  min-height: 68px;
+  gap: 14px;
+  padding: 14px 24px 14px 14px;
+  font-size: 1.12rem;
+}
+
+.mau-launcher-badge {
+  width: 40px;
+  height: 40px;
+  flex: 0 0 40px;
+}
+
+.mau-header {
+  min-height: 88px;
+  gap: 16px;
+  padding: 18px 22px;
+}
+
+.mau-header strong {
+  font-size: 1.3rem;
+}
+
+.mau-header small {
+  font-size: 1rem;
+}
+
+.mau-avatar {
+  width: 58px;
+  height: 58px;
+  flex-basis: 58px;
+}
+
+.mau-body {
+  max-height: min(460px, 44vh);
+  padding: 22px 20px 16px;
+  gap: 16px;
+}
+
+.mau-message {
+  max-width: 92%;
+  padding: 15px 18px;
+  font-size: 1.12rem;
+  line-height: 1.6;
+}
+
+.mau-options {
+  padding: 14px 18px 16px;
+}
+
+.mau-options > span {
+  font-size: 0.92rem;
+}
+
+.mau-option-row {
+  gap: 9px;
+}
+
+.mau-option {
+  min-height: 50px;
+  padding: 11px 15px;
+  border-radius: 14px;
+  font-size: 1rem;
+  line-height: 1.4;
+}
+
+.mau-form {
+  gap: 10px;
+  padding: 16px 18px 18px;
+}
+
+.mau-form input {
+  min-height: 58px;
+  border-radius: 12px;
+  font-size: 1.08rem;
+}
+
+.mau-send {
+  min-width: 100px;
+  min-height: 58px;
+  border-radius: 12px;
+  font-size: 1.05rem;
+}
+
+.mau-close {
+  min-width: 48px;
+  min-height: 48px;
+}
+
+.mau-error {
+  margin: 10px 16px;
+  padding: 12px 14px;
+  font-size: 1rem;
+}
+
+.portal-entry .login-card {
+  padding: 44px 46px 38px;
+}
+
+.portal-entry .login-card h2 {
+  margin-bottom: 28px;
+  font-size: clamp(2.1rem, 2.8vw, 2.45rem);
+}
+
+.login-mau-help {
+  min-height: 68px;
+  margin-bottom: 32px;
+  gap: 14px;
+  padding: 14px 18px;
+  font-size: 1.18rem;
+}
+
+.login-mau-help-icon {
+  width: 36px;
+  height: 36px;
+  flex-basis: 36px;
+  font-size: 1.15rem;
+}
+
+.portal-entry .login-card .field-group label,
+.portal-entry .login-card .label-row label {
+  margin-bottom: 12px;
+  font-size: 1.2rem;
+}
+
+.portal-entry .login-card .text-button {
+  min-height: 48px;
+  padding: 4px 0 4px 10px;
+  font-size: 1.08rem;
+}
+
+.portal-entry .login-card input:not([type="checkbox"]) {
+  min-height: 70px;
+  font-size: 1.2rem;
+}
+
+.portal-entry .login-card .primary-btn {
+  min-height: 70px;
+  font-size: 1.28rem;
+}
+
+.portal-entry .login-card .remember-row {
+  margin: 10px 0 28px;
+}
+
+.portal-entry .login-card .checkbox-label {
+  min-height: 48px;
+  gap: 14px;
+  font-size: 1.16rem;
+}
+
+.portal-entry .login-card .checkbox-label input {
+  width: 24px;
+  height: 24px;
+}
+
+.portal-entry .login-card .login-helper,
+.portal-entry .login-card .approval-notice,
+.portal-entry .login-card .signup-line {
+  font-size: 1.12rem;
+}
+
+.portal-entry .login-card .login-helper p {
+  font-size: 1.08rem;
+}
+
+.portal-entry .login-card .helper-pill {
+  font-size: 0.9rem;
+}
+
+.portal-entry .login-card .signup-line {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+}
+
+.portal-entry .login-card .signup-line a {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+}
+
+.brand-social-links .social-reference-link {
+  min-height: 82px;
+  gap: 16px;
+  padding: 15px 18px;
+}
+
+.brand-social-links .social-reference-icon {
+  width: 48px;
+  height: 48px;
+  flex-basis: 48px;
+}
+
+.brand-social-links .social-reference-link strong {
+  font-size: 1.08rem;
+}
+
+.brand-social-links .social-reference-link small {
+  font-size: 0.98rem;
+}
+
+@media (max-width: 640px) {
+  .mau-launcher {
+    min-height: 64px;
+    padding: 12px 20px 12px 12px;
+    font-size: 1.08rem;
+  }
+
+  .mau-assistant {
+    max-height: min(74dvh, calc(100dvh - 108px - env(safe-area-inset-bottom)));
+  }
+
+  .mau-body {
+    min-height: 132px;
+    max-height: min(38dvh, 340px);
+    padding: 16px 14px 12px;
+  }
+
+  .mau-message {
+    max-width: 96%;
+    padding: 13px 15px;
+    font-size: 1.05rem;
+  }
+
+  .mau-options {
+    padding: 11px 12px 12px;
+  }
+
+  .mau-option {
+    min-height: 48px;
+    padding: 10px 12px;
+    font-size: 0.96rem;
+  }
+
+  .mau-form {
+    padding: 10px 12px calc(12px + env(safe-area-inset-bottom));
+  }
+
+  .mau-form input {
+    min-width: 0;
+    min-height: 54px;
+    padding: 0 12px;
+    font-size: 1rem;
+  }
+
+  .mau-send {
+    min-width: 82px;
+    min-height: 54px;
+    padding: 0 12px;
+    font-size: 1rem;
+  }
+
+  .portal-entry .login-card {
+    padding: 30px 24px 24px;
+  }
+
+  .portal-entry .login-card h2 {
+    font-size: clamp(1.8rem, 7vw, 2.15rem);
+  }
+
+  .portal-entry .login-card .field-group label,
+  .portal-entry .login-card .label-row label {
+    font-size: 1.08rem;
+  }
+
+  .portal-entry .login-card input:not([type="checkbox"]) {
+    min-height: 64px;
+    font-size: 1.08rem;
+  }
+
+  .portal-entry .login-card .primary-btn {
+    min-height: 64px;
+    font-size: 1.16rem;
+  }
+
+  .portal-entry .login-card .checkbox-label {
+    font-size: 1.05rem;
+  }
+
+  .portal-entry .login-card .login-helper,
+  .portal-entry .login-card .approval-notice,
+  .portal-entry .login-card .signup-line {
+    font-size: 1rem;
+  }
+
+  .portal-entry .login-card .login-helper p {
+    font-size: 0.98rem;
+  }
 }
 
 .page-footer {
   margin-top: 30px;
   color: var(--text-500);
   text-align: center;
+}
+
+@media (min-width: 1100px) {
+  .landing-topbar {
+    padding-right: max(40px, calc((100vw - 1360px) / 2));
+    padding-left: max(40px, calc((100vw - 1360px) / 2));
+  }
+
+  .landing-topbar .topbar-inner {
+    width: min(100%, 1360px);
+  }
+}
+
+@media (min-width: 761px) and (max-width: 1099px) {
+  .landing-intro {
+    min-height: 450px;
+  }
+
+  .portal-entry {
+    grid-template-columns: minmax(0, 0.9fr) minmax(360px, 1fr);
+    width: min(100%, 980px);
+    gap: 32px;
+  }
+
+  .brand-logo-frame {
+    height: clamp(190px, 21vw, 230px);
+    padding: 14px;
+  }
+
+  .portal-entry .brand-logo-frame .seal-logo {
+    width: min(100%, 190px);
+  }
+
+  .portal-entry .brand-copy {
+    min-height: 0;
+    padding: 20px 18px;
+  }
+
+  .portal-entry .brand-copy h1 {
+    font-size: clamp(1.85rem, 3vw, 2.35rem);
+  }
+
+  .portal-entry .login-card {
+    padding: 30px 26px 24px;
+  }
 }
 
 @media (max-width: 760px) {
@@ -5135,17 +5988,70 @@ textarea:focus {
 
   .portal-entry {
     grid-template-columns: 1fr;
-    gap: 24px;
+    gap: 20px;
     width: min(100%, 520px);
     margin-top: 28px;
   }
 
-  .portal-entry .brand-stack {
-    justify-content: center;
+  .portal-entry .brand-block {
+    gap: 10px;
+    padding: 0;
   }
 
-  .portal-entry .brand-block {
-    justify-content: center;
+  .brand-logo-frame {
+    height: clamp(175px, 48vw, 200px);
+    padding: 10px;
+    border-radius: 20px;
+  }
+
+  .portal-entry .brand-logo-frame .seal-logo {
+    width: min(100%, 160px);
+  }
+
+  .portal-entry .brand-copy {
+    min-height: 0;
+    padding: 18px 14px;
+    border-radius: 20px;
+  }
+
+  .brand-kicker {
+    font-size: 0.66rem;
+    letter-spacing: 0.08em;
+  }
+
+  .portal-entry .brand-copy h1 {
+    margin-top: 10px;
+    font-size: clamp(1.55rem, 7.2vw, 2rem);
+  }
+
+  .portal-entry .brand-copy p {
+    margin-top: 8px;
+    font-size: 0.98rem;
+  }
+
+  .brand-location {
+    margin-top: 10px;
+    padding-top: 8px;
+    font-size: 0.78rem;
+  }
+
+  .captain-card {
+    gap: 12px;
+    padding: 14px;
+  }
+
+  .captain-photo-picker {
+    width: 96px;
+    height: 96px;
+    flex-basis: 96px;
+  }
+
+  .captain-details strong {
+    font-size: 1.3rem;
+  }
+
+  .captain-location {
+    font-size: 0.9rem;
   }
 }
 
@@ -5183,21 +6089,119 @@ textarea:focus {
     padding: 12px 16px;
   }
 
-  .portal-entry .brand-stack {
-    flex-direction: row;
-    gap: 14px;
+  .portal-entry .brand-block {
+    gap: 8px;
+    padding: 0;
   }
 
-  .portal-entry .seal-logo {
-    width: 76px;
-    height: 76px;
+  .brand-logo-frame {
+    height: clamp(160px, 48vw, 180px);
+    padding: 8px;
+    border-radius: 18px;
+  }
+
+  .portal-entry .brand-logo-frame .seal-logo {
+    width: min(100%, 144px);
+  }
+
+  .portal-entry .brand-copy {
+    min-height: 0;
+    padding: 14px 12px;
+    border-radius: 18px;
+  }
+
+  .brand-kicker {
+    font-size: 0.58rem;
+    letter-spacing: 0.06em;
   }
 
   .portal-entry .brand-copy h1 {
-    font-size: 1.45rem;
+    font-size: clamp(1.45rem, 7.4vw, 1.8rem);
+  }
+
+  .portal-entry .brand-copy p {
+    font-size: 0.9rem;
+  }
+
+  .brand-location {
+    font-size: 0.72rem;
+  }
+
+  .captain-card {
+    gap: 10px;
+    padding: 10px;
+    border-radius: 16px;
+  }
+
+  .captain-photo-picker {
+    width: 78px;
+    height: 78px;
+    flex-basis: 78px;
+    gap: 4px;
+    border-radius: 14px;
+  }
+
+  .captain-photo-picker svg {
+    width: 26px;
+    height: 26px;
+  }
+
+  .captain-photo-picker span {
+    font-size: 0.7rem;
+  }
+
+  .captain-role {
+    font-size: 0.7rem;
+    letter-spacing: 0.05em;
+  }
+
+  .captain-details strong {
+    font-size: clamp(1.05rem, 5vw, 1.3rem);
+  }
+
+  .captain-location {
+    font-size: 0.78rem;
   }
 
   .portal-entry .login-card {
-    padding: 20px 18px 16px;
+    padding: 24px 20px 20px;
+  }
+}
+
+@media (max-width: 640px) {
+  .mau-launcher {
+    right: 14px;
+    bottom: calc(14px + env(safe-area-inset-bottom));
+  }
+
+  .mau-assistant {
+    right: 10px;
+    bottom: calc(84px + env(safe-area-inset-bottom));
+    width: auto;
+    max-height: min(72dvh, calc(100dvh - 112px - env(safe-area-inset-bottom)));
+    border-radius: 20px;
+  }
+
+  .mau-assistant.with-bottom-nav {
+    bottom: calc(146px + env(safe-area-inset-bottom));
+    max-height: min(64dvh, calc(100dvh - 174px - env(safe-area-inset-bottom)));
+  }
+
+  .mau-body {
+    min-height: 140px;
+    max-height: min(38dvh, 340px);
+    padding: 16px 14px 12px;
+  }
+
+  .mau-options {
+    padding: 10px 12px 12px;
+  }
+
+  .mau-option {
+    min-height: 48px;
+  }
+
+  .mau-form {
+    padding: 10px 12px calc(12px + env(safe-area-inset-bottom));
   }
 }

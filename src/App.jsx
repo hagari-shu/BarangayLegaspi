@@ -1,4 +1,4 @@
-﻿import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import { Routes, Route, Navigate, Link, useNavigate, useLocation } from 'react-router-dom'
 import barangaySeal from './assets/barangay-seal-new.png'
@@ -357,6 +357,32 @@ function LoginPage({ onLogin, language, setLanguage }) {
   const [resetForm, setResetForm] = useState({ identifier: '', token: '', newPassword: '' })
   const [resetRequested, setResetRequested] = useState(false)
   const [resetting, setResetting] = useState(false)
+  const [captainPhoto, setCaptainPhoto] = useState('')
+  const [captainPhotoError, setCaptainPhotoError] = useState('')
+
+  useEffect(() => {
+    if (!captainPhoto) return undefined
+    return () => URL.revokeObjectURL(captainPhoto)
+  }, [captainPhoto])
+
+  const handleCaptainPhotoChange = (event) => {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (!file) return
+
+    if (!file.type.startsWith('image/')) {
+      setCaptainPhotoError(t.captainPhotoInvalid)
+      return
+    }
+
+    if (file.size > 5 * 1024 * 1024) {
+      setCaptainPhotoError(t.captainPhotoTooLarge)
+      return
+    }
+
+    setCaptainPhotoError('')
+    setCaptainPhoto(URL.createObjectURL(file))
+  }
 
   const handleChange = (event) => {
     const { name, value, type, checked } = event.target
@@ -511,19 +537,90 @@ function LoginPage({ onLogin, language, setLanguage }) {
         </section>
         <div className="portal-entry">
           <div className="brand-block" aria-label="Barangay brand">
-            <div className="brand-stack">
+            <div className="brand-logo-frame">
               <img className="seal-logo" src={barangaySeal} alt="Barangay Legaspi official seal" />
-              <div className="brand-copy">
-                <h1>{t.barangayLegaspi}</h1>
-                <p>{t.residentPortal}</p>
+            </div>
+            <div className="brand-copy">
+              <span className="brand-kicker">{t.officialResident}</span>
+              <h1>{t.barangayLegaspi}</h1>
+              <p>{t.residentPortal}</p>
+              <span className="brand-location">Tayug, Pangasinan</span>
+            </div>
+            <section className="captain-card" aria-label={t.captainIdentification}>
+              <label className="captain-photo-picker">
+                <input
+                  type="file"
+                  accept="image/*"
+                  aria-label={t.captainPhotoLabel}
+                  onChange={handleCaptainPhotoChange}
+                />
+                {captainPhoto ? (
+                  <img
+                    src={captainPhoto}
+                    alt={t.captainPortraitAlt}
+                    onError={() => {
+                      setCaptainPhotoError(t.captainPhotoInvalid)
+                      setCaptainPhoto('')
+                    }}
+                  />
+                ) : (
+                  <>
+                    <svg viewBox="0 0 48 48" aria-hidden="true">
+                      <path d="M24 24a9 9 0 1 0 0-18 9 9 0 0 0 0 18Zm0 4c-8.3 0-15 5-15 11v3h30v-3c0-6-6.7-11-15-11Z" />
+                    </svg>
+                    <span>{t.addCaptainPhoto}</span>
+                  </>
+                )}
+              </label>
+              <div className="captain-details">
+                <span className="captain-role">{t.captainRole}</span>
+                <strong>Arnold C. Cabaong</strong>
+                <span className="captain-location">{t.captainLocation}</span>
+                {captainPhotoError && <span className="captain-photo-error" role="alert">{captainPhotoError}</span>}
               </div>
+            </section>
+            <div className="brand-social-links" aria-label={t.socialMediaLinks}>
+              <a
+                className="social-reference-link"
+                href="https://www.facebook.com/groups/1063394307576620"
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                <span className="social-reference-icon" aria-hidden="true">f</span>
+                <span>
+                  <strong>{t.facebookGroup}</strong>
+                  <small>{t.facebookGroupHint}</small>
+                </span>
+                <span className="social-reference-external" aria-hidden="true">↗</span>
+              </a>
+              <a
+                className="social-reference-link"
+                href="https://www.facebook.com/profile.php?id=61553834954054"
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                <span className="social-reference-icon" aria-hidden="true">f</span>
+                <span>
+                  <strong>{t.facebookProfile}</strong>
+                  <small>{t.facebookProfileHint}</small>
+                </span>
+                <span className="social-reference-external" aria-hidden="true">↗</span>
+              </a>
             </div>
           </div>
 
         <section className="login-card" id="login-card" aria-label="Login form">
           <h2>{t.signIn}</h2>
+        <button
+          type="button"
+          className="login-mau-help"
+          onClick={(event) => window.dispatchEvent(new CustomEvent('brgy-open-mau', { detail: { trigger: event.currentTarget } }))}
+        >
+          <span className="login-mau-help-icon" aria-hidden="true">?</span>
+          <span>{t.mauSignInHelp}</span>
+        </button>
 
-          {!mfaState.required ? (
+        {!mfaState.required ? (
             <form onSubmit={handleSubmit} noValidate>
               <div className="field-group">
                 <label htmlFor="identifier">{t.mobileOrEmail}</label>
@@ -3745,6 +3842,8 @@ function MauAssistant({ language, userRole, mobileDashboard }) {
   const hasBottomNavigation = ['staff', 'admin'].includes(userRole)
   const [open, setOpen] = useState(false)
   const [question, setQuestion] = useState('')
+  const triggerRef = useRef(null)
+  const questionInputRef = useRef(null)
   const [messages, setMessages] = useState([
     {
       id: 'welcome',
@@ -3754,10 +3853,27 @@ function MauAssistant({ language, userRole, mobileDashboard }) {
   ])
 
   useEffect(() => {
-    const openAssistant = () => setOpen(true)
+    const openAssistant = (event) => {
+      triggerRef.current = event.detail?.trigger || document.activeElement
+      setOpen(true)
+    }
+    const closeOnEscape = (event) => {
+      if (event.key === 'Escape' && open) setOpen(false)
+    }
+
     window.addEventListener('brgy-open-mau', openAssistant)
-    return () => window.removeEventListener('brgy-open-mau', openAssistant)
-  }, [])
+    document.addEventListener('keydown', closeOnEscape)
+    if (open) {
+      questionInputRef.current?.focus()
+    } else {
+      triggerRef.current?.focus()
+    }
+
+    return () => {
+      window.removeEventListener('brgy-open-mau', openAssistant)
+      document.removeEventListener('keydown', closeOnEscape)
+    }
+  }, [open])
 
   const cannedReplies = language === 'fil'
     ? [
@@ -3870,25 +3986,39 @@ function MauAssistant({ language, userRole, mobileDashboard }) {
       <button
         type="button"
         className={`mau-launcher ${hasBottomNavigation ? 'with-bottom-nav' : ''} ${mobileDashboard ? 'resident-mobile-dashboard' : ''}`}
-        onClick={() => setOpen((current) => !current)}
+        onClick={(event) => {
+          if (!open) triggerRef.current = event.currentTarget
+          setOpen((current) => !current)
+        }}
         aria-label={t.mauOpenLabel}
+        aria-expanded={open}
+        aria-controls="mau-assistant-dialog"
       >
-        <span className="mau-launcher-badge">M</span>
+        <span className="mau-launcher-badge" aria-hidden="true">
+          <img src={barangaySeal} alt="" />
+        </span>
         <span>Mau</span>
       </button>
 
       {open && (
-        <div className={`mau-assistant ${hasBottomNavigation ? 'with-bottom-nav' : ''}`} role="dialog" aria-label={t.mauHelper}>
+        <div
+          id="mau-assistant-dialog"
+          className={`mau-assistant ${hasBottomNavigation ? 'with-bottom-nav' : ''}`}
+          role="dialog"
+          aria-labelledby="mau-dialog-title"
+        >
           <div className="mau-header">
-            <div className="mau-avatar">M</div>
+            <div className="mau-avatar" aria-hidden="true">
+              <img src={barangaySeal} alt="" />
+            </div>
             <div>
-              <strong>Mau</strong>
+              <strong id="mau-dialog-title">Mau</strong>
               <small>{t.mauHelper}</small>
             </div>
             <button type="button" className="mau-close" onClick={() => setOpen(false)} aria-label={t.mauCloseLabel}>×</button>
           </div>
 
-          <div className="mau-body">
+          <div className="mau-body" role="log" aria-label={t.mauHelper} aria-live="polite" aria-relevant="additions">
             {messages.map((message) => (
               <div key={message.id} className={`mau-message ${message.sender === 'user' ? 'user' : 'mau'}`}>
                 {message.id === 'welcome' ? t.mauWelcome : message.text}
@@ -3911,6 +4041,7 @@ function MauAssistant({ language, userRole, mobileDashboard }) {
 
           <form className="mau-form" onSubmit={handleSubmit}>
             <input
+              ref={questionInputRef}
               type="text"
               value={question}
               onChange={(event) => setQuestion(event.target.value)}
