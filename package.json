@@ -4,7 +4,7 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "concurrently \"npm run dev:client\" \"npm run dev:api\"",
+    "dev": "concurrently \"npm run dev:client\" \"npm run dev:legacy-server\"",
     "dev:client": "vite",
     "dev:api": "cd laravel-api && php artisan serve --host=0.0.0.0 --port=8000",
     "dev:legacy-server": "node --watch server.js",

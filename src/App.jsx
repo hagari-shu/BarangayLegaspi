@@ -1,4 +1,5 @@
 ﻿import { useEffect, useState } from 'react'
+import { flushSync } from 'react-dom'
 import { Routes, Route, Navigate, Link, useNavigate, useLocation } from 'react-router-dom'
 import barangaySeal from './assets/barangay-seal.svg'
 import translations from './translations'
@@ -6,7 +7,7 @@ import './App.css'
 
 const sessionKey = 'brgy-legaspi-session'
 const requestReminderStorageKey = 'brgy-legaspi-request-reminders'
-const API_BASE = (import.meta.env.VITE_API_BASE || (import.meta.env.DEV ? 'http://localhost:8000/api' : '')).replace(/\/$/, '')
+const API_BASE = (import.meta.env.VITE_API_BASE || (import.meta.env.DEV ? 'http://localhost:3001/api' : '')).replace(/\/$/, '')
 
 if (!API_BASE) {
   throw new Error('VITE_API_BASE must be configured to point to the deployed API base URL, such as https://api.example.com/api.')
@@ -37,9 +38,9 @@ const isValidPassword = (value) => {
 const passwordRequirements = 'at least 8 characters, one uppercase letter, one lowercase letter, one number, and one special character'
 
 const LanguageToggle = ({ language, setLanguage }) => (
-  <div className="language-toggle" aria-label="Language selection">
-    <button type="button" className={language === 'en' ? 'active' : ''} onClick={() => setLanguage('en')}>EN</button>
-    <button type="button" className={language === 'fil' ? 'active' : ''} onClick={() => setLanguage('fil')}>FIL</button>
+  <div className="language-toggle" role="group" aria-label="Language selection">
+    <button type="button" className={language === 'en' ? 'active' : ''} aria-pressed={language === 'en'} onClick={() => setLanguage('en')}>EN</button>
+    <button type="button" className={language === 'fil' ? 'active' : ''} aria-pressed={language === 'fil'} onClick={() => setLanguage('fil')}>FIL</button>
   </div>
 )
 
@@ -1731,17 +1732,17 @@ function PaymentsPage({ payments, onLogout, language, setLanguage }) {
               </thead>
               <tbody>
                 {(payments || []).length > 0 ? (payments || []).map((payment) => (
-                    <tr key={payment.id}>
-                      <td>{payment.id}</td>
-                      <td>{payment.label}</td>
-                      <td><span className={'status-badge ' + String(payment.status).toLowerCase()}>{payment.status}</span></td>
-                      <td>{payment.amount}</td>
-                    </tr>
-                  )) : (
-                    <tr>
-                      <td colSpan={4} className="empty-state">{t.noPaymentsMatchSearch}</td>
-                    </tr>
-                  )}
+                  <tr key={payment.id}>
+                    <td>{payment.id}</td>
+                    <td>{payment.label}</td>
+                    <td><span className={'status-badge ' + String(payment.status).toLowerCase()}>{payment.status}</span></td>
+                    <td>{payment.amount}</td>
+                  </tr>
+                )) : (
+                  <tr>
+                    <td colSpan={4} className="empty-state">{t.noPaymentsMatchSearch}</td>
+                  </tr>
+                )}
               </tbody>
             </table>
           </div>
@@ -3870,6 +3871,18 @@ function App() {
       return 'en'
     }
   })
+  const switchLanguage = (nextLanguage) => {
+    if (nextLanguage === language) return
+
+    if (document.startViewTransition) {
+      document.startViewTransition(() => {
+        flushSync(() => setLanguage(nextLanguage))
+      })
+      return
+    }
+
+    setLanguage(nextLanguage)
+  }
   const [profile, setProfile] = useState(initialProfile)
   const [requests, setRequests] = useState(initialRequests)
   const [users, setUsers] = useState([])
@@ -4216,16 +4229,16 @@ function App() {
         </div>
       )}
       <Routes>
-        <Route path="/" element={isAuthenticated ? <Navigate to={userRole === 'staff' ? '/staff' : userRole === 'admin' ? '/admin' : '/dashboard'} replace /> : <LoginPage onLogin={handleLogin} language={language} setLanguage={setLanguage} />} />
-        <Route path="/register" element={isAuthenticated ? <Navigate to={userRole === 'staff' ? '/staff' : userRole === 'admin' ? '/admin' : '/dashboard'} replace /> : <RegisterPage language={language} setLanguage={setLanguage} />} />
-        <Route path="/dashboard" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['resident']} userRole={userRole}><DashboardPage profile={profile} requests={requests} services={services} announcements={announcementsData} events={events} payments={payments} onLogout={handleLogout} onProfileUpdated={setProfile} language={language} setLanguage={setLanguage} /></ProtectedRoute>} />
-        <Route path="/requests" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['resident']} userRole={userRole}><RequestsPage requests={requests} onSubmit={handleRequestSubmit} onRequestUpdated={handleRequestUpdated} onLogout={handleLogout} language={language} setLanguage={setLanguage} /></ProtectedRoute>} />
-        <Route path="/profile" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['resident']} userRole={userRole}><ProfilePage profile={profile} onLogout={handleLogout} language={language} setLanguage={setLanguage} /></ProtectedRoute>} />
-        <Route path="/payments" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['resident']} userRole={userRole}><PaymentsPage payments={payments} onLogout={handleLogout} language={language} setLanguage={setLanguage} /></ProtectedRoute>} />
-        <Route path="/events" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['resident']} userRole={userRole}><EventsPage events={events} onLogout={handleLogout} language={language} setLanguage={setLanguage} /></ProtectedRoute>} />
-        <Route path="/settings" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['resident', 'staff', 'admin']} userRole={userRole}><SettingsPage profile={profile} onLogout={handleLogout} language={language} setLanguage={setLanguage} /></ProtectedRoute>} />
-        <Route path="/staff" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['staff', 'admin']} userRole={userRole}><StaffPage requests={requests} staffMembers={staffMembers} announcements={announcementsData} currentUser={session?.user} userRole={userRole} onProcessRequest={handleRequestStatus} onLogout={handleLogout} onAddStaffMember={handleAddStaffMember} onAddAnnouncement={handleAddAnnouncement} onDeleteAnnouncement={handleDeleteAnnouncement} onDeleteStaffMember={handleDeleteStaffMember} language={language} setLanguage={setLanguage} /></ProtectedRoute>} />
-        <Route path="/admin" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['admin']} userRole={userRole}><AdminPage users={users} residents={residents} requests={requests} reports={reports} currentUser={session?.user} onLogout={handleLogout} language={language} setLanguage={setLanguage} /></ProtectedRoute>} />
+        <Route path="/" element={isAuthenticated ? <Navigate to={userRole === 'staff' ? '/staff' : userRole === 'admin' ? '/admin' : '/dashboard'} replace /> : <LoginPage onLogin={handleLogin} language={language} setLanguage={switchLanguage} />} />
+        <Route path="/register" element={isAuthenticated ? <Navigate to={userRole === 'staff' ? '/staff' : userRole === 'admin' ? '/admin' : '/dashboard'} replace /> : <RegisterPage language={language} setLanguage={switchLanguage} />} />
+        <Route path="/dashboard" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['resident']} userRole={userRole}><DashboardPage profile={profile} requests={requests} services={services} announcements={announcementsData} events={events} payments={payments} onLogout={handleLogout} onProfileUpdated={setProfile} language={language} setLanguage={switchLanguage} /></ProtectedRoute>} />
+        <Route path="/requests" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['resident']} userRole={userRole}><RequestsPage requests={requests} onSubmit={handleRequestSubmit} onRequestUpdated={handleRequestUpdated} onLogout={handleLogout} language={language} setLanguage={switchLanguage} /></ProtectedRoute>} />
+        <Route path="/profile" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['resident']} userRole={userRole}><ProfilePage profile={profile} onLogout={handleLogout} language={language} setLanguage={switchLanguage} /></ProtectedRoute>} />
+        <Route path="/payments" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['resident']} userRole={userRole}><PaymentsPage payments={payments} onLogout={handleLogout} language={language} setLanguage={switchLanguage} /></ProtectedRoute>} />
+        <Route path="/events" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['resident']} userRole={userRole}><EventsPage events={events} onLogout={handleLogout} language={language} setLanguage={switchLanguage} /></ProtectedRoute>} />
+        <Route path="/settings" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['resident', 'staff', 'admin']} userRole={userRole}><SettingsPage profile={profile} onLogout={handleLogout} language={language} setLanguage={switchLanguage} /></ProtectedRoute>} />
+        <Route path="/staff" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['staff', 'admin']} userRole={userRole}><StaffPage requests={requests} staffMembers={staffMembers} announcements={announcementsData} currentUser={session?.user} userRole={userRole} onProcessRequest={handleRequestStatus} onLogout={handleLogout} onAddStaffMember={handleAddStaffMember} onAddAnnouncement={handleAddAnnouncement} onDeleteAnnouncement={handleDeleteAnnouncement} onDeleteStaffMember={handleDeleteStaffMember} language={language} setLanguage={switchLanguage} /></ProtectedRoute>} />
+        <Route path="/admin" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['admin']} userRole={userRole}><AdminPage users={users} residents={residents} requests={requests} reports={reports} currentUser={session?.user} onLogout={handleLogout} language={language} setLanguage={switchLanguage} /></ProtectedRoute>} />
         <Route path="*" element={<Navigate to={userRole === 'staff' ? '/staff' : userRole === 'admin' ? '/admin' : '/dashboard'} replace />} />
       </Routes>
       <MauAssistant language={language} userRole={userRole} mobileDashboard={userRole === 'resident' && location.pathname === '/dashboard'} />

@@ -74,9 +74,14 @@ export const decryptTotpSecret = (value, { allowPrevious = true } = {}) => {
   if (version === 'v2' && !MFA_ENCRYPTION_KEY) {
     throw new Error('MFA_ENCRYPTION_KEY is required to decrypt this secret.')
   }
+
   const iv = Buffer.from(ivValue, 'base64url')
   const tag = Buffer.from(tagValue, 'base64url')
   const ciphertext = Buffer.from(ciphertextValue, 'base64url')
+  if (iv.length !== 12 || tag.length !== 16 || ciphertext.length === 0) {
+    throw new Error('Invalid encrypted MFA secret.')
+  }
+
   const keys = version === 'v1'
     ? [legacyEncryptionKey]
     : [encryptionKey, ...(allowPrevious ? previousEncryptionKeys : [])]

@@ -4089,11 +4089,28 @@ textarea:focus {
   padding: 6px 10px;
   border-radius: 999px;
   cursor: pointer;
+  transition: background-color 180ms ease, color 180ms ease, transform 180ms ease;
 }
 
 .language-toggle button.active {
   background: var(--green-900);
   color: #ffffff;
+}
+
+.language-toggle button:active {
+  transform: scale(0.96);
+}
+
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 180ms;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-old(root),
+  ::view-transition-new(root) {
+    animation-duration: 1ms;
+  }
 }
 
 .mau-launcher {

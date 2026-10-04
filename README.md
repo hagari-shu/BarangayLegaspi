@@ -39,20 +39,6 @@ Vercel continues to serve the frontend and SPA routes through `vercel.json`.
 
 ## Local development
 
-Install Node.js, PHP 8.2 or newer with the `pdo_sqlite` extension, and Composer. From the repository root:
+Install Node.js dependencies from the repository root with `npm install`, then run `npm run dev`. The Vite frontend runs on port 5173 and the local Express API runs on port 3001, using the local JSON store unless `DATABASE_URL` is configured. Do not point local development or tests at the production database.
 
-```sh
-cd laravel-api
-composer install
-copy .env.example .env
-php artisan key:generate
-php -r "file_exists('database/database.sqlite') || touch('database/database.sqlite');"
-php artisan migrate
-cd ..
-npm install
-npm run dev
-```
-
-The Vite frontend runs on port 5173 and Laravel serves the API on port 8000. Configure PostgreSQL instead of SQLite by setting `DATABASE_URL` and removing the `DB_CONNECTION=sqlite` override from `laravel-api/.env`.
-
-The former Express implementation remains in `server/` as a temporary rollback/reference only. It can be started explicitly with `npm run dev:legacy-server`; it is not the configured API deployment.
+To run the Laravel API locally instead, install PHP 8.2 or newer with the `pdo_sqlite` extension and Composer. In `laravel-api`, install Composer dependencies, copy `.env.example` to `.env`, run `php artisan key:generate`, create `database/database.sqlite`, then run `php artisan migrate`. Start it with `npm run dev:api` from the repository root and set the Vite API base to `http://localhost:8000/api`. Configure PostgreSQL instead of SQLite only with a non-production development database.
