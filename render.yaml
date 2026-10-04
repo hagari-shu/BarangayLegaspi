@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: brgy-legaspi-api
+    name: brgy-legaspi-laravel
     runtime: docker
     plan: free
     region: singapore
