@@ -405,7 +405,17 @@ export function createApp() {
       const isApprovedUser = ['admin', 'staff'].includes(normalizedRole) || ['Administrator', 'On Duty', 'Active Resident'].includes(normalizedStatus)
 
       if (normalizedRole === 'resident' && !isApprovedUser) {
-        return res.status(403).json({ message: 'Your account is awaiting administrator approval before you can access the web app.' })
+        if (normalizedStatus.toLowerCase() === 'pending verification') {
+          await writeAudit({ role: 'anonymous' }, 'auth.login.rejected_unapproved_resident', 'user', user.id, {
+            status: normalizedStatus,
+            residentName: `${user.firstName || user.first_name || ''} ${user.lastName || user.last_name || ''}`.trim(),
+          })
+          return res.status(403).json({
+            code: 'resident_not_approved',
+            message: 'Your account is awaiting administrator approval before you can access the web app.',
+          })
+        }
+        return res.status(403).json({ message: 'Your account is not active. Please contact the barangay office for assistance.' })
       }
 
       const safeUser = sanitizeUserRecord({ ...user, role: normalizedRole })

@@ -65,6 +65,54 @@ test('registers a resident and waits for administrator approval', async () => {
     assert.equal(loginResponse.status, 403)
     const loginData = await loginResponse.json()
     assert.match(loginData.message, /administrator approval/i)
+    assert.equal(loginData.code, 'resident_not_approved')
+
+    const adminLoginResponse = await fetch(`${baseUrl}/api/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        identifier: 'admin@barangay.gov.ph',
+        password: 'AdminPass123',
+      }),
+    })
+    assert.equal(adminLoginResponse.status, 200)
+    const adminToken = (await adminLoginResponse.json()).token
+    const auditResponse = await fetch(`${baseUrl}/api/admin/audit-logs`, {
+      headers: { Authorization: `Bearer ${adminToken}` },
+    })
+    assert.equal(auditResponse.status, 200)
+    const auditData = await auditResponse.json()
+    const blockedLogin = auditData.logs.find((entry) => entry.action === 'auth.login.rejected_unapproved_resident')
+    assert.ok(blockedLogin)
+    assert.equal(blockedLogin.targetId, registerData.user.id)
+    assert.equal(blockedLogin.actorRole, 'anonymous')
+    assert.equal(blockedLogin.metadata.status, 'Pending Verification')
+    assert.equal(blockedLogin.metadata.residentName, 'Maria Dela Cruz')
+    assert.equal(JSON.stringify(blockedLogin).includes('SecurePass123!'), false)
+
+    const invalidPasswordResponse = await fetch(`${baseUrl}/api/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        identifier: mobile,
+        password: 'WrongPassword123!',
+      }),
+    })
+    assert.equal(invalidPasswordResponse.status, 401)
+    const auditAfterInvalidPassword = await jsonDb.listAuditLogs()
+    assert.equal(auditAfterInvalidPassword.filter((entry) => entry.action === 'auth.login.rejected_unapproved_resident').length, 1)
+
+    const unknownLoginResponse = await fetch(`${baseUrl}/api/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        identifier: 'unknown.resident@example.com',
+        password: 'SecurePass123!',
+      }),
+    })
+    assert.equal(unknownLoginResponse.status, 401)
+    const auditAfterUnknownLogin = await jsonDb.listAuditLogs()
+    assert.equal(auditAfterUnknownLogin.filter((entry) => entry.action === 'auth.login.rejected_unapproved_resident').length, 1)
   } finally {
     await new Promise((resolve, reject) => {
       server.close((error) => (error ? reject(error) : resolve()))

@@ -3,6 +3,7 @@ import { flushSync } from 'react-dom'
 import { Routes, Route, Navigate, Link, useNavigate, useLocation } from 'react-router-dom'
 import barangaySeal from './assets/barangay-seal-new.png'
 import legaspiHero from './assets/legaspi-community.png'
+import { getMauQuickOptions, getMauReply, getMauResidentAnswer, getMauWelcome } from './mau-responses'
 import translations from './translations'
 import './App.css'
 
@@ -350,6 +351,7 @@ function LoginPage({ onLogin, language, setLanguage }) {
     password: '',
     rememberMe: false,
   })
+  const [loginError, setLoginError] = useState('')
   const [mfaState, setMfaState] = useState({ required: false, challengeToken: '', identifier: '' })
   const [mfaCode, setMfaCode] = useState('')
   const [showPassword, setShowPassword] = useState(false)
@@ -386,6 +388,7 @@ function LoginPage({ onLogin, language, setLanguage }) {
 
   const handleChange = (event) => {
     const { name, value, type, checked } = event.target
+    setLoginError('')
     setForm((prev) => ({
       ...prev,
       [name]: type === 'checkbox' ? checked : value,
@@ -399,12 +402,12 @@ function LoginPage({ onLogin, language, setLanguage }) {
     const cleanedPassword = sanitizeText(form.password)
 
     if (!cleanedIdentifier || !cleanedPassword) {
-      alert('Please enter both your mobile number or email and your password.')
+      alert(t.loginRequired)
       return
     }
 
     if (!isValidIdentifier(cleanedIdentifier) || cleanedPassword.length < 8) {
-      alert('Incorrect credentials format. Please use a valid mobile number or email and a password with at least 8 characters.')
+      alert(t.loginFormatInvalid)
       return
     }
 
@@ -415,7 +418,13 @@ function LoginPage({ onLogin, language, setLanguage }) {
         body: JSON.stringify({ identifier: cleanedIdentifier, password: cleanedPassword }),
       })
       const data = await response.json().catch(() => ({}))
-      if (!response.ok) throw new Error(data.message || 'Login failed.')
+      if (!response.ok) {
+        if (data.code === 'resident_not_approved') {
+          setLoginError(t.loginAwaitingApproval)
+          return
+        }
+        throw new Error(data.message || 'Login failed.')
+      }
 
       if (data.requiresMfa) {
         setMfaState({ required: true, challengeToken: data.challengeToken, identifier: cleanedIdentifier })
@@ -427,7 +436,7 @@ function LoginPage({ onLogin, language, setLanguage }) {
       onLogin({ token: data.token, user: data.user, identifier: cleanedIdentifier, role: nextRole, isActive: true })
       navigate(nextRole === 'staff' ? '/staff' : nextRole === 'admin' ? '/admin' : '/dashboard')
     } catch (error) {
-      alert(error.message || 'Your login details are not recognized. Please try again.')
+      setLoginError(error.message || 'Your login details are not recognized. Please try again.')
     }
   }
 
@@ -617,7 +626,7 @@ function LoginPage({ onLogin, language, setLanguage }) {
             </div>
           </div>
 
-        <section className="login-card" id="login-card" aria-label="Login form">
+        <section className="login-card" id="login-card" aria-label={t.loginFormLabel}>
           <h2>{t.signIn}</h2>
         <button
           type="button"
@@ -630,6 +639,7 @@ function LoginPage({ onLogin, language, setLanguage }) {
 
         {!mfaState.required ? (
             <form onSubmit={handleSubmit} noValidate>
+              {loginError && <p className="mau-error" role="alert">{loginError}</p>}
               <div className="field-group">
                 <label htmlFor="identifier">{t.mobileOrEmail}</label>
                 <input
@@ -638,7 +648,7 @@ function LoginPage({ onLogin, language, setLanguage }) {
                   type="text"
                   value={form.identifier}
                   onChange={handleChange}
-                  placeholder={language === 'fil' ? '09XXXXXXXXX o email address' : '09XXXXXXXXX or email address'}
+                  placeholder={language === 'fil' ? '09XXXXXXXXX o email' : '09XXXXXXXXX or email address'}
                   autoComplete="username"
                 />
               </div>
@@ -664,7 +674,7 @@ function LoginPage({ onLogin, language, setLanguage }) {
                   <button
                     type="button"
                     className="toggle-password"
-                    aria-label={showPassword ? 'Hide password' : 'Show password'}
+                    aria-label={showPassword ? t.hidePassword : t.showPassword}
                     aria-pressed={showPassword}
                     onClick={() => setShowPassword((prev) => !prev)}
                   >
@@ -723,7 +733,7 @@ function LoginPage({ onLogin, language, setLanguage }) {
             </form>
           )}
 
-          <div className="login-helper" aria-label="Official access notice">
+          <div className="login-helper" aria-label={t.officialAccessLabel}>
             <span className="helper-pill">{t.officialAccess}</span>
             <p>{t.officialAccessText}</p>
           </div>
@@ -732,7 +742,7 @@ function LoginPage({ onLogin, language, setLanguage }) {
 
           <p className="signup-line">
             {t.noAccount}
-            <Link to="/register" aria-label="Create resident account">{t.createResidentAccount}</Link>
+            <Link to="/register" aria-label={t.createResidentAccountLabel}>{t.createResidentAccount}</Link>
           </p>
         </section>
         </div>
@@ -1687,7 +1697,7 @@ function RequestsPage({ requests, onSubmit, onRequestUpdated, onLogout, language
 
           <div className="status-tracker-panel">
             <div className="panel-header big-gap">
-              <h3>Request Status Tracker</h3>
+              <h3>{t.requestStatusTracker}</h3>
             </div>
             {recentRequests.length > 0 ? recentRequests.map((item) => {
               return (
@@ -2981,6 +2991,11 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
   const pending = requests.filter((item) => ['Pending', 'In Review', 'Needs Information'].includes(item.status)).length
   const pendingVerificationUsers = managedUsers.filter((user) => user.role === 'resident' && user.status === 'Pending Verification')
   const approvedUsers = managedUsers.filter((user) => user.role === 'resident' && user.status === 'Active Resident').length
+  const unapprovedLoginCutoff = Date.now() - 24 * 60 * 60 * 1000
+  const unapprovedLoginAttempts = auditLogs.filter((entry) => (
+    entry.action === 'auth.login.rejected_unapproved_resident'
+    && new Date(entry.createdAt || entry.created_at || 0).getTime() >= unapprovedLoginCutoff
+  ))
   const requestCountsByType = requests.reduce((counts, request) => {
     counts[request.type] = (counts[request.type] || 0) + 1
     return counts
@@ -2988,6 +3003,7 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
   const notifications = [
     pendingVerificationUsers.length > 0 && `${pendingVerificationUsers.length} resident account${pendingVerificationUsers.length === 1 ? '' : 's'} awaiting verification`,
     pending > 0 && `${pending} service request${pending === 1 ? '' : 's'} need review`,
+    unapprovedLoginAttempts.length > 0 && t.adminUnapprovedLoginAlert.replace('{count}', String(unapprovedLoginAttempts.length)),
   ].filter(Boolean)
   const derivedActivityEntries = [
     ...pendingVerificationUsers.map((user) => ({
@@ -3003,12 +3019,18 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
       date: approval.dateApproved,
     })),
   ].sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0)).slice(0, 8)
-  const activityEntries = auditLogs.length > 0 ? auditLogs.slice(0, 8).map((entry) => ({
-    id: entry.id,
-    label: entry.action,
-    detail: `${entry.actorRole || 'system'} • ${entry.targetType || 'record'} ${entry.targetId || ''}`,
-    date: entry.createdAt || entry.created_at,
-  })) : derivedActivityEntries
+  const activityEntries = auditLogs.length > 0 ? auditLogs.slice(0, 8).map((entry) => {
+    const isUnapprovedLogin = entry.action === 'auth.login.rejected_unapproved_resident'
+    const residentName = entry.metadata?.residentName
+    return {
+      id: entry.id,
+      label: isUnapprovedLogin ? t.activityUnapprovedLogin : entry.action,
+      detail: isUnapprovedLogin && residentName
+        ? `${residentName} • ${entry.metadata.status}`
+        : `${entry.actorRole || 'system'} • ${entry.targetType || 'record'} ${entry.targetId || ''}`,
+      date: entry.createdAt || entry.created_at,
+    }
+  }) : derivedActivityEntries
 
   const updateManagedUser = async (userId, updates) => {
     try {
@@ -3160,11 +3182,26 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
       fetchArchives()
     }
 
+    let auditRefreshTimer
     if (activeTab === 'overview' || activeTab === 'access') {
-      fetch(`${API_BASE}/admin/audit-logs`)
-        .then((response) => response.ok ? response.json() : { logs: [] })
-        .then((data) => setAuditLogs(data.logs || []))
-        .catch((error) => console.error('fetch audit logs error', error))
+      const refreshAuditLogs = () => {
+        fetch(`${API_BASE}/admin/audit-logs?limit=500`)
+          .then((response) => {
+            if (!response.ok) throw new Error('Unable to refresh administrator activity.')
+            return response.json()
+          })
+          .then((data) => {
+            if (!Array.isArray(data.logs)) throw new Error('Administrator activity response is invalid.')
+            setAuditLogs(data.logs)
+          })
+          .catch((error) => console.error('fetch audit logs error', error))
+      }
+      refreshAuditLogs()
+      if (activeTab === 'overview') auditRefreshTimer = window.setInterval(refreshAuditLogs, 30000)
+    }
+
+    return () => {
+      if (auditRefreshTimer) window.clearInterval(auditRefreshTimer)
     }
   }, [activeTab])
 
@@ -3845,11 +3882,14 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
   )
 }
 
-function MauAssistant({ language, userRole, mobileDashboard }) {
+function MauAssistant({ language, userRole, isAuthenticated, pathname, mobileDashboard }) {
   const t = translations[language] || translations.en
+  const isHomepage = !isAuthenticated && pathname === '/'
   const hasBottomNavigation = ['staff', 'admin'].includes(userRole)
   const [open, setOpen] = useState(false)
   const [question, setQuestion] = useState('')
+  const [quickOptionsMinimized, setQuickOptionsMinimized] = useState(false)
+  const [residencyCheck, setResidencyCheck] = useState(isHomepage ? 'asked' : 'confirmed')
   const triggerRef = useRef(null)
   const questionInputRef = useRef(null)
   const [messages, setMessages] = useState([
@@ -3883,103 +3923,37 @@ function MauAssistant({ language, userRole, mobileDashboard }) {
     }
   }, [open])
 
-  const cannedReplies = language === 'fil'
-    ? [
-        {
-          keywords: ['request', 'service', 'certificate', 'clearance', 'assistance', 'help', 'serbisyo', 'certificado', 'klaro', 'tulong'],
-          response: 'Maaari kang mag-submit ng request sa resident dashboard. Piliin ang serbisyo, ilarawan ang layunin, at susuriin ito ng staff ng barangay.',
-        },
-        {
-          keywords: ['status', 'pending', 'approved', 'review', 'done', 'katayuan', 'nakabinbin', 'aprubahan', 'suri', 'tapos'],
-          response: 'Suriin ang status ng iyong request sa dashboard. Nakabinbin ang ibig sabihin ay kasalukuyang sinusuri, Naaprubahan ang ibig sabihin ay natapos na, at Tinanggihan ang ibig sabihin ay kailangang ayusin o hindi ito karapat-dapat.',
-        },
-        {
-          keywords: ['verify', 'verification', 'approved resident', 'active resident', 'verify', 'beripikasyon', 'aprubadong resident', 'aktibong resident'],
-          response: 'Dapat i-verify ng admin ng barangay ang resident account bago ganap na ma-enable ang access. Kapag naaprubahan, magiging aktibo ang account.',
-        },
-        {
-          keywords: ['announcement', 'update', 'news', 'anunsyo', 'update', 'balita'],
-          response: 'Ang mga anunsyo ay inilalathala ng staff at ipinapakita sa resident dashboard. Bantayan ang seksyon ng Mga Update at Alert.',
-        },
-        {
-          keywords: ['password', 'login', 'forgot', 'password', 'login', 'nakalimutan'],
-          response: 'Gamitin ang link na Nakalimutan ang password sa login screen para humiling ng one-time reset token at magtakda ng bagong password.',
-        },
-        {
-          keywords: ['hello', 'hi', 'hey', 'mau', 'kamusta', 'halo'],
-          response: 'Kamusta! Ako si Mau at matutulungan kita sa mga serbisyo ng resident, tanong sa account, at status ng request.',
-        },
-      ]
-    : [
-        {
-          keywords: ['request', 'service', 'certificate', 'clearance', 'assistance', 'help'],
-          response: 'You can submit a request from the resident dashboard. Choose a service, describe the purpose, and barangay staff will review it.',
-        },
-        {
-          keywords: ['status', 'pending', 'approved', 'review', 'done'],
-          response: 'Check your request status in the dashboard. Pending means still under review, Approved means completed, and Rejected means it needs correction or is not eligible.',
-        },
-        {
-          keywords: ['verify', 'verification', 'approved resident', 'active resident'],
-          response: 'Resident accounts must be verified by the barangay admin before access is fully enabled. Once approved, your account becomes active.',
-        },
-        {
-          keywords: ['announcement', 'update', 'news'],
-          response: 'Announcements are published by staff and shown on the resident dashboard. Keep an eye on the Updates & Alerts section.',
-        },
-        {
-          keywords: ['password', 'login', 'forgot'],
-          response: 'Use the Forgot password link on the login screen to request a one-time reset token, then set a new password.',
-        },
-        {
-          keywords: ['hello', 'hi', 'hey', 'mau'],
-          response: 'Hello! I\'m Mau, and I can help with resident services, account questions, and request status.',
-        },
-      ]
-
-  const quickOptions = language === 'fil'
-    ? [
-        'Ano ang status ng request ko?',
-        'Paano mag-submit ng request?',
-        'Paano mag-verify ng account?',
-      ]
-    : [
-        'What is my request status?',
-        'How do I submit a request?',
-        'How do I verify my account?',
-      ]
+  const quickOptions = getMauQuickOptions(language, userRole, isAuthenticated, isHomepage, residencyCheck, translations)
+  const welcomeMessage = getMauWelcome(language, userRole, isAuthenticated, isHomepage, translations)
 
   const [errorMessage, setErrorMessage] = useState('')
 
-  const getReply = (input) => {
-    const normalized = String(input || '').toLowerCase()
-    const match = cannedReplies.find((item) =>
-      item.keywords.some((keyword) => normalized.includes(keyword)),
-    )
-
-    if (match) return match.response
-
-    return language === 'fil'
-      ? 'Maaari ko kayong tulungan sa mga request, status, verification, anunsyo, at password recovery. Magtanong lamang sa simpleng paraan.'
-      : 'I can help with requests, status tracking, verification, announcements, and password recovery. Ask me in simple terms.'
-  }
+  useEffect(() => {
+    setResidencyCheck(isHomepage ? 'asked' : 'confirmed')
+  }, [isAuthenticated, isHomepage, userRole])
 
   const sendQuestion = (input) => {
     const trimmed = String(input || '').trim()
     if (!trimmed) {
-      setErrorMessage(t.mauError)
+      setErrorMessage(t.mauEmpty)
       return
     }
 
     if (trimmed.length > 240) {
-      setErrorMessage(language === 'fil' ? 'Masyadong mahaba ang tanong. Maglagay ng mas maikling tanong.' : 'That question is too long. Please ask a shorter one.')
+      setErrorMessage(t.mauTooLong)
       return
     }
 
     const userMessage = { id: `user-${Date.now()}`, sender: 'user', text: trimmed }
-    const mauMessage = { id: `mau-${Date.now() + 1}`, sender: 'mau', text: getReply(trimmed) }
+    const residentAnswer = isHomepage && residencyCheck === 'asked' ? getMauResidentAnswer(trimmed) : null
+    const mauMessage = {
+      id: `mau-${Date.now() + 1}`,
+      sender: 'mau',
+      text: getMauReply(trimmed, language, t, userRole, isAuthenticated, isHomepage, residencyCheck),
+    }
 
     setMessages((current) => [...current, userMessage, mauMessage])
+    if (residentAnswer) setResidencyCheck(residentAnswer === 'yes' ? 'confirmed' : 'not-resident')
     setErrorMessage('')
     setQuestion('')
   }
@@ -4029,16 +4003,27 @@ function MauAssistant({ language, userRole, mobileDashboard }) {
           <div className="mau-body" role="log" aria-label={t.mauHelper} aria-live="polite" aria-relevant="additions">
             {messages.map((message) => (
               <div key={message.id} className={`mau-message ${message.sender === 'user' ? 'user' : 'mau'}`}>
-                {message.id === 'welcome' ? t.mauWelcome : message.text}
+                {message.id === 'welcome' ? welcomeMessage : message.text}
               </div>
             ))}
           </div>
 
-          {errorMessage && <div className="mau-error">{errorMessage}</div>}
+          {errorMessage && <div className="mau-error" role="alert">{errorMessage}</div>}
 
           <div className="mau-options">
-            <span>{t.mauOptionsLabel}</span>
-            <div className="mau-option-row">
+            <div className="mau-options-heading">
+              <span>{t.mauOptionsLabel}</span>
+              <button
+                type="button"
+                className="mau-options-toggle"
+                aria-expanded={!quickOptionsMinimized}
+                aria-controls="mau-quick-options"
+                onClick={() => setQuickOptionsMinimized((current) => !current)}
+              >
+                {quickOptionsMinimized ? t.mauOptionsShow : t.mauOptionsHide}
+              </button>
+            </div>
+            <div id="mau-quick-options" className="mau-option-row" hidden={quickOptionsMinimized}>
               {quickOptions.map((option) => (
                 <button key={option} type="button" className="mau-option" onClick={() => sendQuestion(option)}>
                   {option}
@@ -4403,7 +4388,7 @@ function App() {
         <Route path="/admin" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['admin']} userRole={userRole}><AdminPage users={users} residents={residents} requests={requests} reports={reports} currentUser={session?.user} onLogout={handleLogout} language={language} setLanguage={switchLanguage} /></ProtectedRoute>} />
         <Route path="*" element={<Navigate to={userRole === 'staff' ? '/staff' : userRole === 'admin' ? '/admin' : '/dashboard'} replace />} />
       </Routes>
-      <MauAssistant language={language} userRole={userRole} mobileDashboard={userRole === 'resident' && location.pathname === '/dashboard'} />
+      <MauAssistant language={language} userRole={userRole} isAuthenticated={isAuthenticated} pathname={location.pathname} mobileDashboard={userRole === 'resident' && location.pathname === '/dashboard'} />
     </>
   )
 }
