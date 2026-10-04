@@ -6,6 +6,7 @@ test('filipino translation includes resident and admin labels', () => {
   const fil = translations.fil
 
   assert.equal(fil.residentPortal, 'Portal ng Resident')
+  assert.equal(fil.landingHeaderSignIn, 'Mag-sign in')
   assert.equal(fil.requestService, 'Humiling ng Serbisyo')
   assert.equal(fil.requestHistory, 'Kasaysayan ng request')
   assert.equal(fil.statusNeedsInformation, 'Kailangan ng impormasyon')
@@ -16,6 +17,11 @@ test('filipino translation includes resident and admin labels', () => {
   assert.equal(fil.staffPortal, 'Portal ng Staff')
   assert.equal(fil.adminConsole, 'Admin Console')
   assert.ok(fil.mauWelcome.includes('Mau'))
+})
+
+test('homepage header actions are localized', () => {
+  assert.equal(translations.en.landingHeaderSignIn, 'Sign in')
+  assert.equal(translations.fil.landingHeaderSignIn, 'Mag-sign in')
 })
 
 test('mau assistant includes locale-aware labels and reply metadata', () => {

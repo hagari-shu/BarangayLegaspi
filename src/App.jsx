@@ -513,11 +513,19 @@ function LoginPage({ onLogin, language, setLanguage }) {
   return (
     <div className="app-shell">
       <header className="topbar landing-topbar" aria-label="Top bar">
-        <div className="topbar-inner">
-          <div className="topbar-title">{t.officialResident}</div>
-          <div className="topbar-location">{t.barangayLegaspi}</div>
+        <div className="landing-header-inner">
+          <a className="landing-brand" href="/" aria-label={`${t.barangayLegaspi} - ${t.residentPortal}`}>
+            <img src={barangaySeal} alt="" />
+            <span>
+              <strong>{t.barangayLegaspi}</strong>
+              <span>{t.residentPortal}</span>
+            </span>
+          </a>
+          <div className="landing-header-actions">
+            <a className="landing-header-signin" href="#login-card">{t.landingHeaderSignIn}</a>
+            <LanguageToggle language={language} setLanguage={setLanguage} />
+          </div>
         </div>
-        <LanguageToggle language={language} setLanguage={setLanguage} />
       </header>
 
       <main className="login-screen">
