@@ -1,18 +1,30 @@
 services:
   - type: web
     name: brgy-legaspi-api
-    runtime: node
-    buildCommand: npm ci
-    startCommand: npm start
+    runtime: docker
+    dockerfilePath: ./laravel-api/Dockerfile
+    dockerContext: ./laravel-api
     healthCheckPath: /api/health
     envVars:
-      - key: NODE_ENV
+      - key: APP_ENV
         value: production
+      - key: APP_DEBUG
+        value: "false"
+      - key: APP_KEY
+        sync: false
+      - key: APP_TIMEZONE
+        value: Asia/Manila
       - key: JWT_SECRET
-        generateValue: true
+        sync: false
       - key: DATABASE_URL
         sync: false
       - key: CORS_ORIGINS
         sync: false
       - key: RESET_DELIVERY_URL
+        sync: false
+      - key: ADMIN_EMAIL
+        sync: false
+      - key: ADMIN_MOBILE
+        sync: false
+      - key: ADMIN_PASSWORD
         sync: false

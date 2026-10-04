@@ -1,0 +1,60 @@
+<?php
+
+use App\Http\Controllers\ApiController;
+use Illuminate\Support\Facades\Route;
+
+Route::get('/health', [ApiController::class, 'health']);
+Route::post('/register', [ApiController::class, 'register'])->middleware('throttle:12,1');
+Route::post('/login', [ApiController::class, 'login'])->middleware('throttle:12,1');
+Route::post('/login/mfa', [ApiController::class, 'loginMfa'])->middleware('throttle:12,1');
+Route::post('/reset-password/request', [ApiController::class, 'requestPasswordReset'])->middleware('throttle:12,1');
+Route::post('/reset-password', [ApiController::class, 'resetPassword'])->middleware('throttle:12,1');
+Route::get('/services', [ApiController::class, 'services']);
+Route::get('/announcements', [ApiController::class, 'announcements']);
+Route::get('/events', [ApiController::class, 'events']);
+
+Route::middleware('auth.api')->group(function () {
+    Route::post('/logout', [ApiController::class, 'logout']);
+    Route::post('/change-password', [ApiController::class, 'changePassword']);
+    Route::get('/profile', [ApiController::class, 'profile']);
+    Route::patch('/profile', [ApiController::class, 'updateProfile']);
+    Route::get('/dashboard', [ApiController::class, 'dashboard']);
+    Route::get('/payments', [ApiController::class, 'payments']);
+    Route::patch('/payments/{id}/status', [ApiController::class, 'updatePayment'])->middleware('role:admin');
+    Route::get('/requests', [ApiController::class, 'requests']);
+    Route::get('/staff/requests', [ApiController::class, 'staffRequests'])->middleware('role:staff,admin');
+    Route::get('/staff/members', [ApiController::class, 'staffMembers'])->middleware('role:staff,admin');
+    Route::post('/staff/members', [ApiController::class, 'createStaff'])->middleware('role:admin');
+    Route::delete('/staff/members/{id}', [ApiController::class, 'deleteStaff'])->middleware('role:admin');
+    Route::post('/staff/archive-requests', [ApiController::class, 'archiveRequests'])->middleware('role:staff,admin');
+    Route::get('/staff/archives', [ApiController::class, 'staffArchives'])->middleware('role:staff,admin');
+    Route::get('/staff/archive-file', [ApiController::class, 'staffArchiveFile'])->middleware('role:staff,admin');
+    Route::delete('/staff/archive-file', [ApiController::class, 'deleteStaffArchive'])->middleware('role:admin');
+    Route::get('/admin/users', [ApiController::class, 'adminUsers'])->middleware('role:admin');
+    Route::get('/admin/audit-logs', [ApiController::class, 'auditLogs'])->middleware('role:admin');
+    Route::get('/admin/summary', [ApiController::class, 'adminSummary'])->middleware('role:admin');
+    Route::post('/admin/users', [ApiController::class, 'createAdmin'])->middleware('role:admin');
+    Route::patch('/admin/users/{id}', [ApiController::class, 'updateUser'])->middleware('role:admin');
+    Route::post('/admin/archive-users-by-zone', [ApiController::class, 'archiveUsersByZone'])->middleware('role:admin');
+    Route::get('/admin/residents-by-zone', [ApiController::class, 'residentsByZone'])->middleware('role:admin');
+    Route::get('/admin/reports', [ApiController::class, 'reports'])->middleware('role:admin');
+    Route::post('/admin/reports', [ApiController::class, 'createReport'])->middleware('role:admin');
+    Route::get('/admin/access/users', [ApiController::class, 'accessUsers'])->middleware('role:admin');
+    Route::get('/admin/access/user/{id}', [ApiController::class, 'accessUser'])->middleware('role:admin');
+    Route::post('/admin/clear-data', [ApiController::class, 'clearData'])->middleware('role:admin');
+    Route::post('/admin/archive-approvals', [ApiController::class, 'archiveApprovals'])->middleware('role:admin');
+    Route::get('/admin/approvals', [ApiController::class, 'approvals'])->middleware('role:admin');
+    Route::get('/admin/archives', [ApiController::class, 'adminArchives'])->middleware('role:admin');
+    Route::get('/admin/archive-file', [ApiController::class, 'adminArchiveFile'])->middleware('role:admin');
+    Route::delete('/admin/archive-file', [ApiController::class, 'deleteAdminArchive'])->middleware('role:admin');
+    Route::post('/mfa/setup', [ApiController::class, 'mfaSetup'])->middleware('throttle:12,1');
+    Route::post('/mfa/enable', [ApiController::class, 'mfaEnable'])->middleware('throttle:12,1');
+    Route::post('/mfa/disable', [ApiController::class, 'mfaDisable'])->middleware('throttle:12,1');
+    Route::post('/announcements', [ApiController::class, 'createAnnouncement'])->middleware('role:admin');
+    Route::delete('/announcements/{id}', [ApiController::class, 'deleteAnnouncement'])->middleware('role:admin');
+    Route::patch('/requests/{id}/status', [ApiController::class, 'updateRequestStatus'])->middleware('role:staff,admin');
+    Route::post('/requests', [ApiController::class, 'createRequest']);
+    Route::post('/requests/{id}/reminders', [ApiController::class, 'createReminder'])->middleware('throttle:30,1');
+    Route::get('/reminders', [ApiController::class, 'reminders']);
+    Route::post('/requests/{id}/follow-ups', [ApiController::class, 'createFollowUp'])->middleware('throttle:30,1');
+});

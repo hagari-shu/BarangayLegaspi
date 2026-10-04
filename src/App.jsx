@@ -6,7 +6,7 @@ import './App.css'
 
 const sessionKey = 'brgy-legaspi-session'
 const requestReminderStorageKey = 'brgy-legaspi-request-reminders'
-const API_BASE = (import.meta.env.VITE_API_BASE || (import.meta.env.DEV ? 'http://localhost:3001/api' : '')).replace(/\/$/, '')
+const API_BASE = (import.meta.env.VITE_API_BASE || (import.meta.env.DEV ? 'http://localhost:8000/api' : '')).replace(/\/$/, '')
 
 if (!API_BASE) {
   throw new Error('VITE_API_BASE must be configured to point to the deployed API base URL, such as https://api.example.com/api.')
@@ -4230,7 +4230,6 @@ function App() {
 }
 
 export default App
-
 
 
 

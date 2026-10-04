@@ -4,14 +4,15 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "concurrently \"npm run dev:client\" \"npm run dev:server\"",
+    "dev": "concurrently \"npm run dev:client\" \"npm run dev:api\"",
     "dev:client": "vite",
-    "dev:server": "node --watch server.js",
-    "start": "node server.js",
+    "dev:api": "cd laravel-api && php artisan serve --host=0.0.0.0 --port=8000",
+    "dev:legacy-server": "node --watch server.js",
+    "start:legacy": "node server.js",
     "build": "vite build",
     "lint": "oxlint",
     "preview": "vite preview",
-    "test": "node --test"
+    "test": "node --test tests/api.test.js tests/mau-and-mfa.test.js tests/payments.test.js tests/reminders.test.js tests/translations.test.js"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",
