@@ -3,6 +3,7 @@ services:
     name: brgy-legaspi-api
     runtime: docker
     plan: free
+    region: singapore
     dockerfilePath: ./laravel-api/Dockerfile
     dockerContext: ./laravel-api
     healthCheckPath: /api/health
