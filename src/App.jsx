@@ -1,10 +1,12 @@
 ﻿import { useEffect, useState } from 'react'
-import { Routes, Route, Navigate, Link, useNavigate } from 'react-router-dom'
+import { Routes, Route, Navigate, Link, useNavigate, useLocation } from 'react-router-dom'
 import barangaySeal from './assets/barangay-seal.svg'
+import translations from './translations'
 import './App.css'
 
 const sessionKey = 'brgy-legaspi-session'
-const API_BASE = import.meta.env.VITE_API_BASE?.replace(/\/$/, '')
+const requestReminderStorageKey = 'brgy-legaspi-request-reminders'
+const API_BASE = (import.meta.env.VITE_API_BASE || (import.meta.env.DEV ? 'http://localhost:3001/api' : '')).replace(/\/$/, '')
 
 if (!API_BASE) {
   throw new Error('VITE_API_BASE must be configured to point to the deployed API base URL, such as https://api.example.com/api.')
@@ -33,6 +35,13 @@ const isValidPassword = (value) => {
   return password.length >= 8 && /[a-z]/.test(password) && /[A-Z]/.test(password) && /\d/.test(password) && /[^A-Za-z0-9\s]/.test(password)
 }
 const passwordRequirements = 'at least 8 characters, one uppercase letter, one lowercase letter, one number, and one special character'
+
+const LanguageToggle = ({ language, setLanguage }) => (
+  <div className="language-toggle" aria-label="Language selection">
+    <button type="button" className={language === 'en' ? 'active' : ''} onClick={() => setLanguage('en')}>EN</button>
+    <button type="button" className={language === 'fil' ? 'active' : ''} onClick={() => setLanguage('fil')}>FIL</button>
+  </div>
+)
 
 function PasswordField({ id, label, value, onChange, autoComplete = 'new-password', minLength = 8, placeholder, required = true, helpText }) {
   const [visible, setVisible] = useState(false)
@@ -109,6 +118,12 @@ const initialProfile = {
 }
 
 const initialRequests = []
+const defaultSocialAccounts = [
+  { key: 'facebook', label: 'Facebook', connected: true },
+  { key: 'instagram', label: 'Instagram', connected: true },
+  { key: 'x', label: 'X / Twitter', connected: false },
+  { key: 'messenger', label: 'Messenger', connected: false },
+]
 
 const getDisplayName = (user = {}) => {
   const firstName = user.firstName ?? user.first_name ?? ''
@@ -296,13 +311,16 @@ function ProtectedRoute({ isAuthenticated, allowedRoles, userRole, children }) {
   return children
 }
 
-function LoginPage({ onLogin }) {
+function LoginPage({ onLogin, language, setLanguage }) {
   const navigate = useNavigate()
+  const t = translations[language] || translations.en
   const [form, setForm] = useState({
     identifier: '',
     password: '',
     rememberMe: false,
   })
+  const [mfaState, setMfaState] = useState({ required: false, challengeToken: '', identifier: '' })
+  const [mfaCode, setMfaCode] = useState('')
   const [showPassword, setShowPassword] = useState(false)
   const [showReset, setShowReset] = useState(false)
   const [resetForm, setResetForm] = useState({ identifier: '', token: '', newPassword: '' })
@@ -339,22 +357,56 @@ function LoginPage({ onLogin }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ identifier: cleanedIdentifier, password: cleanedPassword }),
       })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(data.message || 'Login failed.')
 
-      const data = await response.json()
+      if (data.requiresMfa) {
+        setMfaState({ required: true, challengeToken: data.challengeToken, identifier: cleanedIdentifier })
+        setMfaCode('')
+        return
+      }
+
+      const nextRole = data.user?.role || 'resident'
+      onLogin({ token: data.token, user: data.user, identifier: cleanedIdentifier, role: nextRole, isActive: true })
+      navigate(nextRole === 'staff' ? '/staff' : nextRole === 'admin' ? '/admin' : '/dashboard')
+    } catch (error) {
+      alert(error.message || 'Your login details are not recognized. Please try again.')
+    }
+  }
+
+  const handleMfaSubmit = async (event) => {
+    event.preventDefault()
+
+    if (!mfaState.required) return
+
+    if (!/^[0-9]{6}$/.test(String(mfaCode).trim())) {
+      alert(t.mfaInvalid)
+      return
+    }
+
+    try {
+      const response = await fetch(`${API_BASE}/login/mfa`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ challengeToken: mfaState.challengeToken, code: String(mfaCode).trim() }),
+      })
+
+      const data = await response.json().catch(() => ({}))
 
       if (!response.ok) {
         throw new Error(data.message || 'Login failed.')
       }
 
       const nextRole = data.user?.role || 'resident'
-
       onLogin({
         token: data.token,
         user: data.user,
-        identifier: cleanedIdentifier,
+        identifier: mfaState.identifier,
         role: nextRole,
         isActive: true,
       })
+      setMfaState({ required: false, challengeToken: '', identifier: '' })
+      setMfaCode('')
       navigate(nextRole === 'staff' ? '/staff' : nextRole === 'admin' ? '/admin' : '/dashboard')
     } catch (error) {
       alert(error.message || 'Your login details are not recognized. Please try again or use the demo account.')
@@ -405,9 +457,10 @@ function LoginPage({ onLogin }) {
     <div className="app-shell">
       <header className="topbar" aria-label="Top bar">
         <div className="topbar-inner">
-          <div className="topbar-title">Official Resident</div>
-          <div className="topbar-location">Barangay Legaspi</div>
+          <div className="topbar-title">{t.officialResident}</div>
+          <div className="topbar-location">{t.barangayLegaspi}</div>
         </div>
+        <LanguageToggle language={language} setLanguage={setLanguage} />
       </header>
 
       <main className="login-screen">
@@ -426,93 +479,124 @@ function LoginPage({ onLogin }) {
               }}
             />
             <div className="brand-copy">
-              <h1>Barangay Legaspi</h1>
-              <p>Resident Portal</p>
+              <h1>{t.barangayLegaspi}</h1>
+              <p>{t.residentPortal}</p>
             </div>
           </div>
         </div>
 
         <section className="login-card" aria-label="Login form">
-          <h2>Sign in to your account</h2>
+          <h2>{t.signIn}</h2>
 
-          <form onSubmit={handleSubmit} noValidate>
-            <div className="field-group">
-              <label htmlFor="identifier">Mobile Number or Email</label>
-              <input
-                id="identifier"
-                name="identifier"
-                type="text"
-                value={form.identifier}
-                onChange={handleChange}
-                placeholder="09XXXXXXXXX or email address"
-                autoComplete="username"
-              />
-            </div>
-
-            <div className="field-group password-field">
-              <div className="label-row">
-                <label htmlFor="password">Password</label>
-                <button type="button" className="text-button" aria-label="Forgot password" onClick={() => setShowReset(true)}>
-                  Forgot password?
-                </button>
+          {!mfaState.required ? (
+            <form onSubmit={handleSubmit} noValidate>
+              <div className="field-group">
+                <label htmlFor="identifier">{t.mobileOrEmail}</label>
+                <input
+                  id="identifier"
+                  name="identifier"
+                  type="text"
+                  value={form.identifier}
+                  onChange={handleChange}
+                  placeholder={language === 'fil' ? '09XXXXXXXXX o email address' : '09XXXXXXXXX or email address'}
+                  autoComplete="username"
+                />
               </div>
 
-              <div className="password-wrap">
-                <input
-                  id="password"
-                  name="password"
-                  type={showPassword ? 'text' : 'password'}
-                  value={form.password}
-                  onChange={handleChange}
-                  placeholder="Enter your password"
-                  autoComplete="current-password"
-                />
-                <button
-                  type="button"
-                  className="toggle-password"
-                  aria-label={showPassword ? 'Hide password' : 'Show password'}
-                  aria-pressed={showPassword}
-                  onClick={() => setShowPassword((prev) => !prev)}
-                >
-                  <svg viewBox="0 0 24 24" aria-hidden="true">
-                    <path d="M12 5c5.4 0 9.8 4.3 11.4 6.5-1.6 2.2-6 6.5-11.4 6.5S2.2 13.7.6 11.5C2.2 9.3 6.6 5 12 5Zm0 2a8.2 8.2 0 0 0-7.8 4.5A8.2 8.2 0 0 0 12 16a8.2 8.2 0 0 0 7.8-4.5A8.2 8.2 0 0 0 12 7Zm0 2.5A2 2 0 1 1 12 14a2 2 0 0 1 0-4.5Z" />
-                  </svg>
-                </button>
+              <div className="field-group password-field">
+                <div className="label-row">
+                  <label htmlFor="password">{t.password}</label>
+                  <button type="button" className="text-button" aria-label={t.forgotPassword} onClick={() => setShowReset(true)}>
+                    {t.forgotPassword}
+                  </button>
+                </div>
+
+                <div className="password-wrap">
+                  <input
+                    id="password"
+                    name="password"
+                    type={showPassword ? 'text' : 'password'}
+                    value={form.password}
+                    onChange={handleChange}
+                    placeholder={language === 'fil' ? 'Ilagay ang iyong password' : 'Enter your password'}
+                    autoComplete="current-password"
+                  />
+                  <button
+                    type="button"
+                    className="toggle-password"
+                    aria-label={showPassword ? 'Hide password' : 'Show password'}
+                    aria-pressed={showPassword}
+                    onClick={() => setShowPassword((prev) => !prev)}
+                  >
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M12 5c5.4 0 9.8 4.3 11.4 6.5-1.6 2.2-6 6.5-11.4 6.5S2.2 13.7.6 11.5C2.2 9.3 6.6 5 12 5Zm0 2a8.2 8.2 0 0 0-7.8 4.5A8.2 8.2 0 0 0 12 16a8.2 8.2 0 0 0 7.8-4.5A8.2 8.2 0 0 0 12 7Zm0 2.5A2 2 0 1 1 12 14a2 2 0 0 1 0-4.5Z" />
+                    </svg>
+                  </button>
+                </div>
               </div>
-            </div>
 
-            <div className="remember-row">
-              <label className="checkbox-label" htmlFor="rememberMe">
+              <div className="remember-row">
+                <label className="checkbox-label" htmlFor="rememberMe">
+                  <input
+                    id="rememberMe"
+                    name="rememberMe"
+                    type="checkbox"
+                    checked={form.rememberMe}
+                    onChange={handleChange}
+                  />
+                  <span>{t.rememberMe}</span>
+                </label>
+              </div>
+
+              <button type="submit" className="primary-btn" aria-label={t.logIn}>
+                {t.logIn}
+              </button>
+            </form>
+          ) : (
+            <form className="mfa-card" onSubmit={handleMfaSubmit} noValidate>
+              <div className="mfa-header">
+                <h3>{t.mfaTitle}</h3>
+                <p>{t.mfaPrompt}</p>
+                <small>{t.mfaHelper}</small>
+              </div>
+
+              <div className="field-group">
+                <label htmlFor="mfa-code">{t.mfaCodeLabel}</label>
                 <input
-                  id="rememberMe"
-                  name="rememberMe"
-                  type="checkbox"
-                  checked={form.rememberMe}
-                  onChange={handleChange}
+                  id="mfa-code"
+                  type="text"
+                  inputMode="numeric"
+                  maxLength={6}
+                  value={mfaCode}
+                  onChange={(event) => setMfaCode(event.target.value.replace(/\D/g, '').slice(0, 6))}
+                  placeholder="123456"
                 />
-                <span>Remember me</span>
-              </label>
-            </div>
+              </div>
 
-            <button type="submit" className="primary-btn" aria-label="Log in">
-              Log In
-            </button>
-          </form>
+              <div className="mfa-actions">
+                <button type="submit" className="primary-btn small">{t.mfaVerify}</button>
+                <button type="button" className="secondary-btn small" onClick={() => {
+                  setMfaState({ required: false, challengeToken: '', identifier: '' })
+                  setMfaCode('')
+                }}>{t.mfaCancel}</button>
+              </div>
+            </form>
+          )}
 
           <div className="login-helper" aria-label="Official access notice">
-            <span className="helper-pill">Official access only</span>
-            <p>Use your barangay-issued mobile number or email and password.</p>
+            <span className="helper-pill">{t.officialAccess}</span>
+            <p>{t.officialAccessText}</p>
           </div>
 
-          <p className="approval-notice">New resident accounts require administrator approval before web app access is granted.</p>
+          <p className="approval-notice">{t.accountApprovalNotice}</p>
 
           <p className="signup-line">
-            Don&apos;t have an account?
-            <Link to="/register" aria-label="Create resident account">Create Resident Account</Link>
+            {t.noAccount}
+            <Link to="/register" aria-label="Create resident account">{t.createResidentAccount}</Link>
           </p>
         </section>
 
-        <footer className="page-footer">Barangay Legaspi • Tayug, Pangasinan</footer>
+        <footer className="page-footer">{t.barangayLegaspi} • Tayug, Pangasinan</footer>
       </main>
 
       {showReset && (
@@ -521,7 +605,7 @@ function LoginPage({ onLogin }) {
             <button type="button" className="modal-close" onClick={() => setShowReset(false)} aria-label="Close password reset">×</button>
             <div className="modal-header">
               <div>
-                <h2>Reset password</h2>
+                <h2>{t.resetPassword}</h2>
                 <p>{resetRequested ? 'Enter the one-time token and choose a new password.' : 'We will send a short-lived reset token to your registered contact.'}</p>
               </div>
             </div>
@@ -531,15 +615,15 @@ function LoginPage({ onLogin }) {
                 <input id="reset-identifier" type="text" value={resetForm.identifier} onChange={(event) => setResetForm((current) => ({ ...current, identifier: event.target.value }))} required />
               </div>}
               {resetRequested && <div className="input-block">
-                <label htmlFor="reset-token">One-time reset token</label>
+                <label htmlFor="reset-token">{t.oneTimeResetToken}</label>
                 <input id="reset-token" type="text" value={resetForm.token} onChange={(event) => setResetForm((current) => ({ ...current, token: event.target.value }))} required />
               </div>}
               {resetRequested && <div className="input-block">
-                <PasswordField id="reset-new-password" label="New password" value={resetForm.newPassword} onChange={(event) => setResetForm((current) => ({ ...current, newPassword: event.target.value }))} helpText={`${passwordRequirements}.`} />
+                <PasswordField id="reset-new-password" label={t.password} value={resetForm.newPassword} onChange={(event) => setResetForm((current) => ({ ...current, newPassword: event.target.value }))} helpText={`${passwordRequirements}.`} />
               </div>}
               <div className="modal-actions">
-                <button type="button" className="secondary-btn small" onClick={() => { setShowReset(false); setResetRequested(false) }}>Cancel</button>
-                <button type="submit" className="primary-btn small" disabled={resetting}>{resetting ? 'Working...' : resetRequested ? 'Reset password' : 'Send reset token'}</button>
+                <button type="button" className="secondary-btn small" onClick={() => { setShowReset(false); setResetRequested(false) }}>{t.cancel}</button>
+                <button type="submit" className="primary-btn small" disabled={resetting}>{resetting ? t.working : resetRequested ? t.resetPasswordAction : t.sendResetToken}</button>
               </div>
             </div>
           </form>
@@ -549,8 +633,9 @@ function LoginPage({ onLogin }) {
   )
 }
 
-function RegisterPage() {
+function RegisterPage({ language, setLanguage }) {
   const navigate = useNavigate()
+  const t = translations[language] || translations.en
   const relationshipOptions = ['Parent', 'Sibling', 'Relative', 'Spouse', 'Child', 'Other']
   const [form, setForm] = useState({
     firstName: '',
@@ -647,9 +732,10 @@ function RegisterPage() {
     <div className="app-shell page-alt">
       <header className="topbar" aria-label="Top bar">
         <div className="topbar-inner">
-          <div className="topbar-title">Official Resident</div>
-          <div className="topbar-location">Barangay Legaspi</div>
+          <div className="topbar-title">{t.officialResident}</div>
+          <div className="topbar-location">{t.barangayLegaspi}</div>
         </div>
+        <LanguageToggle language={language} setLanguage={setLanguage} />
       </header>
 
       <main className="register-screen">
@@ -657,43 +743,44 @@ function RegisterPage() {
           <div className="register-header">
             <img className="seal-logo small" src={barangaySeal} alt="Barangay Legaspi official seal" />
             <div>
-              <h1>Create Resident Account</h1>
-              <p>Register to access services and updates</p>
-              <p className="register-subtext">You can add household members later if needed.</p>
+              <h1>{t.createResidentTitle}</h1>
+              <p>{t.createResidentSubtitle}</p>
+              <p className="register-subtext">{t.newResidentPrompt}</p>
             </div>
           </div>
 
           <form className="register-form" onSubmit={handleSubmit}>
             <div className="info-strip" aria-label="Information collection notice">
-              <p className="info-strip-title">Why we ask for this</p>
+              <p className="info-strip-title">{t.whyWeAskForThis}</p>
               <p>
-                We only collect the information needed to verify your resident account, assign your barangay zone,
-                and provide barangay services. Household member details are optional.
+                {language === 'fil'
+                  ? 'Tanging impormasyon lamang ang kinokolekta namin upang i-verify ang iyong resident account, magtalaga ng zone, at magbigay ng serbisyo ng barangay. Opsyonal ang detalye ng household member.'
+                  : 'We only collect the information needed to verify your resident account, assign your barangay zone, and provide barangay services. Household member details are optional.'}
               </p>
             </div>
 
             <div className="form-sections">
               <section className="form-section">
                 <div className="form-section-heading">
-                  <h2>1. Account details</h2>
-                  <p>Used for login, contact, and verification.</p>
+                  <h2>1. {t.accountDetails}</h2>
+                  <p>{t.usedForLogin}</p>
                 </div>
 
                 <div className="form-grid">
                   <div className="input-block">
-                    <label>First Name</label>
+                    <label>{t.firstNameLabel}</label>
                     <input type="text" name="firstName" value={form.firstName} onChange={handleChange} placeholder="Enter your first name" autoComplete="given-name" required />
                   </div>
                   <div className="input-block">
-                    <label>Last Name</label>
+                    <label>{t.lastNameLabel}</label>
                     <input type="text" name="lastName" value={form.lastName} onChange={handleChange} placeholder="Enter your last name" autoComplete="family-name" required />
                   </div>
                   <div className="input-block">
-                    <label>Mobile Number</label>
+                    <label>{t.mobileNumberLabel}</label>
                     <input type="text" name="mobile" value={form.mobile} onChange={handleChange} placeholder="09XXXXXXXXX" autoComplete="tel" inputMode="numeric" maxLength={11} required />
                   </div>
                   <div className="input-block">
-                    <label>Email Address</label>
+                    <label>{t.emailAddressLabel}</label>
                     <input type="email" name="email" value={form.email} onChange={handleChange} placeholder="name@email.com" autoComplete="email" required />
                   </div>
                 </div>
@@ -701,17 +788,17 @@ function RegisterPage() {
 
               <section className="form-section">
                 <div className="form-section-heading">
-                  <h2>2. Address details</h2>
-                  <p>Used to verify your barangay record and assign your correct zone.</p>
+                  <h2>2. {t.addressDetails}</h2>
+                  <p>{t.usedForVerification}</p>
                 </div>
 
                 <div className="form-grid">
                   <div className="input-block full-width">
-                    <label>Home Address</label>
+                    <label>{t.homeAddressLabel}</label>
                     <input type="text" name="address" value={form.address} onChange={handleChange} placeholder="House number, street, Barangay Legaspi" autoComplete="street-address" required />
                   </div>
                   <div className="input-block">
-                    <label>Zone</label>
+                    <label>{t.zoneLabel}</label>
                     <select name="zone" value={form.zone} onChange={handleChange} required>
                       <option value="">Select your zone</option>
                       {[1, 2, 3, 4, 5, 6, 7].map((zone) => <option key={zone} value={zone}>Zone {zone}</option>)}
@@ -722,17 +809,17 @@ function RegisterPage() {
 
               <section className="form-section">
                 <div className="form-section-heading">
-                  <h2>3. Household details</h2>
-                  <p>Optional. Add people who live at the same address if you want them included in the household record.</p>
+                  <h2>3. {t.householdDetails}</h2>
+                  <p>{t.optionalHousehold}</p>
                 </div>
 
                 <div className="input-block full-width household-members-block">
                   <div className="household-members-header">
                     <div>
-                      <label>Household Members</label>
+                      <label>{t.householdMembersLabel}</label>
                       <small>This section is optional and only helps maintain a more complete household record.</small>
                     </div>
-                    <button type="button" className="secondary-btn small" onClick={addHouseholdMember}>Add member</button>
+                    <button type="button" className="secondary-btn small" onClick={addHouseholdMember}>{t.addMember}</button>
                   </div>
                   {form.householdMembers.map((member, index) => (
                     <div className="household-member-row" key={`household-member-${index}`}>
@@ -740,7 +827,7 @@ function RegisterPage() {
                       <select value={member.relationship} onChange={(event) => updateHouseholdMember(index, 'relationship', event.target.value)} aria-label={`Household member ${index + 1} relationship`}>
                         {relationshipOptions.map((relationship) => <option key={relationship} value={relationship}>{relationship}</option>)}
                       </select>
-                      <button type="button" className="small-action danger" onClick={() => removeHouseholdMember(index)} aria-label={`Remove household member ${index + 1}`}>Remove</button>
+                      <button type="button" className="small-action danger" onClick={() => removeHouseholdMember(index)} aria-label={`Remove household member ${index + 1}`}>{t.remove}</button>
                     </div>
                   ))}
                 </div>
@@ -748,12 +835,12 @@ function RegisterPage() {
 
               <section className="form-section">
                 <div className="form-section-heading">
-                  <h2>4. Account security</h2>
-                  <p>Used to protect your account and keep your login secure.</p>
+                  <h2>4. {t.accountSecurity}</h2>
+                  <p>{t.usedToProtect}</p>
                 </div>
 
                 <div className="form-grid">
-                  <PasswordField id="registration-password" label="Password" value={form.password} onChange={(event) => setForm((current) => ({ ...current, password: event.target.value }))} placeholder="Create a strong password" helpText={`${passwordRequirements}.`} />
+                  <PasswordField id="registration-password" label={t.passwordLabel} value={form.password} onChange={(event) => setForm((current) => ({ ...current, password: event.target.value }))} placeholder="Create a strong password" helpText={`${passwordRequirements}.`} />
                 </div>
               </section>
             </div>
@@ -764,8 +851,8 @@ function RegisterPage() {
             </p>
 
             <div className="register-actions">
-              <button type="submit" className="primary-btn wide">Register as Resident</button>
-              <Link to="/" className="secondary-btn">Back to Login</Link>
+              <button type="submit" className="primary-btn wide">{t.registerAsResident}</button>
+              <Link to="/" className="secondary-btn">{t.backToLogin}</Link>
             </div>
           </form>
         </div>
@@ -774,7 +861,8 @@ function RegisterPage() {
   )
 }
 
-function DashboardPage({ profile, requests, services, announcements, events, payments, onLogout, onProfileUpdated }) {
+function DashboardPage({ profile, requests, services, announcements, events, payments, onLogout, onProfileUpdated, language, setLanguage }) {
+  const t = translations[language] || translations.en
   const [searchQuery, setSearchQuery] = useState('')
   const [editingProfile, setEditingProfile] = useState(false)
   const [showOnboarding, setShowOnboarding] = useState(() => {
@@ -922,7 +1010,7 @@ function DashboardPage({ profile, requests, services, announcements, events, pay
 
   return (
     <div className="dashboard-shell">
-      <header className="dashboard-topbar">
+      <header className="dashboard-topbar resident-topbar">
         <div className="brand-wrap">
           <img className="seal-logo tiny" src={barangaySeal} alt="Barangay Legaspi official seal" />
           <div>
@@ -938,19 +1026,20 @@ function DashboardPage({ profile, requests, services, announcements, events, pay
               type="text"
               value={searchQuery}
               onChange={(event) => setSearchQuery(event.target.value)}
-              placeholder="Search services, updates..."
+              placeholder={t.searchPlaceholder}
               aria-label="Search resident dashboard"
             />
           </label>
+          <LanguageToggle language={language} setLanguage={setLanguage} />
           <button className="notification-button" type="button" aria-label={`${unreadNotificationCount} unread notifications`} onClick={() => setNotificationsOpen((current) => !current)}>
             <span aria-hidden="true">🔔</span>
             {unreadNotificationCount > 0 && <span className="notification-count">{unreadNotificationCount}</span>}
           </button>
-          <button className="profile-pill" type="button" aria-label="Edit profile" onClick={() => setEditingProfile(true)}>
+          <button className="profile-pill" type="button" aria-label={t.manageProfile} onClick={() => setEditingProfile(true)}>
             <span className="avatar">{(profile.firstName || '').charAt(0)}</span>
             <span>{profile.firstName}</span>
           </button>
-          <button className="logout-btn" type="button" onClick={onLogout}>Log out</button>
+          <button className="logout-btn" type="button" onClick={onLogout}>{t.logout}</button>
         </div>
       </header>
 
@@ -958,36 +1047,37 @@ function DashboardPage({ profile, requests, services, announcements, events, pay
         <section className="content-panel resident-dashboard-panel">
           <div className="welcome-row">
             <div>
-              <p className="eyebrow">Good morning</p>
-              <h1>Welcome back, {profile.firstName}</h1>
+              <p className="eyebrow">{t.goodMorning}</p>
+              <h1>{t.welcomeBack}, {profile.firstName}</h1>
             </div>
-            <p>Pending requests: {pendingRequests}</p>
+            <p>{t.pendingRequests}: {pendingRequests}</p>
           </div>
 
           <nav className="mobile-quick-nav" aria-label="Quick access">
-            <button type="button" onClick={() => navigate('/requests')}><span aria-hidden="true">📄</span> Requests</button>
-            <button type="button" onClick={() => document.getElementById('announcements-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}><span aria-hidden="true">📢</span> Updates</button>
-            <button type="button" onClick={() => navigate('/events')}><span aria-hidden="true">📅</span> Events</button>
-            <button type="button" onClick={() => navigate('/payments')}><span aria-hidden="true">💳</span> Payments</button>
+            <button type="button" onClick={() => navigate('/requests')}><span aria-hidden="true">📄</span> {t.requests}</button>
+            <button type="button" onClick={() => document.getElementById('announcements-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}><span aria-hidden="true">📢</span> {t.updates}</button>
+            <button type="button" onClick={() => navigate('/events')}><span aria-hidden="true">📅</span> {t.events}</button>
+            <button type="button" onClick={() => navigate('/payments')}><span aria-hidden="true">💳</span> {t.payments}</button>
+            <button type="button" onClick={() => window.dispatchEvent(new Event('brgy-open-mau'))}><span aria-hidden="true">💬</span> {t.mauQuickAccess}</button>
           </nav>
 
           {profile.status && profile.status !== 'Active Resident' && (
             <div className="verification-banner">
-              <strong>Account verification pending</strong>
-              <span>An administrator must verify your Barangay Legaspi residency before you can submit service requests.</span>
+              <strong>{t.accountVerificationPending}</strong>
+              <span>{t.accountVerificationMessage}</span>
             </div>
           )}
 
           {showOnboarding && (
             <div className="onboarding-welcome" role="dialog" aria-labelledby="onboarding-title">
               <div>
-                <p className="eyebrow">New resident guide</p>
-                <h2 id="onboarding-title">Everything you need is here.</h2>
-                <p>Complete your profile, wait for verification, then choose a service to start a request. You can find updates and request progress on this dashboard.</p>
+                <p className="eyebrow">{t.newResidentGuide}</p>
+                <h2 id="onboarding-title">{t.everythingYouNeed}</h2>
+                <p>{t.residentOnboardingDescription}</p>
               </div>
               <div className="onboarding-actions">
-                <button type="button" className="secondary-btn small" onClick={completeOnboarding}>Got it</button>
-                <button type="button" className="primary-btn small" onClick={() => { completeOnboarding(); setEditingProfile(true) }}>Complete profile</button>
+                <button type="button" className="secondary-btn small" onClick={completeOnboarding}>{t.gotIt}</button>
+                <button type="button" className="primary-btn small" onClick={() => { completeOnboarding(); setEditingProfile(true) }}>{t.completeProfile}</button>
               </div>
             </div>
           )}
@@ -995,8 +1085,8 @@ function DashboardPage({ profile, requests, services, announcements, events, pay
           <div className="onboarding-card">
             <div className="onboarding-header">
               <div>
-                <p className="eyebrow">Resident progress</p>
-                <h2>Getting started checklist</h2>
+                <p className="eyebrow">{t.residentProgress}</p>
+                <h2>{t.gettingStartedChecklist}</h2>
               </div>
               <span className="progress-pill">{onboardingProgress}% complete</span>
             </div>
@@ -1019,35 +1109,35 @@ function DashboardPage({ profile, requests, services, announcements, events, pay
           <div className="stats-grid" aria-label="Resident summary">
             <article className="stat-card accent">
               <div className="stat-header">
-                <span className="label">Requests</span>
+                <span className="label">{t.requests}</span>
                 <span className="badge success">Live</span>
               </div>
               <div className="stat-number">{requests.length}</div>
-              <p>Total submitted</p>
+              <p>{t.totalSubmitted}</p>
             </article>
             <article className="stat-card">
               <div className="stat-header">
-                <span className="label">Pending</span>
+                <span className="label">{t.pending}</span>
                 <span className="badge warning">Review</span>
               </div>
               <div className="stat-number">{pendingRequests}</div>
-              <p>Awaiting action</p>
+              <p>{t.awaitingAction}</p>
             </article>
             <article className="stat-card">
               <div className="stat-header">
-                <span className="label">Services</span>
+                <span className="label">{t.services}</span>
                 <span className="badge info">Now</span>
               </div>
               <div className="stat-number">{filteredServices.length}</div>
-              <p>Available services</p>
+              <p>{t.availableServices}</p>
             </article>
             <article className="stat-card">
               <div className="stat-header">
-                <span className="label">Announcements</span>
+                <span className="label">{t.announcements}</span>
                 <span className="badge danger">Updated</span>
               </div>
               <div className="stat-number">{filteredAnnouncements.length}</div>
-              <p>Latest updates</p>
+              <p>{t.latestUpdates}</p>
             </article>
           </div>
 
@@ -1055,8 +1145,8 @@ function DashboardPage({ profile, requests, services, announcements, events, pay
             <div className="main-column">
               <article className="panel-card" id="announcements-section">
                 <div className="panel-header">
-                  <h2>Current Situation</h2>
-                  <span className="soft-label">Recent announcements</span>
+                  <h2>{t.currentSituation}</h2>
+                  <span className="soft-label">{t.recentAnnouncements}</span>
                 </div>
                 <ul className="notice-list">
                   {filteredAnnouncements.length > 0 ? filteredAnnouncements.map((announcement) => (
@@ -1074,8 +1164,8 @@ function DashboardPage({ profile, requests, services, announcements, events, pay
 
               <article className="panel-card">
                 <div className="panel-header">
-                  <h2>Available Services</h2>
-                  <span className="soft-label">Resident support</span>
+                  <h2>{t.availableServices}</h2>
+                  <span className="soft-label">{t.residentSupport}</span>
                 </div>
                 <div className="service-list">
                   {filteredServices.length > 0 ? filteredServices.map((service) => (
@@ -1095,7 +1185,7 @@ function DashboardPage({ profile, requests, services, announcements, events, pay
                         {(requests || []).find((request) => request.type === service.title && request.status !== 'Rejected')?.status || 'Available'}
                       </span>
                     </button>
-                  )) : <div className="empty-state">No services match your search.</div>}
+                  )) : <div className="empty-state">{t.noServicesMatchSearch}</div>}
                 </div>
               </article>
             </div>
@@ -1106,22 +1196,22 @@ function DashboardPage({ profile, requests, services, announcements, events, pay
                   <div className="profile-avatar">{(profile.firstName || 'R').charAt(0).toUpperCase()}</div>
                   <div>
                     <h3>{profile.firstName} {profile.lastName}</h3>
-                    <span>Resident account</span>
+                    <span>{t.residentAccount}</span>
                   </div>
-                  <button type="button" className="secondary-btn tiny" onClick={() => setEditingProfile(true)}>Edit</button>
+                  <button type="button" className="secondary-btn tiny" onClick={() => setEditingProfile(true)}>{t.edit}</button>
                 </div>
                 <dl className="profile-list">
-                  <div><dt>Household ID</dt><dd>{profile.householdId || 'N/A'}</dd></div>
-                  <div><dt>Address</dt><dd>{profile.address || 'N/A'}</dd></div>
-                  <div><dt>Email</dt><dd>{profile.email || 'N/A'}</dd></div>
-                  <div><dt>Mobile</dt><dd>{profile.mobile || 'N/A'}</dd></div>
+                  <div><dt>{t.householdId}</dt><dd>{profile.householdId || 'N/A'}</dd></div>
+                  <div><dt>{t.homeAddressLabel}</dt><dd>{profile.address || 'N/A'}</dd></div>
+                  <div><dt>{t.emailAddressLabel}</dt><dd>{profile.email || 'N/A'}</dd></div>
+                  <div><dt>{t.mobileNumberLabel}</dt><dd>{profile.mobile || 'N/A'}</dd></div>
                 </dl>
               </article>
 
               <article className="panel-card compact-panel">
                 <div className="panel-header notification-panel-header">
-                  <h2>Updates &amp; Alerts</h2>
-                  <button type="button" className="text-button" onClick={markNotificationsRead} disabled={unreadNotificationCount === 0}>Mark all read</button>
+                  <h2>{t.updates} &amp; {t.announcements}</h2>
+                  <button type="button" className="text-button" onClick={markNotificationsRead} disabled={unreadNotificationCount === 0}>{t.markAllRead}</button>
                 </div>
                 <ul className="notification-feed">
                   {residentNotifications.length > 0 ? residentNotifications.map((notification) => (
@@ -1129,13 +1219,13 @@ function DashboardPage({ profile, requests, services, announcements, events, pay
                       <strong>{notification.title}</strong>
                       <small>{notification.detail}</small>
                     </li>
-                  )) : <li><div className="empty-state">No new alerts.</div></li>}
+                  )) : <li><div className="empty-state">{t.noNewAlerts}</div></li>}
                 </ul>
               </article>
 
               <article className="panel-card">
                 <div className="panel-header left-align">
-                  <h2>Upcoming Events</h2>
+                  <h2>{t.upcomingEvents}</h2>
                 </div>
                 <div className="service-list">
                   {filteredEvents.length > 0 ? filteredEvents.map((event) => (
@@ -1146,13 +1236,13 @@ function DashboardPage({ profile, requests, services, announcements, events, pay
                         <small>{event.date} • {event.location}</small>
                       </span>
                     </div>
-                  )) : <div className="empty-state">No events match your search.</div>}
+                  )) : <div className="empty-state">{t.noEventsMatchSearch}</div>}
                 </div>
               </article>
 
               <article className="panel-card">
                 <div className="panel-header left-align">
-                  <h2>Payments</h2>
+                  <h2>{t.payments}</h2>
                 </div>
                 <div className="service-list">
                   {filteredPayments.length > 0 ? filteredPayments.map((payment) => (
@@ -1163,7 +1253,7 @@ function DashboardPage({ profile, requests, services, announcements, events, pay
                         <small>{payment.id} • {payment.status} • {payment.amount}</small>
                       </span>
                     </div>
-                  )) : <div className="empty-state">No payments match your search.</div>}
+                  )) : <div className="empty-state">{t.noPaymentsMatchSearch}</div>}
                 </div>
               </article>
             </aside>
@@ -1174,8 +1264,8 @@ function DashboardPage({ profile, requests, services, announcements, events, pay
         <div className="notification-popover" role="dialog" aria-label="Notification center">
           <div className="notification-popover-header">
             <div>
-              <strong>Notification center</strong>
-              <small>{unreadNotificationCount ? `${unreadNotificationCount} unread` : 'All caught up'}</small>
+              <strong>{t.notificationCenter}</strong>
+              <small>{unreadNotificationCount ? `${unreadNotificationCount} ${t.unread}` : t.allCaughtUp}</small>
             </div>
             <button type="button" className="modal-close" aria-label="Close notification center" onClick={() => setNotificationsOpen(false)}>×</button>
           </div>
@@ -1185,7 +1275,7 @@ function DashboardPage({ profile, requests, services, announcements, events, pay
                 <strong>{notification.title}</strong>
                 <small>{notification.detail}</small>
               </button>
-            )) : <span className="empty-state">No notifications yet.</span>}
+            )) : <span className="empty-state">{t.noNotificationsYet}</span>}
           </div>
         </div>
       )}
@@ -1195,8 +1285,8 @@ function DashboardPage({ profile, requests, services, announcements, events, pay
             <button type="button" className="modal-close" onClick={() => setEditingProfile(false)} aria-label="Close profile editor">×</button>
             <div className="modal-header">
               <div>
-                <h2>Edit profile</h2>
-                <p>Update your resident account information.</p>
+                <h2>{t.manageProfile}</h2>
+                <p>{t.accountVerificationMessage || 'Update your resident account information.'}</p>
               </div>
             </div>
             <div className="modal-body">
@@ -1223,8 +1313,8 @@ function DashboardPage({ profile, requests, services, announcements, events, pay
                 ))}
               </div>
               <div className="modal-actions">
-                <button type="button" className="secondary-btn small" onClick={() => setEditingProfile(false)}>Cancel</button>
-                <button type="submit" className="primary-btn small" disabled={savingProfile}>{savingProfile ? 'Saving...' : 'Save changes'}</button>
+                <button type="button" className="secondary-btn small" onClick={() => setEditingProfile(false)}>{t.cancel}</button>
+                <button type="submit" className="primary-btn small" disabled={savingProfile}>{savingProfile ? t.saving : t.saveChanges}</button>
               </div>
             </div>
           </form>
@@ -1234,15 +1324,30 @@ function DashboardPage({ profile, requests, services, announcements, events, pay
   )
 }
 
-function RequestsPage({ requests, onSubmit, onLogout }) {
+function RequestsPage({ requests, onSubmit, onRequestUpdated, onLogout, language, setLanguage }) {
+  const t = translations[language] || translations.en
   const requestTypes = ['Barangay Certificate', 'Barangay Clearance', 'Medical Assistance', 'Emergency Help']
   const requestedService = new URLSearchParams(window.location.search).get('service')
   const [form, setForm] = useState({
     type: requestTypes.includes(requestedService) ? requestedService : 'Barangay Certificate',
     purpose: '',
     notes: '',
+    deliveryMethod: 'online',
+    deliveryNote: '',
   })
   const [submitted, setSubmitted] = useState(false)
+  const [followUpDrafts, setFollowUpDrafts] = useState({})
+  const [followUpBusy, setFollowUpBusy] = useState({})
+  const [followUpNotice, setFollowUpNotice] = useState('')
+  const [reminderDates, setReminderDates] = useState(() => {
+    try {
+      const reminders = JSON.parse(localStorage.getItem(requestReminderStorageKey) || '{}')
+      return Object.fromEntries(Object.entries(reminders).map(([id, reminder]) => [id, reminder.scheduledAt]))
+    } catch {
+      return {}
+    }
+  })
+  const [reminderNotice, setReminderNotice] = useState('')
 
   const requestStatusSteps = ['Submitted', 'In Review', 'Finalized']
   const recentRequests = [...(requests || [])].slice(0, 3)
@@ -1278,6 +1383,8 @@ function RequestsPage({ requests, onSubmit, onLogout }) {
           type: form.type,
           purpose: cleanedPurpose,
           notes: cleanedNotes,
+          deliveryMethod: form.deliveryMethod,
+          deliveryNote: sanitizeText(form.deliveryNote),
         }),
       })
 
@@ -1294,6 +1401,9 @@ function RequestsPage({ requests, onSubmit, onLogout }) {
         status: data.request.status,
         date: new Date(data.request.date).toLocaleDateString(),
         notes: data.request.notes,
+        deliveryMethod: data.request.deliveryMethod || form.deliveryMethod,
+        deliveryNote: data.request.deliveryNote || sanitizeText(form.deliveryNote),
+        followUps: data.request.followUps || [],
       })
 
       setSubmitted(true)
@@ -1301,9 +1411,74 @@ function RequestsPage({ requests, onSubmit, onLogout }) {
         type: 'Barangay Certificate',
         purpose: '',
         notes: '',
+        deliveryMethod: 'online',
+        deliveryNote: '',
       })
     } catch (error) {
       alert(error.message || 'Request submission failed.')
+    }
+  }
+
+  const handleFollowUpSubmit = async (event, requestId) => {
+    event.preventDefault()
+    const message = sanitizeText(followUpDrafts[requestId] || '')
+    if (!message) return
+
+    setFollowUpBusy((current) => ({ ...current, [requestId]: true }))
+    setFollowUpNotice('')
+    try {
+      const response = await fetch(`${API_BASE}/requests/${requestId}/follow-ups`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message }),
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(data.message || 'Unable to send follow-up.')
+      onRequestUpdated?.(data.request)
+      setFollowUpDrafts((current) => ({ ...current, [requestId]: '' }))
+      setFollowUpNotice(requestId)
+    } catch (error) {
+      alert(error.message || 'Unable to send follow-up.')
+    } finally {
+      setFollowUpBusy((current) => ({ ...current, [requestId]: false }))
+    }
+  }
+
+  const handleSetReminder = async (event, request) => {
+    event.preventDefault()
+    const scheduledAt = new Date(reminderDates[request.id] || '').getTime()
+    if (!Number.isFinite(scheduledAt) || scheduledAt <= Date.now()) {
+      alert(t.reminderFutureRequired)
+      return
+    }
+
+    try {
+      if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
+        await Notification.requestPermission()
+      }
+
+      const response = await fetch(`${API_BASE}/requests/${request.id}/reminders`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ scheduledAt: new Date(scheduledAt).toISOString() }),
+      })
+
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) {
+        throw new Error(data.message || 'Unable to schedule reminder.')
+      }
+
+      const reminders = JSON.parse(localStorage.getItem(requestReminderStorageKey) || '{}')
+      reminders[request.id] = {
+        requestId: request.id,
+        requestType: request.type,
+        scheduledAt: new Date(scheduledAt).toISOString(),
+        notified: false,
+      }
+      localStorage.setItem(requestReminderStorageKey, JSON.stringify(reminders))
+      setReminderNotice(request.id)
+    } catch (error) {
+      alert(error.message || 'Unable to save this reminder.')
     }
   }
 
@@ -1319,31 +1494,43 @@ function RequestsPage({ requests, onSubmit, onLogout }) {
         </div>
 
         <div className="topbar-actions">
-          <button className="logout-btn" type="button" onClick={onLogout}>Log out</button>
+          <LanguageToggle language={language} setLanguage={setLanguage} />
+          <button className="logout-btn" type="button" onClick={onLogout}>{t.logout}</button>
         </div>
       </header>
 
       <main className="page-content padded">
         <div className="page-card">
           <div className="panel-header big-gap">
-            <h2>Request a Service</h2>
-            <Link to="/dashboard" className="secondary-btn small">Back to Dashboard</Link>
+            <h2>{t.requestService}</h2>
+            <Link to="/dashboard" className="secondary-btn small">{t.backToDashboard}</Link>
           </div>
 
           <form className="request-form" onSubmit={handleSubmit}>
             <div className="form-grid two-col">
               <div className="input-block">
-                <label>Request Type</label>
+                <label>{t.requestType}</label>
                 <select name="type" value={form.type} onChange={handleChange}>
                   {requestTypes.map((type) => <option key={type}>{type}</option>)}
                 </select>
               </div>
               <div className="input-block">
-                <label>Purpose</label>
+                <label htmlFor="delivery-method">{t.deliveryMethodLabel}</label>
+                <select id="delivery-method" name="deliveryMethod" value={form.deliveryMethod} onChange={handleChange}>
+                  <option value="online">{t.onlineCopy}</option>
+                  <option value="physical">{t.physicalCopy}</option>
+                </select>
+              </div>
+              <div className="input-block">
+                <label>{t.purpose}</label>
                 <input type="text" name="purpose" value={form.purpose} onChange={handleChange} placeholder="e.g. school requirement" />
               </div>
               <div className="input-block full-width">
-                <label>Notes</label>
+                <label htmlFor="delivery-note">{t.deliveryNoteLabel}</label>
+                <input id="delivery-note" type="text" name="deliveryNote" value={form.deliveryNote} onChange={handleChange} maxLength={500} placeholder={t.deliveryNoteLabel} />
+              </div>
+              <div className="input-block full-width">
+                <label>{t.notes}</label>
                 <textarea name="notes" rows="5" value={form.notes} onChange={handleChange} placeholder="Add details for the barangay staff"></textarea>
               </div>
             </div>
@@ -1352,7 +1539,7 @@ function RequestsPage({ requests, onSubmit, onLogout }) {
               <div className="success-banner">Request submitted successfully. Barangay staff will review it soon.</div>
             )}
 
-            <button type="submit" className="primary-btn wide">Submit Request</button>
+            <button type="submit" className="primary-btn wide">{t.submitRequest}</button>
           </form>
 
           <div className="status-tracker-panel">
@@ -1378,20 +1565,57 @@ function RequestsPage({ requests, onSubmit, onLogout }) {
                     })}
                   </div>
                   <p>{getRequestStatusMessage(item.status)}</p>
+                  <div className="request-delivery-summary">
+                    <strong>{t.deliveryMethodLabel}:</strong> {item.deliveryMethod === 'physical' ? t.physicalCopy : t.onlineCopy}
+                    {item.deliveryNote && <p>{item.deliveryNote}</p>}
+                  </div>
+                  <form className="request-reminder-form" onSubmit={(event) => handleSetReminder(event, item)}>
+                    <label htmlFor={`reminder-${item.id}`}>{t.remindMeLabel}</label>
+                    <input
+                      id={`reminder-${item.id}`}
+                      type="datetime-local"
+                      required
+                      value={reminderDates[item.id] || ''}
+                      onChange={(event) => setReminderDates((current) => ({ ...current, [item.id]: event.target.value }))}
+                    />
+                    <button type="submit" className="secondary-btn small">{t.setReminder}</button>
+                    {reminderNotice === item.id && <small role="status">{t.reminderScheduled} {new Date(reminderDates[item.id]).toLocaleString()}</small>}
+                  </form>
+                  {(item.followUps || []).map((followUp) => (
+                    <div className="request-follow-up-entry" key={followUp.id}>
+                      <small>{new Date(followUp.createdAt).toLocaleString()}</small>
+                      <p>{followUp.message}</p>
+                    </div>
+                  ))}
+                  <form className="request-follow-up-form" onSubmit={(event) => handleFollowUpSubmit(event, item.id)}>
+                    <label htmlFor={`follow-up-${item.id}`}>{t.followUpLabel}</label>
+                    <textarea
+                      id={`follow-up-${item.id}`}
+                      rows={2}
+                      maxLength={1000}
+                      value={followUpDrafts[item.id] || ''}
+                      onChange={(event) => setFollowUpDrafts((current) => ({ ...current, [item.id]: event.target.value }))}
+                      placeholder={t.followUpPlaceholder}
+                    />
+                    <button type="submit" className="secondary-btn small" disabled={followUpBusy[item.id] || !String(followUpDrafts[item.id] || '').trim()}>
+                      {followUpBusy[item.id] ? t.working : t.sendFollowUp}
+                    </button>
+                    {followUpNotice === item.id && <small role="status">{t.followUpSent}</small>}
+                  </form>
                 </div>
               )
             }) : <div className="empty-state">Your recent requests will appear here after submission.</div>}
           </div>
 
           <div className="request-table-wrap">
-            <h3>Recent Requests</h3>
+            <h3>{t.recentRequests}</h3>
             <table className="request-table">
               <thead>
                 <tr>
                   <th>Type</th>
-                  <th>Purpose</th>
+                  <th>{t.purpose}</th>
                   <th>Status</th>
-                  <th>When</th>
+                  <th>{t.when}</th>
                 </tr>
               </thead>
               <tbody>
@@ -1412,10 +1636,11 @@ function RequestsPage({ requests, onSubmit, onLogout }) {
   )
 }
 
-function ProfilePage({ profile, onLogout }) {
+function ProfilePage({ profile, onLogout, language, setLanguage }) {
+  const t = translations[language] || translations.en
   return (
     <div className="dashboard-shell">
-      <header className="dashboard-topbar">
+      <header className="dashboard-topbar resident-topbar">
         <div className="brand-wrap">
           <img className="seal-logo tiny" src={barangaySeal} alt="Barangay Legaspi official seal" />
           <div>
@@ -1425,7 +1650,8 @@ function ProfilePage({ profile, onLogout }) {
         </div>
 
         <div className="topbar-actions">
-          <button className="logout-btn" type="button" onClick={onLogout}>Log out</button>
+          <LanguageToggle language={language} setLanguage={setLanguage} />
+          <button className="logout-btn" type="button" onClick={onLogout}>{t.logout}</button>
         </div>
       </header>
 
@@ -1435,26 +1661,26 @@ function ProfilePage({ profile, onLogout }) {
             <div className="profile-avatar large">{profile.firstName.charAt(0)}</div>
             <div>
               <h2>{profile.firstName} {profile.lastName}</h2>
-              <p>Resident • Household ID: {profile.householdId}</p>
+              <p>{t.resident} • {t.householdId}: {profile.householdId}</p>
             </div>
           </div>
 
           <div className="profile-grid">
             <div className="info-box">
-              <h3>Contact Information</h3>
+              <h3>{t.contact || 'Contact Information'}</h3>
               <dl>
-                <div><dt>Mobile</dt><dd>{profile.mobile}</dd></div>
-                <div><dt>Email</dt><dd>{profile.email}</dd></div>
-                <div><dt>Address</dt><dd>{profile.address}</dd></div>
+                <div><dt>{t.mobileNumberLabel}</dt><dd>{profile.mobile}</dd></div>
+                <div><dt>{t.emailAddressLabel}</dt><dd>{profile.email}</dd></div>
+                <div><dt>{t.homeAddressLabel}</dt><dd>{profile.address}</dd></div>
               </dl>
             </div>
 
             <div className="info-box">
-              <h3>Household Details</h3>
+              <h3>{t.householdDetails}</h3>
               <dl>
-                <div><dt>Family Members</dt><dd>{profile.familyMembers}</dd></div>
-                <div><dt>Barangay Status</dt><dd>{profile.status}</dd></div>
-                <div><dt>Last Updated</dt><dd>June 24, 2026</dd></div>
+                <div><dt>{t.familyMembers}</dt><dd>{profile.familyMembers}</dd></div>
+                <div><dt>{t.status}</dt><dd>{profile.status}</dd></div>
+                <div><dt>{t.when}</dt><dd>June 24, 2026</dd></div>
               </dl>
             </div>
           </div>
@@ -1468,7 +1694,8 @@ function ProfilePage({ profile, onLogout }) {
   )
 }
 
-function PaymentsPage({ payments, onLogout }) {
+function PaymentsPage({ payments, onLogout, language, setLanguage }) {
+  const t = translations[language] || translations.en
   return (
     <div className="dashboard-shell">
       <header className="dashboard-topbar">
@@ -1480,15 +1707,16 @@ function PaymentsPage({ payments, onLogout }) {
           </div>
         </div>
         <div className="topbar-actions">
-          <button className="logout-btn" type="button" onClick={onLogout}>Log out</button>
+          <LanguageToggle language={language} setLanguage={setLanguage} />
+          <button className="logout-btn" type="button" onClick={onLogout}>{t.logout}</button>
         </div>
       </header>
 
       <main className="page-content padded">
         <div className="page-card">
           <div className="panel-header big-gap">
-            <h2>Payments</h2>
-            <Link to="/dashboard" className="secondary-btn small">Back to Dashboard</Link>
+            <h2>{t.payments}</h2>
+            <Link to="/dashboard" className="secondary-btn small">{t.backToDashboard}</Link>
           </div>
 
           <div className="request-table-wrap">
@@ -1519,7 +1747,8 @@ function PaymentsPage({ payments, onLogout }) {
   )
 }
 
-function EventsPage({ events, onLogout }) {
+function EventsPage({ events, onLogout, language, setLanguage }) {
+  const t = translations[language] || translations.en
   return (
     <div className="dashboard-shell">
       <header className="dashboard-topbar">
@@ -1531,15 +1760,16 @@ function EventsPage({ events, onLogout }) {
           </div>
         </div>
         <div className="topbar-actions">
-          <button className="logout-btn" type="button" onClick={onLogout}>Log out</button>
+          <LanguageToggle language={language} setLanguage={setLanguage} />
+          <button className="logout-btn" type="button" onClick={onLogout}>{t.logout}</button>
         </div>
       </header>
 
       <main className="page-content padded">
         <div className="page-card">
           <div className="panel-header big-gap">
-            <h2>Upcoming Events</h2>
-            <Link to="/dashboard" className="secondary-btn small">Back to Dashboard</Link>
+            <h2>{t.upcomingEvents}</h2>
+            <Link to="/dashboard" className="secondary-btn small">{t.backToDashboard}</Link>
           </div>
 
           <div className="service-list">
@@ -1559,9 +1789,110 @@ function EventsPage({ events, onLogout }) {
   )
 }
 
-function SettingsPage({ profile, onLogout }) {
+function SettingsPage({ profile, onLogout, language, setLanguage }) {
+  const t = translations[language] || translations.en
+  const [settingsProfile, setSettingsProfile] = useState(profile)
   const [passwordForm, setPasswordForm] = useState({ currentPassword: '', newPassword: '', confirmPassword: '' })
   const [savingPassword, setSavingPassword] = useState(false)
+  const [mfaEnabled, setMfaEnabled] = useState(Boolean(profile.mfaEnabled))
+  const [mfaSetup, setMfaSetup] = useState(null)
+  const [mfaCode, setMfaCode] = useState('')
+  const [mfaCurrentPassword, setMfaCurrentPassword] = useState('')
+  const [mfaBusy, setMfaBusy] = useState(false)
+  const [mfaMessage, setMfaMessage] = useState('')
+
+  useEffect(() => {
+    let isMounted = true
+    const loadSecuritySettings = async () => {
+      try {
+        const response = await fetch(`${API_BASE}/profile`)
+        const data = await response.json().catch(() => ({}))
+        if (!response.ok) throw new Error(data.message || 'Unable to load security settings.')
+        if (isMounted) {
+          setSettingsProfile(data.user || profile)
+          setMfaEnabled(Boolean(data.user?.mfaEnabled))
+        }
+        if (data.user?.mfaSetupPending) {
+          const setupResponse = await fetch(`${API_BASE}/mfa/setup`, { method: 'POST' })
+          const setupData = await setupResponse.json().catch(() => ({}))
+          if (!setupResponse.ok) throw new Error(setupData.message || 'Unable to restore authenticator setup.')
+          if (isMounted) setMfaSetup(setupData)
+        }
+      } catch (error) {
+        if (isMounted) setMfaMessage(error.message || 'Unable to load security settings.')
+      }
+    }
+    loadSecuritySettings()
+    return () => { isMounted = false }
+  }, [])
+
+  const startMfaSetup = async (rotate = false) => {
+    setMfaBusy(true)
+    setMfaMessage('')
+    try {
+      const response = await fetch(`${API_BASE}/mfa/setup`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rotate }),
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(data.message || 'Unable to start MFA setup.')
+      setMfaSetup(data)
+      setMfaCode('')
+    } catch (error) {
+      setMfaMessage(error.message || 'Unable to start MFA setup.')
+    } finally {
+      setMfaBusy(false)
+    }
+  }
+
+  const enableMfa = async (event) => {
+    event.preventDefault()
+    setMfaBusy(true)
+    setMfaMessage('')
+    try {
+      const response = await fetch(`${API_BASE}/mfa/enable`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: mfaCode }),
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(data.message || 'Unable to enable MFA.')
+      setMfaEnabled(true)
+      setMfaSetup(null)
+      setMfaCode('')
+      setMfaMessage(data.message || t.mfaEnabled)
+    } catch (error) {
+      setMfaMessage(error.message || 'Unable to enable MFA.')
+    } finally {
+      setMfaBusy(false)
+    }
+  }
+
+  const disableMfa = async (event) => {
+    event.preventDefault()
+    setMfaBusy(true)
+    setMfaMessage('')
+    try {
+      const response = await fetch(`${API_BASE}/mfa/disable`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: mfaCode, currentPassword: mfaCurrentPassword }),
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(data.message || 'Unable to disable MFA.')
+      setMfaEnabled(false)
+      setMfaCode('')
+      setMfaCurrentPassword('')
+      setMfaMessage(data.message || t.mfaDisabled)
+    } catch (error) {
+      setMfaMessage(error.message || 'Unable to disable MFA.')
+    } finally {
+      setMfaBusy(false)
+    }
+  }
+
+  const dashboardPath = settingsProfile.role === 'admin' ? '/admin' : settingsProfile.role === 'staff' ? '/staff' : '/dashboard'
 
   const handlePasswordSubmit = async (event) => {
     event.preventDefault()
@@ -1599,47 +1930,84 @@ function SettingsPage({ profile, onLogout }) {
           <img className="seal-logo tiny" src={barangaySeal} alt="Barangay Legaspi official seal" />
           <div>
             <div className="brand-name">Barangay Legaspi</div>
-            <small>Resident Portal</small>
+            <small>{settingsProfile.role === 'admin' ? t.adminPortal : settingsProfile.role === 'staff' ? t.staffPortal : t.residentPortal}</small>
           </div>
         </div>
         <div className="topbar-actions">
-          <button className="logout-btn" type="button" onClick={onLogout}>Log out</button>
+          <LanguageToggle language={language} setLanguage={setLanguage} />
+          <button className="logout-btn" type="button" onClick={onLogout}>{t.logout}</button>
         </div>
       </header>
 
       <main className="page-content padded">
         <div className="page-card profile-page">
           <div className="profile-banner">
-            <div className="profile-avatar large">{profile.firstName.charAt(0)}</div>
+            <div className="profile-avatar large">{(settingsProfile.firstName || '?').charAt(0)}</div>
             <div>
-              <h2>Preferences</h2>
-              <p>Manage your resident account settings</p>
+              <h2>{t.settings}</h2>
+              <p>{t.manageProfile}</p>
             </div>
           </div>
 
           <div className="profile-grid">
             <div className="info-box">
-              <h3>Account</h3>
+              <h3>{t.account}</h3>
               <dl>
-                <div><dt>Name</dt><dd>{profile.firstName} {profile.lastName}</dd></div>
-                <div><dt>Email</dt><dd>{profile.email}</dd></div>
-                <div><dt>Mobile</dt><dd>{profile.mobile}</dd></div>
+                <div><dt>{t.name}</dt><dd>{settingsProfile.firstName} {settingsProfile.lastName}</dd></div>
+                <div><dt>{t.email}</dt><dd>{settingsProfile.email}</dd></div>
+                <div><dt>{t.mobileNumberLabel}</dt><dd>{settingsProfile.mobile}</dd></div>
               </dl>
             </div>
 
             <div className="info-box">
-              <h3>Security</h3>
+              <h3>{t.security}</h3>
               <form className="password-change-form" onSubmit={handlePasswordSubmit}>
-                <PasswordField id="current-password" label="Current password" autoComplete="current-password" value={passwordForm.currentPassword} onChange={(event) => setPasswordForm((current) => ({ ...current, currentPassword: event.target.value }))} />
-                <PasswordField id="new-password" label="New password" value={passwordForm.newPassword} onChange={(event) => setPasswordForm((current) => ({ ...current, newPassword: event.target.value }))} />
-                <PasswordField id="confirm-password" label="Confirm new password" value={passwordForm.confirmPassword} onChange={(event) => setPasswordForm((current) => ({ ...current, confirmPassword: event.target.value }))} helpText={`${passwordRequirements}.`} />
-                <button type="submit" className="primary-btn small" disabled={savingPassword}>{savingPassword ? 'Saving...' : 'Change password'}</button>
+                <PasswordField id="current-password" label={t.currentPassword} autoComplete="current-password" value={passwordForm.currentPassword} onChange={(event) => setPasswordForm((current) => ({ ...current, currentPassword: event.target.value }))} />
+                <PasswordField id="new-password" label={t.newPassword} value={passwordForm.newPassword} onChange={(event) => setPasswordForm((current) => ({ ...current, newPassword: event.target.value }))} />
+                <PasswordField id="confirm-password" label={t.confirmNewPassword} value={passwordForm.confirmPassword} onChange={(event) => setPasswordForm((current) => ({ ...current, confirmPassword: event.target.value }))} helpText={`${passwordRequirements}.`} />
+                <button type="submit" className="primary-btn small" disabled={savingPassword}>{savingPassword ? t.saving : t.changePassword}</button>
               </form>
+            </div>
+
+            <div className="info-box mfa-settings">
+              <h3>{t.mfaSetupTitle}</h3>
+              <p>{t.mfaSetupHint}</p>
+              {mfaEnabled ? (
+                <form className="password-change-form" onSubmit={disableMfa}>
+                  <p className="mfa-status enabled">{t.mfaEnabled}</p>
+                  <label className="input-block">
+                    <span>{t.mfaCurrentPassword}</span>
+                    <input type="password" autoComplete="current-password" value={mfaCurrentPassword} onChange={(event) => setMfaCurrentPassword(event.target.value)} required />
+                  </label>
+                  <label className="input-block">
+                    <span>{t.mfaCodeLabel}</span>
+                    <input inputMode="numeric" autoComplete="one-time-code" maxLength={6} value={mfaCode} onChange={(event) => setMfaCode(event.target.value.replace(/\D/g, '').slice(0, 6))} required />
+                  </label>
+                  <button type="submit" className="secondary-btn small" disabled={mfaBusy}>{mfaBusy ? t.working : t.mfaDisableAction}</button>
+                </form>
+              ) : mfaSetup ? (
+                <form className="password-change-form" onSubmit={enableMfa}>
+                  <p>{t.mfaSetupInstructions}</p>
+                  <label className="input-block">
+                    <span>{t.mfaSecretLabel}</span>
+                    <input className="mfa-secret-input" value={mfaSetup.secret} readOnly onFocus={(event) => event.target.select()} aria-label={t.mfaSecretLabel} />
+                  </label>
+                  <button type="button" className="secondary-btn small" onClick={() => startMfaSetup(true)} disabled={mfaBusy}>{mfaBusy ? t.working : t.mfaRotateKey}</button>
+                  <label className="input-block">
+                    <span>{t.mfaCodeLabel}</span>
+                    <input inputMode="numeric" autoComplete="one-time-code" maxLength={6} value={mfaCode} onChange={(event) => setMfaCode(event.target.value.replace(/\D/g, '').slice(0, 6))} required />
+                  </label>
+                  <button type="submit" className="primary-btn small" disabled={mfaBusy}>{mfaBusy ? t.working : t.mfaEnableAction}</button>
+                </form>
+              ) : (
+                <button type="button" className="primary-btn small" onClick={startMfaSetup} disabled={mfaBusy}>{mfaBusy ? t.working : t.mfaSetupAction}</button>
+              )}
+              {mfaMessage && <p className="mfa-message" role="status">{mfaMessage}</p>}
             </div>
           </div>
 
           <div className="profile-footer">
-            <Link to="/dashboard" className="secondary-btn small">Back to Dashboard</Link>
+            <Link to={dashboardPath} className="secondary-btn small">{t.backToDashboard}</Link>
           </div>
         </div>
       </main>
@@ -1647,7 +2015,8 @@ function SettingsPage({ profile, onLogout }) {
   )
 }
 
-function StaffPage({ requests, staffMembers = [], announcements = [], currentUser, userRole = 'staff', onProcessRequest, onLogout, onAddStaffMember, onAddAnnouncement, onDeleteAnnouncement, onDeleteStaffMember }) {
+function StaffPage({ requests, staffMembers = [], announcements = [], currentUser, userRole = 'staff', onProcessRequest, onLogout, onAddStaffMember, onAddAnnouncement, onDeleteAnnouncement, onDeleteStaffMember, language, setLanguage }) {
+  const t = translations[language] || translations.en
   const [activeTab, setActiveTab] = useState('queue')
   const [openRequestPanel, setOpenRequestPanel] = useState(null)
   const [queueSearch, setQueueSearch] = useState('')
@@ -1663,11 +2032,20 @@ function StaffPage({ requests, staffMembers = [], announcements = [], currentUse
     mobile: '',
     password: '',
   })
+  const [connectedSocialAccounts, setConnectedSocialAccounts] = useState(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem('brgy-legaspi-social-accounts') || 'null')
+      return Array.isArray(saved) && saved.length > 0 ? saved : defaultSocialAccounts
+    } catch {
+      return defaultSocialAccounts
+    }
+  })
   const [announcementForm, setAnnouncementForm] = useState({
     title: '',
     content: '',
     tag: 'green',
     date: new Date().toLocaleDateString(),
+    socialChannels: [],
   })
   const [archiveFiles, setArchiveFiles] = useState([])
   const [archiveStatus, setArchiveStatus] = useState(null)
@@ -1793,6 +2171,27 @@ function StaffPage({ requests, staffMembers = [], announcements = [], currentUse
     }
   }
 
+  useEffect(() => {
+    try {
+      localStorage.setItem('brgy-legaspi-social-accounts', JSON.stringify(connectedSocialAccounts))
+    } catch {
+      // ignore storage write failures in restricted browser contexts
+    }
+  }, [connectedSocialAccounts])
+
+  const toggleAnnouncementChannel = (channelKey) => {
+    setAnnouncementForm((prev) => {
+      const nextChannels = new Set(prev.socialChannels || [])
+      if (nextChannels.has(channelKey)) {
+        nextChannels.delete(channelKey)
+      } else {
+        nextChannels.add(channelKey)
+      }
+
+      return { ...prev, socialChannels: Array.from(nextChannels) }
+    })
+  }
+
   const handleAnnouncementSubmit = async (event) => {
     event.preventDefault()
     const title = sanitizeText(announcementForm.title)
@@ -1809,6 +2208,7 @@ function StaffPage({ requests, staffMembers = [], announcements = [], currentUse
         title,
         content,
         date: announcementForm.date || new Date().toLocaleDateString(),
+        socialChannels: announcementForm.socialChannels || [],
       })
 
       setAnnouncementForm({
@@ -1816,6 +2216,7 @@ function StaffPage({ requests, staffMembers = [], announcements = [], currentUse
         content: '',
         tag: 'green',
         date: new Date().toLocaleDateString(),
+        socialChannels: [],
       })
     } catch (error) {
       alert(error.message || 'Unable to publish announcement.')
@@ -1824,18 +2225,20 @@ function StaffPage({ requests, staffMembers = [], announcements = [], currentUse
 
   return (
     <div className="dashboard-shell">
-      <header className="dashboard-topbar">
+      <header className="dashboard-topbar staff-topbar">
         <div className="brand-wrap">
           <img className="seal-logo tiny" src={barangaySeal} alt="Barangay Legaspi official seal" />
           <div>
             <div className="brand-name">Barangay Legaspi</div>
-            <small>Staff Portal</small>
+            <small>{t.staffPortal}</small>
           </div>
         </div>
 
         <div className="topbar-actions">
-          <span className="role-chip">{getDisplayName(currentUser)} • {userRole === 'admin' ? 'Administrator' : 'Staff'}</span>
-          <button className="logout-btn" type="button" onClick={onLogout}>Log out</button>
+          <LanguageToggle language={language} setLanguage={setLanguage} />
+          <Link to="/settings" className="secondary-btn small">{t.settings}</Link>
+          <span className="role-chip">{getDisplayName(currentUser)} • {userRole === 'admin' ? t.administrator : t.staffRole}</span>
+          <button className="logout-btn" type="button" onClick={onLogout}>{t.logout}</button>
         </div>
       </header>
 
@@ -1847,35 +2250,35 @@ function StaffPage({ requests, staffMembers = [], announcements = [], currentUse
               onClick={() => setActiveTab('queue')}
               style={{cursor: 'pointer'}}
             >
-              <span className="nav-icon">📄</span><span>Queue</span>
+              <span className="nav-icon">📄</span><span>{t.queue}</span>
             </span>
             <span 
               className={`nav-item ${activeTab === 'approvals' ? 'active' : ''}`}
               onClick={() => setActiveTab('approvals')}
               style={{cursor: 'pointer'}}
             >
-              <span className="nav-icon">✓</span><span>Approvals</span>
+              <span className="nav-icon">✓</span><span>{t.approvals}</span>
             </span>
             <span 
               className={`nav-item ${activeTab === 'reports' ? 'active' : ''}`}
               onClick={() => setActiveTab('reports')}
               style={{cursor: 'pointer'}}
             >
-              <span className="nav-icon">📊</span><span>Reports</span>
+              <span className="nav-icon">📊</span><span>{t.reports}</span>
             </span>
             <span 
               className={`nav-item ${activeTab === 'announcements' ? 'active' : ''}`}
               onClick={() => setActiveTab('announcements')}
               style={{cursor: 'pointer'}}
             >
-              <span className="nav-icon">📣</span><span>Announcements</span>
+              <span className="nav-icon">📣</span><span>{t.announcements}</span>
             </span>
             <span 
               className={`nav-item ${activeTab === 'staff' ? 'active' : ''}`}
               onClick={() => setActiveTab('staff')}
               style={{cursor: 'pointer'}}
             >
-              <span className="nav-icon">👥</span><span>Staff Directory</span>
+              <span className="nav-icon">👥</span><span>{t.staffDirectory}</span>
             </span>
           </nav>
         </aside>
@@ -1883,10 +2286,10 @@ function StaffPage({ requests, staffMembers = [], announcements = [], currentUse
         <section className="content-panel" aria-label="Staff overview">
           <div className="welcome-row">
             <div>
-              <p className="eyebrow">Operations</p>
-              <h1>{activeTab === 'queue' ? 'Resident request review' : activeTab === 'reports' ? 'Service Reports' : activeTab === 'announcements' ? 'Announcements' : activeTab === 'staff' ? 'Staff Directory' : 'Approvals Management'}</h1>
+              <p className="eyebrow">{t.operations}</p>
+              <h1>{activeTab === 'queue' ? t.residentRequestReview : activeTab === 'reports' ? t.serviceReports : activeTab === 'announcements' ? t.announcements : activeTab === 'staff' ? t.staffDirectory : 'Approvals Management'}</h1>
             </div>
-            <span className="counter-pill">{activeTab === 'queue' ? totalRequests : activeTab === 'approvals' ? approvedCount : ''} {activeTab === 'queue' ? 'requests' : activeTab === 'approvals' ? 'processed' : ''}</span>
+            <span className="counter-pill">{activeTab === 'queue' ? totalRequests : activeTab === 'approvals' ? approvedCount : ''} {activeTab === 'queue' ? t.requests : activeTab === 'approvals' ? t.processed : ''}</span>
           </div>
 
           <div className="stats-grid" aria-label="Staff summary">
@@ -1934,8 +2337,8 @@ function StaffPage({ requests, staffMembers = [], announcements = [], currentUse
                     onClick={() => setOpenRequestPanel((current) => current === 'queue' ? null : 'queue')}
                   >
                     <span>
-                      <h2>Resident Requests Queue</h2>
-                      <span className="soft-label">Updated today</span>
+                      <h2>{t.residentRequestsQueue || 'Resident Requests Queue'}</h2>
+                      <span className="soft-label">{t.updatedToday}</span>
                     </span>
                     <span className={`collapse-chevron ${openRequestPanel === 'queue' ? 'open' : ''}`}>▾</span>
                   </button>
@@ -1944,10 +2347,10 @@ function StaffPage({ requests, staffMembers = [], announcements = [], currentUse
                   <div className="staff-queue-filters">
                     <input type="search" value={queueSearch} onChange={(event) => setQueueSearch(event.target.value)} placeholder="Search resident, service, or purpose" aria-label="Search request queue" />
                     <select value={queueStatus} onChange={(event) => setQueueStatus(event.target.value)} aria-label="Filter request status">
-                      <option value="active">Active queue</option>
-                      <option value="all">All statuses</option>
-                      <option value="Pending">Pending</option>
-                      <option value="In Review">In Review</option>
+                      <option value="active">{t.activeQueue}</option>
+                      <option value="all">{t.allStatuses}</option>
+                      <option value="Pending">{t.pending}</option>
+                      <option value="In Review">{t.pendingReview}</option>
                     </select>
                     <select value={queueZone} onChange={(event) => setQueueZone(event.target.value)} aria-label="Filter request zone">
                       <option value="all">All zones</option>
@@ -1958,9 +2361,11 @@ function StaffPage({ requests, staffMembers = [], announcements = [], currentUse
                     <table className="request-table">
                       <thead>
                         <tr>
-                          <th>Resident</th>
+                          <th>{t.resident}</th>
                           <th>Type</th>
-                          <th>Purpose</th>
+                          <th>{t.purpose}</th>
+                          <th>{t.deliveryMethodLabel}</th>
+                          <th>{t.latestFollowUp}</th>
                           <th>Priority</th>
                           <th>Actions</th>
                         </tr>
@@ -1971,11 +2376,16 @@ function StaffPage({ requests, staffMembers = [], announcements = [], currentUse
                             <td>{item.first_name || item.firstName || 'Resident'} {item.last_name || item.lastName || ''}</td>
                             <td>{item.type}</td>
                             <td>{item.purpose}</td>
+                            <td>
+                              {item.deliveryMethod === 'physical' || item.delivery_method === 'physical' ? t.physicalCopy : t.onlineCopy}
+                              {(item.deliveryNote || item.delivery_note) && <small className="request-staff-note">{item.deliveryNote || item.delivery_note}</small>}
+                            </td>
+                            <td>{(item.followUps || item.follow_ups || []).slice(-1)[0]?.message || '—'}</td>
                             <td><span className={`priority-badge ${item.type === 'Emergency Help' ? 'urgent' : 'normal'}`}>{item.type === 'Emergency Help' ? 'Urgent' : 'Normal'}</span></td>
                             <td>
                               <div className="action-row">
-                                <button type="button" className="small-action success" onClick={() => onProcessRequest(item.id, 'Approved')}>Approve</button>
-                                <button type="button" className="small-action danger" onClick={() => onProcessRequest(item.id, 'Rejected')}>Reject</button>
+                                <button type="button" className="small-action success" onClick={() => onProcessRequest(item.id, 'Approved')}>{t.approve}</button>
+                                <button type="button" className="small-action danger" onClick={() => onProcessRequest(item.id, 'Rejected')}>{t.reject}</button>
                               </div>
                             </td>
                           </tr>
@@ -1998,7 +2408,7 @@ function StaffPage({ requests, staffMembers = [], announcements = [], currentUse
                     onClick={() => setOpenRequestPanel((current) => current === 'approvals' ? null : 'approvals')}
                   >
                     <span>
-                      <h2>Approved Requests</h2>
+                      <h2>{t.approvedRequests}</h2>
                       <span className="soft-label">{approvedCount} completed</span>
                     </span>
                     <span className={`collapse-chevron ${openRequestPanel === 'approvals' ? 'open' : ''}`}>▾</span>
@@ -2111,6 +2521,26 @@ function StaffPage({ requests, staffMembers = [], announcements = [], currentUse
                         <label>Message</label>
                         <textarea rows="4" value={announcementForm.content} onChange={(event) => setAnnouncementForm((prev) => ({ ...prev, content: event.target.value }))} placeholder="Write the key message for residents and staff." />
                       </div>
+                      <div className="input-block full-width">
+                        <label>{t.socialMediaIntegration}</label>
+                        <div className="social-account-picker" style={{ display: 'flex', flexWrap: 'wrap', gap: '12px', marginTop: '8px' }}>
+                          {connectedSocialAccounts.map((account) => {
+                            const isSelected = (announcementForm.socialChannels || []).includes(account.key)
+                            return (
+                              <label key={account.key} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 12px', border: '1px solid #d7dfe3', borderRadius: '999px', background: isSelected ? '#eafaf3' : '#f7f9fa', cursor: 'pointer' }}>
+                                <input
+                                  type="checkbox"
+                                  checked={Boolean(account.connected && isSelected)}
+                                  onChange={() => { if (account.connected) toggleAnnouncementChannel(account.key) }}
+                                  disabled={!account.connected}
+                                />
+                                <span>{account.label}</span>
+                                <small style={{ color: account.connected ? '#0e7a5d' : '#7a7f85' }}>{account.connected ? t.connected : t.connectLater}</small>
+                              </label>
+                            )
+                          })}
+                        </div>
+                      </div>
                     </div>
                     <div className="editor-actions">
                       <button type="submit" className="primary-btn small">Publish Announcement</button>
@@ -2125,6 +2555,7 @@ function StaffPage({ requests, staffMembers = [], announcements = [], currentUse
                           <strong>{item.title}</strong>
                           <p>{item.content || 'No additional content'}</p>
                           <small>{item.date}</small>
+                          <small>{(item.socialChannels || []).length > 0 ? `${t.sharedTo}: ${item.socialChannels.join(', ')}` : t.internalNoticeOnly}</small>
                         </div>
                         <button
                           type="button"
@@ -2342,7 +2773,8 @@ function StaffPage({ requests, staffMembers = [], announcements = [], currentUse
   )
 }
 
-function AdminPage({ users, residents = [], requests, reports = [], currentUser, onLogout }) {
+function AdminPage({ users, residents = [], requests, reports = [], currentUser, onLogout, language, setLanguage }) {
+  const t = translations[language] || translations.en
   const zoneNumbers = [1, 2, 3, 4, 5, 6, 7]
   const [managedUsers, setManagedUsers] = useState(users)
   const [activeTab, setActiveTab] = useState('overview')
@@ -2604,23 +3036,25 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
 
   return (
     <div className="dashboard-shell">
-      <header className="dashboard-topbar">
+      <header className="dashboard-topbar admin-topbar">
         <div className="brand-wrap">
           <img className="seal-logo tiny" src={barangaySeal} alt="Barangay Legaspi official seal" />
           <div>
             <div className="brand-name">Barangay Legaspi</div>
-            <small>Admin Portal</small>
+            <small>{t.adminPortal}</small>
           </div>
         </div>
 
         <div className="topbar-actions">
-          <div className="admin-identity" aria-label={`Signed in as ${getDisplayName(currentUser)}`}>
-            <small>Signed in as</small>
+          <LanguageToggle language={language} setLanguage={setLanguage} />
+          <Link to="/settings" className="secondary-btn small">{t.settings}</Link>
+          <div className="admin-identity" aria-label={`${t.signedInAs} ${getDisplayName(currentUser)}`}>
+            <small>{t.signedInAs}</small>
             <strong>{getDisplayName(currentUser)}</strong>
-            <span>{currentUser?.email || currentUser?.mobile || 'Administrator'}</span>
+            <span>{currentUser?.email || currentUser?.mobile || t.administrator}</span>
           </div>
-          <span className="role-chip">Admin Console</span>
-          <button className="logout-btn" type="button" onClick={onLogout}>Log out</button>
+          <span className="role-chip">{t.adminConsole}</span>
+          <button className="logout-btn" type="button" onClick={onLogout}>{t.logout}</button>
         </div>
       </header>
 
@@ -2632,28 +3066,28 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
               onClick={() => setActiveTab('overview')}
               style={{cursor: 'pointer'}}
             >
-              <span className="nav-icon">🧭</span><span>Overview</span>
+              <span className="nav-icon">🧭</span><span>{t.overview}</span>
             </span>
             <span 
               className={`nav-item ${activeTab === 'residents' ? 'active' : ''}`}
               onClick={() => setActiveTab('residents')}
               style={{cursor: 'pointer'}}
             >
-              <span className="nav-icon">👥</span><span>Residents</span>
+              <span className="nav-icon">👥</span><span>{t.residents}</span>
             </span>
             <span 
               className={`nav-item ${activeTab === 'access' ? 'active' : ''}`}
               onClick={() => setActiveTab('access')}
               style={{cursor: 'pointer'}}
             >
-              <span className="nav-icon">🔐</span><span>Access</span>
+              <span className="nav-icon">🔐</span><span>{t.access}</span>
             </span>
             <span 
               className={`nav-item ${activeTab === 'emergencies' ? 'active' : ''}`}
               onClick={() => setActiveTab('emergencies')}
               style={{cursor: 'pointer'}}
             >
-              <span className="nav-icon">🚨</span><span>Emergencies</span>
+              <span className="nav-icon">🚨</span><span>{t.emergencies}</span>
             </span>
           </nav>
         </aside>
@@ -2661,43 +3095,43 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
         <section className="content-panel" aria-label="Admin overview">
           <div className="welcome-row">
             <div>
-              <p className="eyebrow">Governance</p>
-              <h1>{activeTab === 'overview' ? 'Barangay command center' : activeTab === 'residents' ? 'Residents by Zone' : activeTab === 'access' ? 'User Access Management' : 'Emergency Reports'}</h1>
+              <p className="eyebrow">{t.governance}</p>
+              <h1>{activeTab === 'overview' ? t.adminConsoleTitle : activeTab === 'residents' ? t.residentsByZone : activeTab === 'access' ? t.userAccessManagement : t.emergencyReportsTitle}</h1>
             </div>
-            <span className="counter-pill">{pending} pending</span>
+            <span className="counter-pill">{pending} {t.pending}</span>
           </div>
 
           <div className="stats-grid" aria-label="Admin summary">
             <article className="stat-card accent">
               <div className="stat-header">
-                <span className="label">Residents</span>
+                <span className="label">{t.residents}</span>
               </div>
               <div className="stat-number">{residentCount}</div>
-              <p>Active households</p>
+              <p>{t.activeHouseholds}</p>
             </article>
 
             <article className="stat-card">
               <div className="stat-header">
-                <span className="label">Staff</span>
+                <span className="label">{t.staffRole}</span>
               </div>
               <div className="stat-number">{staffCount}</div>
-              <p>Assigned personnel</p>
+              <p>{t.assignedPersonnel}</p>
             </article>
 
             <article className="stat-card">
               <div className="stat-header">
-                <span className="label">Admins</span>
+                <span className="label">{t.administrator}</span>
               </div>
               <div className="stat-number">{admins}</div>
-              <p>System operators</p>
+              <p>{t.systemOperators}</p>
             </article>
 
             <article className="stat-card">
               <div className="stat-header">
-                <span className="label">Pending</span>
+                <span className="label">{t.pending}</span>
               </div>
               <div className="stat-number">{pending}</div>
-              <p>Service requests</p>
+              <p>{t.serviceRequests}</p>
             </article>
           </div>
 
@@ -2706,35 +3140,35 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
               {activeTab === 'overview' && (
                 <article className="panel-card compact-panel">
                   <div className="panel-header">
-                    <h2>System Overview</h2>
-                    <span className="soft-label">Live statistics</span>
+                    <h2>{t.systemOverview}</h2>
+                    <span className="soft-label">{t.liveStatistics}</span>
                   </div>
 
                   <div className="overview-grid">
                     <div className="overview-item">
-                      <h4>Total Active Users</h4>
+                      <h4>{t.totalActiveUsers}</h4>
                       <p className="overview-value">{managedUsers.length}</p>
-                      <small>Residents, Staff, and Admins</small>
+                      <small>{t.residentsStaffAdmins}</small>
                     </div>
                     <div className="overview-item">
-                      <h4>Service Requests</h4>
+                      <h4>{t.serviceRequests}</h4>
                       <p className="overview-value">{requests.length}</p>
-                      <small>{pending} pending review</small>
+                      <small>{pending} {t.pendingReview}</small>
                     </div>
                     <div className="overview-item">
-                      <h4>Zones Covered</h4>
+                      <h4>{t.zonesCovered}</h4>
                       <p className="overview-value">7</p>
-                      <small>Distributed population</small>
+                      <small>{t.distributedPopulation}</small>
                     </div>
                     <div className="overview-item">
-                      <h4>Emergency Reports</h4>
+                      <h4>{t.emergencyReports}</h4>
                       <p className="overview-value">{reports.length}</p>
-                      <small>Total incidents tracked</small>
+                      <small>{t.totalIncidentsTracked}</small>
                     </div>
                   </div>
 
                   <div className="info-box">
-                    <h3>Residents by Zone</h3>
+                    <h3>{t.residentsByZone}</h3>
                     <div className="zone-stats">
                       {[1, 2, 3, 4, 5, 6, 7].map((zone) => (
                         <div key={zone} className="zone-stat">
@@ -2751,8 +3185,8 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
                 <>
                   <article className="panel-card compact-panel">
                     <div className="panel-header">
-                      <h2>Pending Account Approvals</h2>
-                      <span className="soft-label">{pendingVerificationUsers.length} waiting</span>
+                      <h2>{t.pendingApprovals}</h2>
+                      <span className="soft-label">{pendingVerificationUsers.length} {t.waiting}</span>
                     </div>
                     {pendingVerificationUsers.length > 0 ? (
                       <div className="admin-approval-list">
@@ -2770,38 +3204,38 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
                           </div>
                         ))}
                       </div>
-                    ) : <div className="empty-state">No accounts are waiting for verification.</div>}
+                    ) : <div className="empty-state">{t.noAccountsWaiting}</div>}
                   </article>
 
                   <article className="panel-card compact-panel">
                     <div className="panel-header">
-                      <h2>Request Monitoring</h2>
-                      <span className="soft-label">{pending} need review</span>
+                      <h2>{t.requestMonitoring}</h2>
+                      <span className="soft-label">{pending} {t.pendingReview}</span>
                     </div>
                     <div className="overview-grid admin-metric-grid">
-                      <div className="overview-item"><h4>Pending</h4><p className="overview-value">{pending}</p><small>Awaiting staff action</small></div>
-                      <div className="overview-item"><h4>Approved</h4><p className="overview-value">{requests.filter((item) => item.status === 'Approved').length}</p><small>Completed requests</small></div>
-                      <div className="overview-item"><h4>Rejected</h4><p className="overview-value">{requests.filter((item) => item.status === 'Rejected').length}</p><small>Declined requests</small></div>
-                      <div className="overview-item"><h4>Approved residents</h4><p className="overview-value">{approvedUsers}</p><small>Verified accounts</small></div>
+                      <div className="overview-item"><h4>{t.pending}</h4><p className="overview-value">{pending}</p><small>{t.awaitingStaffAction}</small></div>
+                      <div className="overview-item"><h4>{t.approved}</h4><p className="overview-value">{requests.filter((item) => item.status === 'Approved').length}</p><small>{t.completedRequests}</small></div>
+                      <div className="overview-item"><h4>{t.rejected || 'Rejected'}</h4><p className="overview-value">{requests.filter((item) => item.status === 'Rejected').length}</p><small>{t.declinedRequests}</small></div>
+                      <div className="overview-item"><h4>{t.approvedResidents || 'Approved residents'}</h4><p className="overview-value">{approvedUsers}</p><small>{t.verifiedAccounts}</small></div>
                     </div>
                     <div className="service-count-list">
                       {Object.entries(requestCountsByType).map(([type, count]) => <div key={type}><span>{type}</span><strong>{count}</strong></div>)}
-                      {Object.keys(requestCountsByType).length === 0 && <div className="empty-state">No service requests recorded.</div>}
+                      {Object.keys(requestCountsByType).length === 0 && <div className="empty-state">{t.noServiceRequestsRecorded}</div>}
                     </div>
                   </article>
 
                   <article className="panel-card compact-panel">
                     <div className="panel-header">
-                      <h2>Notifications &amp; Activity</h2>
-                      <span className="soft-label">Admin alerts</span>
+                      <h2>{t.notificationsActivity}</h2>
+                      <span className="soft-label">{t.adminAlerts}</span>
                     </div>
                     <div className="notification-list">
                       {notifications.map((notification) => <div key={notification} className="notification-item">{notification}</div>)}
-                      {notifications.length === 0 && <div className="empty-state">No new admin notifications.</div>}
+                      {notifications.length === 0 && <div className="empty-state">{t.noNewAdminNotifications}</div>}
                     </div>
                     <div className="activity-list">
                       {activityEntries.map((entry) => <div key={entry.id} className="activity-item"><div><strong>{entry.label}</strong><small>{entry.detail}</small></div><time>{formatDateValue(entry.date)}</time></div>)}
-                      {activityEntries.length === 0 && <div className="empty-state">No recent activity.</div>}
+                      {activityEntries.length === 0 && <div className="empty-state">{t.noRecentActivity}</div>}
                     </div>
                   </article>
                 </>
@@ -3238,7 +3672,200 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
   )
 }
 
+function MauAssistant({ language, userRole, mobileDashboard }) {
+  const t = translations[language] || translations.en
+  const hasBottomNavigation = ['staff', 'admin'].includes(userRole)
+  const [open, setOpen] = useState(false)
+  const [question, setQuestion] = useState('')
+  const [messages, setMessages] = useState([
+    {
+      id: 'welcome',
+      sender: 'mau',
+      text: t.mauWelcome,
+    },
+  ])
+
+  useEffect(() => {
+    const openAssistant = () => setOpen(true)
+    window.addEventListener('brgy-open-mau', openAssistant)
+    return () => window.removeEventListener('brgy-open-mau', openAssistant)
+  }, [])
+
+  const cannedReplies = language === 'fil'
+    ? [
+        {
+          keywords: ['request', 'service', 'certificate', 'clearance', 'assistance', 'help', 'serbisyo', 'certificado', 'klaro', 'tulong'],
+          response: 'Maaari kang mag-submit ng request sa resident dashboard. Piliin ang serbisyo, ilarawan ang layunin, at susuriin ito ng staff ng barangay.',
+        },
+        {
+          keywords: ['status', 'pending', 'approved', 'review', 'done', 'katayuan', 'nakabinbin', 'aprubahan', 'suri', 'tapos'],
+          response: 'Suriin ang status ng iyong request sa dashboard. Nakabinbin ang ibig sabihin ay kasalukuyang sinusuri, Naaprubahan ang ibig sabihin ay natapos na, at Tinanggihan ang ibig sabihin ay kailangang ayusin o hindi ito karapat-dapat.',
+        },
+        {
+          keywords: ['verify', 'verification', 'approved resident', 'active resident', 'verify', 'beripikasyon', 'aprubadong resident', 'aktibong resident'],
+          response: 'Dapat i-verify ng admin ng barangay ang resident account bago ganap na ma-enable ang access. Kapag naaprubahan, magiging aktibo ang account.',
+        },
+        {
+          keywords: ['announcement', 'update', 'news', 'anunsyo', 'update', 'balita'],
+          response: 'Ang mga anunsyo ay inilalathala ng staff at ipinapakita sa resident dashboard. Bantayan ang seksyon ng Mga Update at Alert.',
+        },
+        {
+          keywords: ['password', 'login', 'forgot', 'password', 'login', 'nakalimutan'],
+          response: 'Gamitin ang link na Nakalimutan ang password sa login screen para humiling ng one-time reset token at magtakda ng bagong password.',
+        },
+        {
+          keywords: ['hello', 'hi', 'hey', 'mau', 'kamusta', 'halo'],
+          response: 'Kamusta! Ako si Mau at matutulungan kita sa mga serbisyo ng resident, tanong sa account, at status ng request.',
+        },
+      ]
+    : [
+        {
+          keywords: ['request', 'service', 'certificate', 'clearance', 'assistance', 'help'],
+          response: 'You can submit a request from the resident dashboard. Choose a service, describe the purpose, and barangay staff will review it.',
+        },
+        {
+          keywords: ['status', 'pending', 'approved', 'review', 'done'],
+          response: 'Check your request status in the dashboard. Pending means still under review, Approved means completed, and Rejected means it needs correction or is not eligible.',
+        },
+        {
+          keywords: ['verify', 'verification', 'approved resident', 'active resident'],
+          response: 'Resident accounts must be verified by the barangay admin before access is fully enabled. Once approved, your account becomes active.',
+        },
+        {
+          keywords: ['announcement', 'update', 'news'],
+          response: 'Announcements are published by staff and shown on the resident dashboard. Keep an eye on the Updates & Alerts section.',
+        },
+        {
+          keywords: ['password', 'login', 'forgot'],
+          response: 'Use the Forgot password link on the login screen to request a one-time reset token, then set a new password.',
+        },
+        {
+          keywords: ['hello', 'hi', 'hey', 'mau'],
+          response: 'Hello! I\'m Mau, and I can help with resident services, account questions, and request status.',
+        },
+      ]
+
+  const quickOptions = language === 'fil'
+    ? [
+        'Ano ang status ng request ko?',
+        'Paano mag-submit ng request?',
+        'Paano mag-verify ng account?',
+      ]
+    : [
+        'What is my request status?',
+        'How do I submit a request?',
+        'How do I verify my account?',
+      ]
+
+  const [errorMessage, setErrorMessage] = useState('')
+
+  const getReply = (input) => {
+    const normalized = String(input || '').toLowerCase()
+    const match = cannedReplies.find((item) =>
+      item.keywords.some((keyword) => normalized.includes(keyword)),
+    )
+
+    if (match) return match.response
+
+    return language === 'fil'
+      ? 'Maaari ko kayong tulungan sa mga request, status, verification, anunsyo, at password recovery. Magtanong lamang sa simpleng paraan.'
+      : 'I can help with requests, status tracking, verification, announcements, and password recovery. Ask me in simple terms.'
+  }
+
+  const sendQuestion = (input) => {
+    const trimmed = String(input || '').trim()
+    if (!trimmed) {
+      setErrorMessage(t.mauError)
+      return
+    }
+
+    if (trimmed.length > 240) {
+      setErrorMessage(language === 'fil' ? 'Masyadong mahaba ang tanong. Maglagay ng mas maikling tanong.' : 'That question is too long. Please ask a shorter one.')
+      return
+    }
+
+    const userMessage = { id: `user-${Date.now()}`, sender: 'user', text: trimmed }
+    const mauMessage = { id: `mau-${Date.now() + 1}`, sender: 'mau', text: getReply(trimmed) }
+
+    setMessages((current) => [...current, userMessage, mauMessage])
+    setErrorMessage('')
+    setQuestion('')
+  }
+
+  const handleSubmit = (event) => {
+    event.preventDefault()
+    sendQuestion(question)
+  }
+
+  return (
+    <>
+      <button
+        type="button"
+        className={`mau-launcher ${hasBottomNavigation ? 'with-bottom-nav' : ''} ${mobileDashboard ? 'resident-mobile-dashboard' : ''}`}
+        onClick={() => setOpen((current) => !current)}
+        aria-label={t.mauOpenLabel}
+      >
+        <span className="mau-launcher-badge">M</span>
+        <span>Mau</span>
+      </button>
+
+      {open && (
+        <div className={`mau-assistant ${hasBottomNavigation ? 'with-bottom-nav' : ''}`} role="dialog" aria-label={t.mauHelper}>
+          <div className="mau-header">
+            <div className="mau-avatar">M</div>
+            <div>
+              <strong>Mau</strong>
+              <small>{t.mauHelper}</small>
+            </div>
+            <button type="button" className="mau-close" onClick={() => setOpen(false)} aria-label={t.mauCloseLabel}>×</button>
+          </div>
+
+          <div className="mau-body">
+            {messages.map((message) => (
+              <div key={message.id} className={`mau-message ${message.sender === 'user' ? 'user' : 'mau'}`}>
+                {message.text}
+              </div>
+            ))}
+          </div>
+
+          {errorMessage && <div className="mau-error">{errorMessage}</div>}
+
+          <div className="mau-options">
+            <span>{t.mauOptionsLabel}</span>
+            <div className="mau-option-row">
+              {quickOptions.map((option) => (
+                <button key={option} type="button" className="mau-option" onClick={() => sendQuestion(option)}>
+                  {option}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <form className="mau-form" onSubmit={handleSubmit}>
+            <input
+              type="text"
+              value={question}
+              onChange={(event) => setQuestion(event.target.value)}
+              placeholder={t.mauPlaceholder}
+              aria-label={t.mauAsk}
+            />
+            <button type="submit" className="primary-btn small mau-send">{t.mauSend}</button>
+          </form>
+        </div>
+      )}
+    </>
+  )
+}
+
 function App() {
+  const location = useLocation()
+  const [language, setLanguage] = useState(() => {
+    try {
+      return localStorage.getItem('brgy-legaspi-language') || 'en'
+    } catch {
+      return 'en'
+    }
+  })
   const [profile, setProfile] = useState(initialProfile)
   const [requests, setRequests] = useState(initialRequests)
   const [users, setUsers] = useState([])
@@ -3250,9 +3877,55 @@ function App() {
   const [payments, setPayments] = useState([])
   const [reports, setReports] = useState([])
   const [session, setSession] = useState(() => readStoredSession())
+  const [reminderAlerts, setReminderAlerts] = useState([])
 
   const isAuthenticated = Boolean(session?.isActive)
   const userRole = session?.user?.role || session?.role || 'resident'
+  const t = translations[language] || translations.en
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('brgy-legaspi-language', language)
+    } catch {
+      // Ignore storage write issues in restricted browsing environments.
+    }
+  }, [language])
+
+  useEffect(() => {
+    const checkDueReminders = () => {
+      try {
+        const reminders = JSON.parse(localStorage.getItem(requestReminderStorageKey) || '{}')
+        const dueReminders = Object.entries(reminders).filter(([, reminder]) => (
+          !reminder.notified && new Date(reminder.scheduledAt).getTime() <= Date.now()
+        ))
+        if (dueReminders.length === 0) return
+
+        for (const [, reminder] of dueReminders) {
+          if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+            try {
+              new Notification(t.reminderTitle, { body: `${t.reminderMessage} ${reminder.requestType}.` })
+            } catch {
+              // In-app reminder remains available if the browser blocks desktop notifications.
+            }
+          }
+        }
+
+        const dueAlerts = dueReminders.map(([id, reminder]) => ({ id, ...reminder }))
+        setReminderAlerts((current) => {
+          const currentIds = new Set(current.map((alert) => alert.id))
+          return [...current, ...dueAlerts.filter((alert) => !currentIds.has(alert.id))]
+        })
+        for (const [id] of dueReminders) reminders[id] = { ...reminders[id], notified: true }
+        localStorage.setItem(requestReminderStorageKey, JSON.stringify(reminders))
+      } catch (error) {
+        console.error('request reminder check failed', error)
+      }
+    }
+
+    checkDueReminders()
+    const interval = window.setInterval(checkDueReminders, 15_000)
+    return () => window.clearInterval(interval)
+  }, [language, t.reminderMessage, t.reminderTitle])
 
   useEffect(() => {
     let isMounted = true
@@ -3400,6 +4073,10 @@ function App() {
     setRequests((prev) => [newRequest, ...prev])
   }
 
+  const handleRequestUpdated = (updatedRequest) => {
+    setRequests((prev) => prev.map((request) => request.id === updatedRequest.id ? updatedRequest : request))
+  }
+
   const handleRequestStatus = async (requestId, status) => {
     if (!session?.token) return
 
@@ -3483,6 +4160,7 @@ function App() {
           title: announcement.title,
           content: announcement.content,
           date: announcement.date,
+          socialChannels: Array.isArray(announcement.socialChannels) ? announcement.socialChannels : [],
         }),
       })
 
@@ -3519,19 +4197,35 @@ function App() {
   }
 
   return (
-    <Routes>
-      <Route path="/" element={isAuthenticated ? <Navigate to={userRole === 'staff' ? '/staff' : userRole === 'admin' ? '/admin' : '/dashboard'} replace /> : <LoginPage onLogin={handleLogin} />} />
-      <Route path="/register" element={isAuthenticated ? <Navigate to={userRole === 'staff' ? '/staff' : userRole === 'admin' ? '/admin' : '/dashboard'} replace /> : <RegisterPage />} />
-      <Route path="/dashboard" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['resident']} userRole={userRole}><DashboardPage profile={profile} requests={requests} services={services} announcements={announcementsData} events={events} payments={payments} onLogout={handleLogout} onProfileUpdated={setProfile} /></ProtectedRoute>} />
-      <Route path="/requests" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['resident']} userRole={userRole}><RequestsPage requests={requests} onSubmit={handleRequestSubmit} onLogout={handleLogout} /></ProtectedRoute>} />
-      <Route path="/profile" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['resident']} userRole={userRole}><ProfilePage profile={profile} onLogout={handleLogout} /></ProtectedRoute>} />
-      <Route path="/payments" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['resident']} userRole={userRole}><PaymentsPage payments={payments} onLogout={handleLogout} /></ProtectedRoute>} />
-      <Route path="/events" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['resident']} userRole={userRole}><EventsPage events={events} onLogout={handleLogout} /></ProtectedRoute>} />
-      <Route path="/settings" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['resident']} userRole={userRole}><SettingsPage profile={profile} onLogout={handleLogout} /></ProtectedRoute>} />
-      <Route path="/staff" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['staff', 'admin']} userRole={userRole}><StaffPage requests={requests} staffMembers={staffMembers} announcements={announcementsData} currentUser={session?.user} userRole={userRole} onProcessRequest={handleRequestStatus} onLogout={handleLogout} onAddStaffMember={handleAddStaffMember} onAddAnnouncement={handleAddAnnouncement} onDeleteAnnouncement={handleDeleteAnnouncement} onDeleteStaffMember={handleDeleteStaffMember} /></ProtectedRoute>} />
-      <Route path="/admin" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['admin']} userRole={userRole}><AdminPage users={users} residents={residents} requests={requests} reports={reports} currentUser={session?.user} onLogout={handleLogout} /></ProtectedRoute>} />
-      <Route path="*" element={<Navigate to={userRole === 'staff' ? '/staff' : userRole === 'admin' ? '/admin' : '/dashboard'} replace />} />
-    </Routes>
+    <>
+      {reminderAlerts.length > 0 && (
+        <div className="request-reminder-alerts" role="status" aria-live="polite">
+          {reminderAlerts.map((alert) => (
+            <div className="request-reminder-alert" key={alert.id}>
+              <div>
+                <strong>{t.reminderTitle}</strong>
+                <p>{t.reminderMessage} {alert.requestType}.</p>
+              </div>
+              <button type="button" className="secondary-btn tiny" onClick={() => setReminderAlerts((current) => current.filter((item) => item.id !== alert.id))}>{t.dismissReminder}</button>
+            </div>
+          ))}
+        </div>
+      )}
+      <Routes>
+        <Route path="/" element={isAuthenticated ? <Navigate to={userRole === 'staff' ? '/staff' : userRole === 'admin' ? '/admin' : '/dashboard'} replace /> : <LoginPage onLogin={handleLogin} language={language} setLanguage={setLanguage} />} />
+        <Route path="/register" element={isAuthenticated ? <Navigate to={userRole === 'staff' ? '/staff' : userRole === 'admin' ? '/admin' : '/dashboard'} replace /> : <RegisterPage language={language} setLanguage={setLanguage} />} />
+        <Route path="/dashboard" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['resident']} userRole={userRole}><DashboardPage profile={profile} requests={requests} services={services} announcements={announcementsData} events={events} payments={payments} onLogout={handleLogout} onProfileUpdated={setProfile} language={language} setLanguage={setLanguage} /></ProtectedRoute>} />
+        <Route path="/requests" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['resident']} userRole={userRole}><RequestsPage requests={requests} onSubmit={handleRequestSubmit} onRequestUpdated={handleRequestUpdated} onLogout={handleLogout} language={language} setLanguage={setLanguage} /></ProtectedRoute>} />
+        <Route path="/profile" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['resident']} userRole={userRole}><ProfilePage profile={profile} onLogout={handleLogout} language={language} setLanguage={setLanguage} /></ProtectedRoute>} />
+        <Route path="/payments" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['resident']} userRole={userRole}><PaymentsPage payments={payments} onLogout={handleLogout} language={language} setLanguage={setLanguage} /></ProtectedRoute>} />
+        <Route path="/events" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['resident']} userRole={userRole}><EventsPage events={events} onLogout={handleLogout} language={language} setLanguage={setLanguage} /></ProtectedRoute>} />
+        <Route path="/settings" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['resident', 'staff', 'admin']} userRole={userRole}><SettingsPage profile={profile} onLogout={handleLogout} language={language} setLanguage={setLanguage} /></ProtectedRoute>} />
+        <Route path="/staff" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['staff', 'admin']} userRole={userRole}><StaffPage requests={requests} staffMembers={staffMembers} announcements={announcementsData} currentUser={session?.user} userRole={userRole} onProcessRequest={handleRequestStatus} onLogout={handleLogout} onAddStaffMember={handleAddStaffMember} onAddAnnouncement={handleAddAnnouncement} onDeleteAnnouncement={handleDeleteAnnouncement} onDeleteStaffMember={handleDeleteStaffMember} language={language} setLanguage={setLanguage} /></ProtectedRoute>} />
+        <Route path="/admin" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['admin']} userRole={userRole}><AdminPage users={users} residents={residents} requests={requests} reports={reports} currentUser={session?.user} onLogout={handleLogout} language={language} setLanguage={setLanguage} /></ProtectedRoute>} />
+        <Route path="*" element={<Navigate to={userRole === 'staff' ? '/staff' : userRole === 'admin' ? '/admin' : '/dashboard'} replace />} />
+      </Routes>
+      <MauAssistant language={language} userRole={userRole} mobileDashboard={userRole === 'resident' && location.pathname === '/dashboard'} />
+    </>
   )
 }
 

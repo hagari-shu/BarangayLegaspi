@@ -4,6 +4,7 @@ import helmet from 'helmet'
 import rateLimit from 'express-rate-limit'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { comparePassword, hashPassword, signToken, verifyToken } from './auth.js'
+import { createTotpSecret, createTotpUri, decryptTotpSecret, encryptTotpSecret, verifyTotp } from './mfa.js'
 import * as jsonDb from './db.js'
 import * as pgDb from './db-postgres.js'
 import { ADMIN_SEED, CORS_ORIGINS, IS_PRODUCTION, PORT, SHOULD_SKIP_SEED } from './config.js'
@@ -15,8 +16,14 @@ let store = process.env.DATABASE_URL ? pgDb : jsonDb
 const sanitizeText = (value = '') => String(value).replace(/[<>]/g, '').trim()
 const sanitizeUserRecord = (user = {}) => {
   if (!user || typeof user !== 'object') return {}
-  const { password, passwordHash, password_hash, ...safeUser } = user
-  return { ...safeUser, role: safeUser.role || safeUser.userRole || 'resident' }
+  const { password, passwordHash, password_hash, mfaSecret, mfa_secret, mfaLastStep, mfa_last_step, ...safeUser } = user
+  const mfaEnabled = Boolean(safeUser.mfaEnabled ?? safeUser.mfa_enabled)
+  return {
+    ...safeUser,
+    mfaEnabled,
+    mfaSetupPending: !mfaEnabled && Boolean(mfaSecret || mfa_secret),
+    role: safeUser.role || safeUser.userRole || 'resident',
+  }
 }
 
 const isSyntheticTestAccount = (user = {}) => {
@@ -25,6 +32,7 @@ const isSyntheticTestAccount = (user = {}) => {
     return true
   }
 
+  const normalizedRole = String(user.role || user.userRole || '').toLowerCase()
   const searchable = [
     user.email,
     user.firstName,
@@ -37,7 +45,11 @@ const isSyntheticTestAccount = (user = {}) => {
     user.status,
   ].join(' ').toLowerCase()
 
-  return /@example\.com|@test\.|generated|dummy|demo\b|test account|2024-test|household.*test/i.test(searchable)
+  if (normalizedRole === 'resident' && /@test\./.test(String(user.email || '').toLowerCase())) {
+    return true
+  }
+
+  return /generated|dummy|demo\b|test account|2024-test|household.*test/i.test(searchable)
 }
 
 const filterVisibleUsers = (users = []) => (Array.isArray(users) ? users.filter((user) => !isSyntheticTestAccount(user)) : [])
@@ -57,10 +69,10 @@ const serviceCatalog = [
 ]
 
 const announcements = [
-  { tag: 'green', title: 'Free vaccination schedule', date: 'June 18 • 8:00 AM', content: 'Vaccination drive for all residents. Come to the barangay hall.' },
-  { tag: 'amber', title: 'Senior citizen ID renewal', date: 'June 20 • 9:00 AM', content: 'Senior citizens are encouraged to renew their IDs.' },
-  { tag: 'blue', title: 'Clean-up drive reminder', date: 'June 25 • 7:00 AM', content: 'Community clean-up drive scheduled for next Saturday.' },
-  { tag: 'red', title: 'Emergency hotline now active', date: 'August 29 • 3:30 PM', content: 'Emergency hotline is available 24/7 for all barangay residents.' },
+  { tag: 'green', title: 'Free vaccination schedule', date: 'June 18 • 8:00 AM', content: 'Vaccination drive for all residents. Come to the barangay hall.', socialChannels: ['facebook', 'instagram'] },
+  { tag: 'amber', title: 'Senior citizen ID renewal', date: 'June 20 • 9:00 AM', content: 'Senior citizens are encouraged to renew their IDs.', socialChannels: ['facebook'] },
+  { tag: 'blue', title: 'Clean-up drive reminder', date: 'June 25 • 7:00 AM', content: 'Community clean-up drive scheduled for next Saturday.', socialChannels: ['facebook', 'messenger'] },
+  { tag: 'red', title: 'Emergency hotline now active', date: 'August 29 • 3:30 PM', content: 'Emergency hotline is available 24/7 for all barangay residents.', socialChannels: ['facebook', 'instagram', 'x'] },
 ]
 
 const residentEvents = [
@@ -74,6 +86,9 @@ const paymentRecords = [
   { id: 'INV-1049', label: 'Medical assistance', status: 'Pending', amount: '₱1,200.00' },
   { id: 'INV-1056', label: 'Community fee', status: 'Paid', amount: '₱180.00' },
 ]
+
+const reminderStore = new Map()
+
 export async function seedDemoResident() {
   if (process.env.DATABASE_URL) {
     await pgDb.initDatabase()
@@ -87,7 +102,6 @@ export async function seedDemoResident() {
   const db = await jsonDb.readDb()
 
   const demoNonAdminIdentifiers = new Set([
-    'maria.delacruz@email.com',
     'staff@barangay.gov.ph',
     'captain@barangay.gov.ph',
     'treasurer@barangay.gov.ph',
@@ -113,7 +127,21 @@ export async function seedDemoResident() {
     await jsonDb.writeDb(db)
   }
 
-  const requiredSeeds = [ADMIN_SEED]
+  const defaultResidentSeed = {
+    firstName: 'Maria',
+    lastName: 'Dela Cruz',
+    mobile: '09123456789',
+    email: 'maria.delacruz@email.com',
+    password: 'ResidentPass123!',
+    role: 'resident',
+    householdId: '2024-RESIDENT',
+    familyMembers: 4,
+    status: 'Active Resident',
+    address: 'Barangay Legaspi, Tayug, Pangasinan',
+    zone: 1,
+  }
+
+  const requiredSeeds = [ADMIN_SEED, defaultResidentSeed]
 
   if (SHOULD_SKIP_SEED || (IS_PRODUCTION && !ADMIN_SEED.password)) {
     return
@@ -162,6 +190,7 @@ export function createApp() {
 
   const getCurrentActor = async (token) => {
     const payload = verifyToken(token)
+    if (payload.purpose === 'mfa_pending') return null
     const user = await store.findUserById?.(payload.sub)
     return user ? { payload, user } : null
   }
@@ -186,6 +215,20 @@ export function createApp() {
 
   const authAttempts = new Map()
   const resetTokens = new Map()
+  const mfaChallenges = new Map()
+
+  const ensureSeededAccounts = async () => {
+    if (process.env.DATABASE_URL) {
+      await pgDb.initDatabase()
+      return
+    }
+
+    await seedDemoResident()
+  }
+
+  void ensureSeededAccounts().catch((error) => {
+    console.error('seed initialization failed', error)
+  })
 
   const sendDeliveryWebhook = async ({ event, recipient, token, expiresAt, user, title, message, metadata = {} }) => {
     const deliveryUrl = process.env.RESET_DELIVERY_URL || process.env.NOTIFICATION_WEBHOOK_URL
@@ -349,6 +392,10 @@ export function createApp() {
         return res.status(400).json({ message: 'Identifier and password are required.' })
       }
 
+      if (identifier.toLowerCase() === ADMIN_SEED.email.toLowerCase() || identifier.toLowerCase() === ADMIN_SEED.mobile.toLowerCase()) {
+        await ensureSeededAccounts()
+      }
+
       const user = await store.findUserByIdentifier(identifier)
       if (!user) {
         return res.status(401).json({ message: 'Invalid credentials.' })
@@ -367,8 +414,23 @@ export function createApp() {
         return res.status(403).json({ message: 'Your account is awaiting administrator approval before you can access the web app.' })
       }
 
-      const token = signToken({ sub: user.id, role: normalizedRole })
       const safeUser = sanitizeUserRecord({ ...user, role: normalizedRole })
+
+      if (safeUser.mfaEnabled && user.mfaSecret) {
+        if (mfaChallenges.size > 10000) {
+          for (const [key, challenge] of mfaChallenges) {
+            if (challenge.expiresAt <= Date.now()) mfaChallenges.delete(key)
+          }
+        }
+        const challengeToken = randomBytes(32).toString('hex')
+        mfaChallenges.set(createHash('sha256').update(challengeToken).digest('hex'), {
+          userId: user.id,
+          expiresAt: Date.now() + 5 * 60 * 1000,
+        })
+        return res.json({ message: 'Authenticator verification required.', requiresMfa: true, challengeToken })
+      }
+
+      const token = signToken({ sub: user.id, role: normalizedRole })
 
       return res.json({
         message: 'Login successful',
@@ -378,6 +440,129 @@ export function createApp() {
     } catch (error) {
       console.error('Login error:', error)
       return res.status(500).json({ message: 'Login failed.' })
+    }
+  })
+
+  app.post('/api/login/mfa', authRateLimit, async (req, res) => {
+    try {
+      const challengeToken = String(req.body?.challengeToken || '')
+      const code = String(req.body?.code || '').trim()
+      if (!challengeToken || !/^\d{6}$/.test(code)) {
+        return res.status(400).json({ message: 'A valid 6-digit authenticator code is required.' })
+      }
+
+      const challengeKey = createHash('sha256').update(challengeToken).digest('hex')
+      const challenge = mfaChallenges.get(challengeKey)
+      if (!challenge || challenge.expiresAt <= Date.now()) {
+        mfaChallenges.delete(challengeKey)
+        return res.status(401).json({ message: 'MFA challenge is invalid or expired. Please sign in again.' })
+      }
+
+      const user = await store.findUserById?.(challenge.userId)
+      if (!user || !user.mfaEnabled || !user.mfaSecret || ['Suspended', 'Disabled'].includes(user.status)) {
+        return res.status(401).json({ message: 'MFA challenge is no longer valid.' })
+      }
+
+      const secret = decryptTotpSecret(user.mfaSecret)
+      const matchedStep = verifyTotp(secret, code)
+      const lastStep = Number(user.mfaLastStep || user.mfa_last_step || 0)
+      if (matchedStep === null || matchedStep <= lastStep) {
+        return res.status(401).json({ message: 'The authenticator code is invalid or has already been used.' })
+      }
+
+      mfaChallenges.delete(challengeKey)
+      await store.updateUser?.(user.id, { mfaLastStep: matchedStep })
+      const role = String(user.role || 'resident').toLowerCase()
+      const token = signToken({ sub: user.id, role })
+      return res.json({ message: 'Login successful.', token, user: sanitizeUserRecord({ ...user, role }) })
+    } catch (error) {
+      console.error('MFA login error:', error)
+      return res.status(500).json({ message: 'Unable to verify authenticator code.' })
+    }
+  })
+
+  app.post('/api/mfa/setup', authRateLimit, async (req, res) => {
+    const authHeader = req.headers.authorization || ''
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : ''
+    if (!token) return res.status(401).json({ message: 'Authentication required.' })
+
+    try {
+      const actor = await getCurrentActor(token)
+      if (!actor) return res.status(401).json({ message: 'Authentication required.' })
+      if (actor.user.mfaEnabled) return res.status(409).json({ message: 'Disable MFA before replacing its authenticator.' })
+
+      if (!req.body?.rotate && (actor.user.mfaSecret || actor.user.mfa_secret)) {
+        try {
+          const secret = decryptTotpSecret(actor.user.mfaSecret || actor.user.mfa_secret)
+          return res.json({ secret, otpauthUri: createTotpUri(secret, actor.user.email || actor.user.mobile) })
+        } catch {
+          // Replace invalid pending setup data so the account can enroll again.
+        }
+      }
+
+      const secret = createTotpSecret()
+      await store.updateUser?.(actor.user.id, {
+        mfaSecret: encryptTotpSecret(secret),
+        mfaEnabled: false,
+        mfaLastStep: 0,
+      })
+      return res.json({ secret, otpauthUri: createTotpUri(secret, actor.user.email || actor.user.mobile) })
+    } catch (error) {
+      console.error('MFA setup error:', error)
+      return res.status(500).json({ message: 'Unable to start authenticator setup.' })
+    }
+  })
+
+  app.post('/api/mfa/enable', authRateLimit, async (req, res) => {
+    const authHeader = req.headers.authorization || ''
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : ''
+    if (!token) return res.status(401).json({ message: 'Authentication required.' })
+
+    try {
+      const actor = await getCurrentActor(token)
+      if (!actor) return res.status(401).json({ message: 'Authentication required.' })
+      const encryptedSecret = actor.user.mfaSecret || actor.user.mfa_secret
+      if (!encryptedSecret || actor.user.mfaEnabled) return res.status(409).json({ message: 'Start authenticator setup before enabling MFA.' })
+
+      const matchedStep = verifyTotp(decryptTotpSecret(encryptedSecret), req.body?.code)
+      if (matchedStep === null) return res.status(400).json({ message: 'Authenticator code is invalid. Check your device time and try again.' })
+
+      const updatedUser = await store.updateUser?.(actor.user.id, { mfaEnabled: true, mfaLastStep: matchedStep })
+      await writeAudit(actor.user, 'mfa.enabled', 'user', actor.user.id)
+      return res.json({ message: 'Authenticator MFA is enabled.', user: sanitizeUserRecord(updatedUser || { ...actor.user, mfaEnabled: true }) })
+    } catch (error) {
+      console.error('MFA enable error:', error)
+      return res.status(500).json({ message: 'Unable to enable authenticator MFA.' })
+    }
+  })
+
+  app.post('/api/mfa/disable', authRateLimit, async (req, res) => {
+    const authHeader = req.headers.authorization || ''
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : ''
+    if (!token) return res.status(401).json({ message: 'Authentication required.' })
+
+    try {
+      const actor = await getCurrentActor(token)
+      if (!actor) return res.status(401).json({ message: 'Authentication required.' })
+      if (!actor.user.mfaEnabled || !actor.user.mfaSecret) return res.status(409).json({ message: 'Authenticator MFA is not enabled.' })
+
+      const currentPassword = String(req.body?.currentPassword || '')
+      if (!await comparePassword(currentPassword, actor.user.passwordHash || actor.user.password_hash)) {
+        return res.status(401).json({ message: 'Current password is incorrect.' })
+      }
+
+      const matchedStep = verifyTotp(decryptTotpSecret(actor.user.mfaSecret || actor.user.mfa_secret), req.body?.code)
+      const lastStep = Number(actor.user.mfaLastStep || actor.user.mfa_last_step || 0)
+      if (matchedStep === null || matchedStep <= lastStep) {
+        return res.status(401).json({ message: 'Authenticator code is invalid or has already been used.' })
+      }
+
+      await store.updateUser?.(actor.user.id, { mfaEnabled: false, mfaSecret: '', mfaLastStep: 0 })
+      await writeAudit(actor.user, 'mfa.disabled', 'user', actor.user.id)
+      return res.json({ message: 'Authenticator MFA is disabled.' })
+    } catch (error) {
+      console.error('MFA disable error:', error)
+      return res.status(500).json({ message: 'Unable to disable authenticator MFA.' })
     }
   })
 
@@ -647,6 +832,9 @@ export function createApp() {
       const content = sanitizeText(req.body?.content)
       const date = sanitizeText(req.body?.date) || new Date().toLocaleDateString()
       const tag = sanitizeText(req.body?.tag) || 'green'
+      const socialChannels = Array.isArray(req.body?.socialChannels)
+        ? req.body.socialChannels.map((channel) => sanitizeText(channel)).filter(Boolean)
+        : []
 
       if (!title || !content) {
         return res.status(400).json({ message: 'Title and message are required.' })
@@ -658,6 +846,7 @@ export function createApp() {
         title,
         content,
         date,
+        socialChannels,
         createdAt: new Date().toISOString(),
       }
 
@@ -700,8 +889,71 @@ export function createApp() {
     return res.json({ events: residentEvents })
   })
 
-  app.get('/api/payments', (_req, res) => {
-    return res.json({ payments: paymentRecords })
+  app.get('/api/payments', async (req, res) => {
+    const authHeader = req.headers.authorization || ''
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null
+
+    if (!token) {
+      return res.status(401).json({ message: 'Authentication required.' })
+    }
+
+    try {
+      const actor = await getCurrentActor(token)
+      if (!actor || ['Suspended', 'Disabled'].includes(actor.user.status)) {
+        return res.status(403).json({ message: 'Account access is disabled.' })
+      }
+
+      const normalizedPayments = paymentRecords.map((payment) => ({
+        ...payment,
+        status: payment.status || 'Pending',
+      }))
+
+      return res.json({ payments: normalizedPayments })
+    } catch {
+      return res.status(401).json({ message: 'Invalid or expired token.' })
+    }
+  })
+
+  app.patch('/api/payments/:id/status', async (req, res) => {
+    const authHeader = req.headers.authorization || ''
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null
+
+    if (!token) {
+      return res.status(401).json({ message: 'Authentication required.' })
+    }
+
+    try {
+      const actor = await getCurrentActor(token)
+      if (!actor || actor.user.role !== 'admin') {
+        return res.status(403).json({ message: 'Administrator access required.' })
+      }
+
+      const paymentId = String(req.params.id || '').trim()
+      const nextStatus = String(req.body?.status || '').trim()
+
+      if (!paymentId || !nextStatus) {
+        return res.status(400).json({ message: 'Payment ID and status are required.' })
+      }
+
+      const paymentIndex = paymentRecords.findIndex((entry) => entry.id === paymentId)
+      if (paymentIndex === -1) {
+        return res.status(404).json({ message: 'Payment record not found.' })
+      }
+
+      paymentRecords[paymentIndex] = {
+        ...paymentRecords[paymentIndex],
+        status: nextStatus,
+      }
+
+      await writeAudit(actor.user, 'payment.updated', 'payment', paymentId, { status: nextStatus })
+
+      return res.json({
+        payment: paymentRecords[paymentIndex],
+        message: 'Payment status updated successfully.',
+      })
+    } catch {
+      return res.status(401).json({ message: 'Invalid or expired token.' })
+    }
   })
 
   app.get('/api/requests', async (req, res) => {
@@ -1689,9 +1941,17 @@ export function createApp() {
       const type = sanitizeText(req.body?.type)
       const purpose = sanitizeText(req.body?.purpose)
       const notes = sanitizeText(req.body?.notes)
+      const deliveryMethod = sanitizeText(req.body?.deliveryMethod || 'online').toLowerCase()
+      const deliveryNote = sanitizeText(req.body?.deliveryNote || '')
 
       if (!type || !purpose) {
         return res.status(400).json({ message: 'Request type and purpose are required.' })
+      }
+      if (!['online', 'physical'].includes(deliveryMethod)) {
+        return res.status(400).json({ message: 'Delivery method must be online or physical.' })
+      }
+      if (deliveryNote.length > 500) {
+        return res.status(400).json({ message: 'Delivery note must be 500 characters or fewer.' })
       }
 
       const request = {
@@ -1700,6 +1960,9 @@ export function createApp() {
         type,
         purpose,
         notes,
+        deliveryMethod,
+        deliveryNote,
+        followUps: [],
         status: 'Pending',
         date: new Date().toISOString(),
       }
@@ -1708,6 +1971,101 @@ export function createApp() {
       return res.status(201).json({ request })
     } catch {
       return res.status(401).json({ message: 'Invalid or expired token.' })
+    }
+  })
+
+  app.post('/api/requests/:id/reminders', async (req, res) => {
+    const authHeader = req.headers.authorization || ''
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null
+    if (!token) return res.status(401).json({ message: 'Authentication required.' })
+
+    try {
+      const actor = await getCurrentActor(token)
+      if (!actor || actor.user.role !== 'resident' || ['Suspended', 'Disabled'].includes(actor.user.status)) {
+        return res.status(403).json({ message: 'Resident account access is required.' })
+      }
+
+      const requestId = req.params.id
+      const residentRequests = await store.listRequestsForUser(actor.user.id)
+      if (!residentRequests.some((request) => request.id === requestId)) {
+        return res.status(404).json({ message: 'Request not found.' })
+      }
+
+      const scheduledAtRaw = sanitizeText(req.body?.scheduledAt || '')
+      const scheduledAt = new Date(scheduledAtRaw).getTime()
+      if (!scheduledAtRaw || !Number.isFinite(scheduledAt) || scheduledAt <= Date.now()) {
+        return res.status(400).json({ message: 'Choose a future date and time for the reminder.' })
+      }
+
+      const reminder = {
+        id: randomUUID(),
+        requestId,
+        userId: actor.user.id,
+        scheduledAt: new Date(scheduledAt).toISOString(),
+        notified: false,
+        createdAt: new Date().toISOString(),
+      }
+
+      reminderStore.set(reminder.id, reminder)
+      return res.status(201).json({ reminder })
+    } catch (error) {
+      console.error('create reminder error', error)
+      return res.status(500).json({ message: 'Unable to schedule reminder.' })
+    }
+  })
+
+  app.get('/api/reminders', async (req, res) => {
+    const authHeader = req.headers.authorization || ''
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null
+    if (!token) return res.status(401).json({ message: 'Authentication required.' })
+
+    try {
+      const actor = await getCurrentActor(token)
+      if (!actor) return res.status(401).json({ message: 'Authentication required.' })
+
+      const dueOnly = String(req.query.due || '').toLowerCase() === 'true'
+      const reminders = [...reminderStore.values()]
+        .filter((reminder) => reminder.userId === actor.user.id)
+        .map((reminder) => ({ ...reminder, isDue: dueOnly ? new Date(reminder.scheduledAt).getTime() <= Date.now() : false }))
+        .filter((reminder) => !dueOnly || reminder.isDue)
+
+      return res.json({ reminders })
+    } catch (error) {
+      console.error('list reminders error', error)
+      return res.status(500).json({ message: 'Unable to load reminders.' })
+    }
+  })
+
+  app.post('/api/requests/:id/follow-ups', authRateLimit, async (req, res) => {
+    const authHeader = req.headers.authorization || ''
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null
+    if (!token) return res.status(401).json({ message: 'Authentication required.' })
+
+    try {
+      const actor = await getCurrentActor(token)
+      if (!actor || actor.user.role !== 'resident' || ['Suspended', 'Disabled'].includes(actor.user.status)) {
+        return res.status(403).json({ message: 'Resident account access is required.' })
+      }
+
+      const message = sanitizeText(req.body?.message)
+      if (!message || message.length > 1000) {
+        return res.status(400).json({ message: 'Follow-up message must be between 1 and 1000 characters.' })
+      }
+
+      const residentRequests = await store.listRequestsForUser(actor.user.id)
+      if (!residentRequests.some((request) => request.id === req.params.id)) {
+        return res.status(404).json({ message: 'Request not found.' })
+      }
+
+      const followUp = { id: randomUUID(), message, createdAt: new Date().toISOString() }
+      const updatedRequest = await store.appendRequestFollowUp?.(req.params.id, followUp)
+      if (!updatedRequest) return res.status(404).json({ message: 'Request not found.' })
+
+      await writeAudit(actor.user, 'request.followed-up', 'request', req.params.id)
+      return res.status(201).json({ request: updatedRequest })
+    } catch (error) {
+      console.error('request follow-up error', error)
+      return res.status(500).json({ message: 'Unable to send request follow-up.' })
     }
   })
 

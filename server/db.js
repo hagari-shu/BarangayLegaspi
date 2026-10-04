@@ -8,7 +8,18 @@ async function writeJsonFile(data) {
   await fs.mkdir(dbDir, { recursive: true })
   const tempPath = `${DB_PATH}.tmp`
   await fs.writeFile(tempPath, JSON.stringify(data, null, 2), 'utf8')
-  await fs.rename(tempPath, DB_PATH)
+
+  try {
+    await fs.rename(tempPath, DB_PATH)
+  } catch (error) {
+    if (error && (error.code === 'EEXIST' || error.code === 'EPERM')) {
+      await fs.rm(DB_PATH, { force: true })
+      await fs.rename(tempPath, DB_PATH)
+      return
+    }
+
+    throw error
+  }
 }
 
 export async function readDb() {
@@ -110,6 +121,16 @@ export async function updateRequestStatus(requestId, status) {
   db.requests = db.requests.map((r) => (r.id === requestId ? request : r))
   await writeDb(db)
   return { ...request, previousStatus: previous }
+}
+
+export async function appendRequestFollowUp(requestId, followUp) {
+  const db = await readDb()
+  const request = db.requests.find((item) => item.id === requestId)
+  if (!request) return null
+  request.followUps = [...(Array.isArray(request.followUps) ? request.followUps : []), followUp]
+  request.updatedAt = followUp.createdAt
+  await writeDb(db)
+  return request
 }
 
 export async function addApproval(approval) {

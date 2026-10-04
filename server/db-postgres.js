@@ -26,8 +26,23 @@ const normalizeUser = (user = null) => {
    familyMembers: user.familyMembers ?? user.family_members ?? null,
   householdMembers: user.householdMembers ?? user.household_members ?? [],
    passwordHash: user.passwordHash ?? user.password_hash ?? null,
+  mfaSecret: user.mfaSecret ?? user.mfa_secret ?? '',
+  mfaEnabled: user.mfaEnabled ?? user.mfa_enabled ?? false,
+  mfaLastStep: Number(user.mfaLastStep ?? user.mfa_last_step ?? 0),
    createdAt: user.createdAt ?? user.created_at ?? null,
    zone: user.zone ?? user.zone_number ?? null,
+  }
+}
+
+const normalizeRequest = (request = null) => {
+  if (!request) return null
+  return {
+    ...request,
+    userId: request.userId ?? request.user_id,
+    deliveryMethod: request.deliveryMethod ?? request.delivery_method ?? 'online',
+    deliveryNote: request.deliveryNote ?? request.delivery_note ?? '',
+    followUps: request.followUps ?? request.follow_ups ?? [],
+    updatedAt: request.updatedAt ?? request.updated_at ?? null,
   }
 }
 
@@ -79,6 +94,9 @@ export async function initDatabase() {
   `)
 
   await query("ALTER TABLE users ADD COLUMN IF NOT EXISTS household_members JSONB DEFAULT '[]'::jsonb")
+  await query('ALTER TABLE users ADD COLUMN IF NOT EXISTS mfa_secret TEXT DEFAULT NULL')
+  await query('ALTER TABLE users ADD COLUMN IF NOT EXISTS mfa_enabled BOOLEAN NOT NULL DEFAULT false')
+  await query('ALTER TABLE users ADD COLUMN IF NOT EXISTS mfa_last_step BIGINT NOT NULL DEFAULT 0')
 
   await query(`
     CREATE TABLE IF NOT EXISTS requests (
@@ -88,10 +106,16 @@ export async function initDatabase() {
       purpose TEXT NOT NULL,
       notes TEXT,
       status VARCHAR(50) NOT NULL DEFAULT 'Pending',
+      delivery_method VARCHAR(30) NOT NULL DEFAULT 'online',
+      delivery_note TEXT,
+      follow_ups JSONB NOT NULL DEFAULT '[]'::jsonb,
       created_at TIMESTAMPTZ DEFAULT NOW()
     );
   `)
 
+  await query("ALTER TABLE requests ADD COLUMN IF NOT EXISTS delivery_method VARCHAR(30) NOT NULL DEFAULT 'online'")
+  await query('ALTER TABLE requests ADD COLUMN IF NOT EXISTS delivery_note TEXT')
+  await query("ALTER TABLE requests ADD COLUMN IF NOT EXISTS follow_ups JSONB NOT NULL DEFAULT '[]'::jsonb")
   await query('ALTER TABLE requests ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ')
 
   await query(`
@@ -114,9 +138,11 @@ export async function initDatabase() {
       title VARCHAR(200) NOT NULL,
       content TEXT NOT NULL,
       date VARCHAR(100),
+      social_channels JSONB NOT NULL DEFAULT '[]'::jsonb,
       created_at TIMESTAMPTZ DEFAULT NOW()
     );
   `)
+  await query("ALTER TABLE announcements ADD COLUMN IF NOT EXISTS social_channels JSONB NOT NULL DEFAULT '[]'::jsonb")
 
   if (SHOULD_SKIP_SEED || (IS_PRODUCTION && !ADMIN_SEED.password)) {
     return
@@ -205,18 +231,18 @@ export async function createUser(user) {
 }
 
 export async function listAnnouncements() {
-  const result = await query('SELECT id, tag, title, content, date, created_at AS "createdAt" FROM announcements ORDER BY created_at DESC')
-  return result.rows
+  const result = await query('SELECT id, tag, title, content, date, social_channels AS "socialChannels", created_at AS "createdAt" FROM announcements ORDER BY created_at DESC')
+  return result.rows.map((row) => ({ ...row, socialChannels: Array.isArray(row.socialChannels) ? row.socialChannels : [] }))
 }
 
 export async function saveAnnouncement(announcement) {
   const result = await query(
-    `INSERT INTO announcements (id, tag, title, content, date, created_at)
-     VALUES ($1, $2, $3, $4, $5, $6)
-     RETURNING id, tag, title, content, date, created_at AS "createdAt"`,
-    [announcement.id, announcement.tag, announcement.title, announcement.content, announcement.date, announcement.createdAt]
+    `INSERT INTO announcements (id, tag, title, content, date, social_channels, created_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
+     RETURNING id, tag, title, content, date, social_channels AS "socialChannels", created_at AS "createdAt"`,
+    [announcement.id, announcement.tag, announcement.title, announcement.content, announcement.date, JSON.stringify(Array.isArray(announcement.socialChannels) ? announcement.socialChannels : []), announcement.createdAt]
   )
-  return result.rows[0]
+  return result.rows[0] ? { ...result.rows[0], socialChannels: Array.isArray(result.rows[0].socialChannels) ? result.rows[0].socialChannels : [] } : null
 }
 
 export async function deleteAnnouncement(id) {
@@ -244,6 +270,9 @@ export async function updateUser(userId, updates = {}) {
     zone: updates.zone,
     position: updates.position,
     availability: updates.availability,
+    mfaSecret: updates.mfaSecret,
+    mfaEnabled: updates.mfaEnabled,
+    mfaLastStep: updates.mfaLastStep,
   }).filter(([, value]) => value !== undefined && value !== null)
 
   if (entries.length === 0) {
@@ -265,6 +294,9 @@ export async function updateUser(userId, updates = {}) {
     zone: 'zone',
     position: 'position',
     availability: 'availability',
+    mfaSecret: 'mfa_secret',
+    mfaEnabled: 'mfa_enabled',
+    mfaLastStep: 'mfa_last_step',
   }
 
   const assignments = entries.map(([key]) => `${columns[key]} = $${entries.indexOf([key, entries.find(([, value]) => value === updates[key] || value === updates[key])?.[1]]) + 1}`)
@@ -290,9 +322,9 @@ export async function updateUser(userId, updates = {}) {
 export async function createRequest(request) {
   try {
     await query(
-      `INSERT INTO requests (id, user_id, type, purpose, notes, status, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-      [request.id, request.userId, request.type, request.purpose, request.notes || '', request.status, new Date(request.date || Date.now()).toISOString()]
+      `INSERT INTO requests (id, user_id, type, purpose, notes, status, delivery_method, delivery_note, follow_ups, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+      [request.id, request.userId, request.type, request.purpose, request.notes || '', request.status, request.deliveryMethod || 'online', request.deliveryNote || '', JSON.stringify(request.followUps || []), new Date(request.date || Date.now()).toISOString()]
     )
     return request
   } catch (error) {
@@ -325,7 +357,7 @@ export async function listRequestsForUser(userId) {
       `SELECT * FROM requests WHERE user_id = $1 ORDER BY created_at DESC`,
       [userId]
     )
-    return result.rows
+    return result.rows.map(normalizeRequest)
   } catch (error) {
     console.warn('listRequestsForUser fallback triggered', error.message)
     const db = await readDb()
@@ -341,7 +373,7 @@ export async function listAllRequests() {
        JOIN users u ON u.id = r.user_id
        ORDER BY r.created_at DESC`
     )
-    return result.rows
+    return result.rows.map(normalizeRequest)
   } catch (error) {
     console.warn('listAllRequests fallback triggered', error.message)
     const db = await readDb()
@@ -376,7 +408,7 @@ export async function updateRequestStatus(requestId, status) {
       `UPDATE requests SET status = $1, updated_at = NOW() WHERE id = $2 RETURNING *`,
       [status, requestId]
     )
-    return result.rows[0] || null
+    return normalizeRequest(result.rows[0])
   } catch (error) {
     console.warn('updateRequestStatus fallback triggered', error.message)
     const db = await readDb()
@@ -387,6 +419,28 @@ export async function updateRequestStatus(requestId, status) {
     request.updatedAt = new Date().toISOString()
     await writeDb({ ...db, requests: (db.requests || []).map((item) => item.id === requestId ? request : item) })
     return { ...request, previousStatus }
+  }
+}
+
+export async function appendRequestFollowUp(requestId, followUp) {
+  try {
+    const result = await query(
+      `UPDATE requests
+       SET follow_ups = COALESCE(follow_ups, '[]'::jsonb) || $1::jsonb, updated_at = $2
+       WHERE id = $3
+       RETURNING *`,
+      [JSON.stringify([followUp]), followUp.createdAt, requestId]
+    )
+    return normalizeRequest(result.rows[0])
+  } catch (error) {
+    console.warn('appendRequestFollowUp fallback triggered', error.message)
+    const db = await readDb()
+    const request = (db.requests || []).find((item) => item.id === requestId)
+    if (!request) return null
+    request.followUps = [...(Array.isArray(request.followUps) ? request.followUps : []), followUp]
+    request.updatedAt = followUp.createdAt
+    await writeDb(db)
+    return request
   }
 }
 

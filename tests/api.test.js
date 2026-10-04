@@ -1,10 +1,21 @@
-import test from 'node:test'
+import test, { beforeEach } from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
-import { createApp } from '../server/app.js'
+import fs from 'node:fs/promises'
+import path from 'node:path'
+import { createApp, seedDemoResident } from '../server/app.js'
 import { hashPassword } from '../server/auth.js'
 import * as jsonDb from '../server/db.js'
+import { DB_PATH } from '../server/config.js'
 import { randomUUID } from 'node:crypto'
+
+const testDbPath = DB_PATH
+
+beforeEach(async () => {
+  await fs.mkdir(path.dirname(testDbPath), { recursive: true })
+  await fs.writeFile(testDbPath, JSON.stringify({ users: [], requests: [], announcements: [], reports: [], approvals: [], auditLogs: [] }, null, 2), 'utf8')
+  await seedDemoResident()
+})
 
 const createTestServer = async () => {
   const app = createApp()
@@ -467,9 +478,12 @@ test('reset password request sends a delivery webhook payload when configured', 
   })
 
   process.env.RESET_DELIVERY_URL = `http://127.0.0.1:${deliveryServer.address().port}`
+  let appServer
 
   try {
-    const { server, baseUrl } = await createTestServer()
+    const testServer = await createTestServer()
+    appServer = testServer.server
+    const { baseUrl } = testServer
     const email = `delivery.${Date.now()}@example.com`
     const registerResponse = await fetch(`${baseUrl}/api/register`, {
       method: 'POST',
@@ -503,6 +517,11 @@ test('reset password request sends a delivery webhook payload when configured', 
   } finally {
     if (originalDeliveryUrl === undefined) delete process.env.RESET_DELIVERY_URL
     else process.env.RESET_DELIVERY_URL = originalDeliveryUrl
+    if (appServer) {
+      await new Promise((resolve, reject) => {
+        appServer.close((error) => (error ? reject(error) : resolve()))
+      })
+    }
     await new Promise((resolve, reject) => {
       deliveryServer.close((error) => (error ? reject(error) : resolve()))
     })
