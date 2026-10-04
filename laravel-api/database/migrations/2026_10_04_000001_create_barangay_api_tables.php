@@ -2,7 +2,6 @@
 
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 
 return new class extends Migration
@@ -129,20 +128,6 @@ return new class extends Migration
                 $table->timestampTz('created_at')->useCurrent();
             });
         }
-        foreach ([
-            ['INV-1042', 'Barangay permit', 'Paid', '₱250.00'],
-            ['INV-1049', 'Medical assistance', 'Pending', '₱1,200.00'],
-            ['INV-1056', 'Community fee', 'Paid', '₱180.00'],
-        ] as [$id, $label, $status, $amount]) {
-            DB::table('payments')->insertOrIgnore([
-                'id' => $id,
-                'label' => $label,
-                'status' => $status,
-                'amount' => $amount,
-                'created_at' => now(),
-            ]);
-        }
-
         if (!Schema::hasTable('api_tokens')) {
             Schema::create('api_tokens', function (Blueprint $table) {
                 $table->uuid('id')->primary();

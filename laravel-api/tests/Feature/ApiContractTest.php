@@ -18,6 +18,11 @@ class ApiContractTest extends TestCase
             ->assertJsonPath('storage', 'sqlite');
     }
 
+    public function test_migrations_do_not_seed_demo_payment_records(): void
+    {
+        $this->assertDatabaseCount('payments', 0);
+    }
+
     public function test_resident_registration_preserves_the_frontend_response_contract(): void
     {
         $this->postJson('/api/register', [
