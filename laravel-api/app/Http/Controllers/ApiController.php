@@ -17,24 +17,23 @@ class ApiController extends Controller
 {
     private const PASSWORD_REQUIREMENTS = 'at least 8 characters, one uppercase letter, one lowercase letter, one number, and one special character';
 
+    private const QUALITY_FACTORS = [
+        'correctness', 'reliability', 'efficiency', 'integrity', 'usability',
+        'maintainability', 'flexibility', 'testability',
+        'portability', 'reusability', 'interoperability',
+    ];
+
+    private const QUALITY_GROUPS = [
+        'productOperation' => ['correctness', 'reliability', 'efficiency', 'integrity', 'usability'],
+        'productRevision' => ['maintainability', 'flexibility', 'testability'],
+        'productTransition' => ['portability', 'reusability', 'interoperability'],
+    ];
+
     private const SERVICES = [
         ['icon' => '📄', 'title' => 'Barangay Certificate', 'subtitle' => 'Request and claim', 'tone' => 'green'],
         ['icon' => '🏥', 'title' => 'Health Assistance', 'subtitle' => 'Access public health support', 'tone' => 'blue'],
         ['icon' => '🧾', 'title' => 'Barangay Clearance', 'subtitle' => 'Update and renew', 'tone' => 'amber'],
         ['icon' => '🚨', 'title' => 'Emergency Help', 'subtitle' => 'Call for immediate support', 'tone' => 'red'],
-    ];
-
-    private const EVENTS = [
-        ['title' => 'Barangay health drive', 'date' => '2026-09-05', 'location' => 'Covered Court'],
-        ['title' => 'Tree planting program', 'date' => '2026-09-12', 'location' => 'Barangay Park'],
-        ['title' => 'Senior citizen support session', 'date' => '2026-09-18', 'location' => 'Barangay Hall'],
-    ];
-
-    private const SAMPLE_ANNOUNCEMENTS = [
-        ['tag' => 'green', 'title' => 'Free vaccination schedule', 'date' => 'June 18 • 8:00 AM', 'content' => 'Vaccination drive for all residents. Come to the barangay hall.', 'socialChannels' => ['facebook', 'instagram']],
-        ['tag' => 'amber', 'title' => 'Senior citizen ID renewal', 'date' => 'June 20 • 9:00 AM', 'content' => 'Senior citizens are encouraged to renew their IDs.', 'socialChannels' => ['facebook']],
-        ['tag' => 'blue', 'title' => 'Clean-up drive reminder', 'date' => 'June 25 • 7:00 AM', 'content' => 'Community clean-up drive scheduled for next Saturday.', 'socialChannels' => ['facebook', 'messenger']],
-        ['tag' => 'red', 'title' => 'Emergency hotline now active', 'date' => 'August 29 • 3:30 PM', 'content' => 'Emergency hotline is available 24/7 for all barangay residents.', 'socialChannels' => ['facebook', 'instagram', 'x']],
     ];
 
     public function health(): JsonResponse
@@ -169,6 +168,9 @@ class ApiController extends Controller
         }
 
         $role = strtolower((string) ($user->role ?: 'resident'));
+        if (in_array($user->status, ['Suspended', 'Disabled'], true)) {
+            return response()->json(['message' => 'Your account is disabled. Please contact the barangay office for assistance.'], 403);
+        }
         $approved = in_array($role, ['admin', 'staff'], true)
             || in_array($user->status, ['Administrator', 'On Duty', 'Active Resident'], true);
         if ($role === 'resident' && !$approved) {
@@ -244,6 +246,110 @@ class ApiController extends Controller
         return response()->json(['user' => $this->publicUser($request->attributes->get('actor'))]);
     }
 
+    public function qualityAssessment(Request $request): JsonResponse
+    {
+        $actor = $request->attributes->get('actor');
+        $stored = DB::table('quality_assessments')->where('user_id', $actor->id)->first();
+        $scores = $stored ? json_decode($stored->scores, true) : null;
+
+        return response()->json([
+            'assessment' => [
+                'scores' => $this->normalizeQualityScores($scores),
+                'updatedAt' => $stored?->updated_at ? date(DATE_ATOM, strtotime($stored->updated_at)) : null,
+            ],
+        ]);
+    }
+
+    public function saveQualityAssessment(Request $request): JsonResponse
+    {
+        $actor = $request->attributes->get('actor');
+        $scores = $request->input('scores');
+        if (!is_array($scores) || array_is_list($scores) || array_diff(array_keys($scores), self::QUALITY_FACTORS)) {
+            return response()->json(['message' => 'Assessment scores must contain only supported factors.'], 400);
+        }
+
+        $normalizedScores = [];
+        foreach (self::QUALITY_FACTORS as $factor) {
+            $score = $scores[$factor] ?? null;
+            if ($score !== null && (!is_int($score) || $score < 1 || $score > 5)) {
+                return response()->json(['message' => "Invalid score for {$factor}."], 400);
+            }
+            $normalizedScores[$factor] = $score;
+        }
+
+        $updatedAt = now();
+        DB::table('quality_assessments')->updateOrInsert(
+            ['user_id' => $actor->id],
+            [
+                'role' => $actor->role,
+                'scores' => json_encode($normalizedScores, JSON_THROW_ON_ERROR),
+                'updated_at' => $updatedAt,
+            ],
+        );
+
+        return response()->json([
+            'assessment' => [
+                'scores' => $normalizedScores,
+                'updatedAt' => $updatedAt->toAtomString(),
+            ],
+        ]);
+    }
+
+    public function qualityAssessmentSummary(): JsonResponse
+    {
+        $responses = DB::table('quality_assessments')->get(['scores']);
+        $totals = array_fill_keys(self::QUALITY_FACTORS, 0);
+        $counts = array_fill_keys(self::QUALITY_FACTORS, 0);
+
+        foreach ($responses as $response) {
+            $scores = json_decode($response->scores, true);
+            foreach (self::QUALITY_FACTORS as $factor) {
+                $score = $scores[$factor] ?? null;
+                if (is_int($score) && $score >= 1 && $score <= 5) {
+                    $totals[$factor] += $score;
+                    $counts[$factor]++;
+                }
+            }
+        }
+
+        $average = static fn (int $total, int $count): ?float => $count === 0 ? null : round($total / $count, 1);
+        $factors = [];
+        foreach (self::QUALITY_FACTORS as $factor) {
+            $factors[$factor] = ['average' => $average($totals[$factor], $counts[$factor]), 'ratedCount' => $counts[$factor]];
+        }
+
+        $groups = [];
+        foreach (self::QUALITY_GROUPS as $group => $groupFactors) {
+            $total = array_sum(array_intersect_key($totals, array_flip($groupFactors)));
+            $count = array_sum(array_intersect_key($counts, array_flip($groupFactors)));
+            $groups[$group] = ['average' => $average($total, $count), 'ratedCount' => $count];
+        }
+
+        $totalRatings = array_sum($counts);
+        $totalScore = array_sum($totals);
+
+        return response()->json([
+            'summary' => [
+                'responseCount' => $responses->count(),
+                'totalRatings' => $totalRatings,
+                'average' => $average($totalScore, $totalRatings),
+                'factors' => $factors,
+                'groups' => $groups,
+            ],
+        ]);
+    }
+
+    private function normalizeQualityScores(?array $scores): array
+    {
+        $normalized = [];
+        foreach (self::QUALITY_FACTORS as $factor) {
+            $score = $scores[$factor] ?? null;
+            $normalized[$factor] = is_int($score) && $score >= 1 && $score <= 5 ? $score : null;
+        }
+
+        return $normalized;
+    }
+
     public function updateProfile(Request $request): JsonResponse
     {
         $actor = $request->attributes->get('actor');
@@ -298,13 +404,13 @@ class ApiController extends Controller
         return response()->json([
             'services' => self::SERVICES,
             'announcements' => $announcements,
-            'events' => self::EVENTS,
+            'events' => [],
             'payments' => $this->paymentList(),
             'summary' => [
                 'totalRequests' => count($requests),
                 'pending' => count(array_filter($requests, fn ($item) => $item['status'] !== 'Approved')),
                 'activeCases' => count(array_filter($requests, fn ($item) => $item['status'] === 'Pending')),
-                'nextEvent' => self::EVENTS[0],
+                'nextEvent' => null,
             ],
             'user' => $this->publicUser($actor),
         ]);
@@ -317,7 +423,7 @@ class ApiController extends Controller
 
     public function events(): JsonResponse
     {
-        return response()->json(['events' => self::EVENTS]);
+        return response()->json(['events' => []]);
     }
 
     public function announcements(): JsonResponse
@@ -719,8 +825,28 @@ class ApiController extends Controller
         $position = $request->input('position', $existing->position);
         $availability = $request->input('availability', $existing->availability ?: 'Available');
         $address = $this->clean($request->input('address', $existing->address));
-        $householdId = $this->clean($request->input('householdId', $existing->household_id ?? '')) ?: null;
+        $householdId = $request->exists('householdId')
+            ? ($this->clean($request->input('householdId')) ?: null)
+            : ($existing->household_id ?? null);
         $familyMembers = $request->input('familyMembers', $existing->family_members ?? 4);
+        $storedHouseholdMembers = json_decode((string) ($existing->household_members ?? '[]'), true);
+        $householdMembers = $request->input('householdMembers', is_array($storedHouseholdMembers) ? $storedHouseholdMembers : []);
+
+        if (!is_array($householdMembers) || count($householdMembers) > 100) {
+            return response()->json(['message' => 'Household members must be a list of no more than 100 people.'], 400);
+        }
+        $validatedHouseholdMembers = [];
+        foreach ($householdMembers as $member) {
+            if (!is_array($member) || !is_string($member['name'] ?? null) || !is_string($member['relationship'] ?? null)) {
+                return response()->json(['message' => 'Each household member needs a name (up to 100 characters) and relationship (up to 50 characters).'], 400);
+            }
+            $name = $this->clean($member['name']);
+            $relationship = $this->clean($member['relationship']);
+            if (!$name || mb_strlen($name) > 100 || !$relationship || mb_strlen($relationship) > 50) {
+                return response()->json(['message' => 'Each household member needs a name (up to 100 characters) and relationship (up to 50 characters).'], 400);
+            }
+            $validatedHouseholdMembers[] = ['name' => $name, 'relationship' => $relationship];
+        }
 
         if (!in_array($role, ['resident', 'staff', 'admin'], true)) {
             return response()->json(['message' => 'Invalid role.'], 400);
@@ -736,6 +862,12 @@ class ApiController extends Controller
         }
         if ($role === 'resident' && (!filter_var($zone, FILTER_VALIDATE_INT) || $zone < 1 || $zone > 7)) {
             return response()->json(['message' => 'Resident zone must be a number from 1 to 7.'], 400);
+        }
+        if (filter_var($familyMembers, FILTER_VALIDATE_INT) === false || (int) $familyMembers < 1 || (int) $familyMembers > 100) {
+            return response()->json(['message' => 'Family members must be a whole number from 1 to 100.'], 400);
+        }
+        if ($householdId !== null && mb_strlen($householdId) > 50) {
+            return response()->json(['message' => 'Household ID must not exceed 50 characters.'], 400);
         }
         if (DB::table('users')->whereRaw('LOWER(email) = ?', [$email])->where('id', '!=', $id)->exists()) {
             return response()->json(['message' => 'A user with this email already exists.'], 409);
@@ -756,7 +888,8 @@ class ApiController extends Controller
             'availability' => $this->clean($availability),
             'address' => $address,
             'household_id' => $householdId,
-            'family_members' => max(0, (int) $familyMembers),
+            'family_members' => (int) $familyMembers,
+            'household_members' => json_encode($validatedHouseholdMembers),
         ]);
         $updated = DB::table('users')->where('id', $id)->first();
         $this->sendDelivery([
@@ -839,23 +972,6 @@ class ApiController extends Controller
 
     public function reports(): JsonResponse
     {
-        if (DB::table('reports')->count() === 0) {
-            foreach ([
-                ['RPT-001', 'Emergency', 'Fire Incident', 'Minor house fire reported in Zone 3', 'High', 3, 'Resolved', '2026-08-28 10:30:00'],
-                ['RPT-002', 'Health', 'Medical Assistance Request', 'Senior citizen assisted with first aid', 'Medium', 1, 'Completed', '2026-08-27 14:15:00'],
-            ] as [$id, $type, $title, $description, $severity, $zone, $status, $date]) {
-                DB::table('reports')->insertOrIgnore([
-                    'id' => $id,
-                    'type' => $type,
-                    'title' => $title,
-                    'description' => $description,
-                    'severity' => $severity,
-                    'zone' => $zone,
-                    'status' => $status,
-                    'report_date' => $date,
-                ]);
-            }
-        }
         $rows = DB::table('reports')->orderByDesc('report_date')->get()->map(fn ($report) => [
             'id' => $report->id,
             'type' => $report->type,
@@ -1425,20 +1541,6 @@ class ApiController extends Controller
 
     private function announcementList(): array
     {
-        if (DB::table('announcements')->count() === 0) {
-            foreach (self::SAMPLE_ANNOUNCEMENTS as $index => $item) {
-                DB::table('announcements')->insertOrIgnore([
-                    'id' => (string) Str::uuid(),
-                    'tag' => $item['tag'],
-                    'title' => $item['title'],
-                    'content' => $item['content'],
-                    'date' => $item['date'],
-                    'social_channels' => json_encode($item['socialChannels']),
-                    'created_at' => now()->subSeconds($index),
-                ]);
-            }
-        }
-
         return DB::table('announcements')->orderByDesc('created_at')->get()
             ->map(fn ($row) => $this->announcementData($row))
             ->all();
