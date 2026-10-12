@@ -48,6 +48,17 @@ class ApiContractTest extends TestCase
         $this->assertDatabaseCount('payments', 0);
     }
 
+    public function test_public_event_and_announcement_reads_do_not_seed_examples(): void
+    {
+        $this->getJson('/api/events')
+            ->assertOk()
+            ->assertExactJson(['events' => []]);
+
+        $this->getJson('/api/announcements')
+            ->assertOk()
+            ->assertExactJson(['announcements' => []]);
+    }
+
     public function test_resident_registration_preserves_the_frontend_response_contract(): void
     {
         $this->postJson('/api/register', [
@@ -102,6 +113,25 @@ class ApiContractTest extends TestCase
             ->assertOk();
 
         $this->withToken($login->json('token'))
+            ->patchJson('/api/admin/users/00000000-0000-4000-8000-000000000001', [
+                'householdId' => 'LEG-2026-001',
+                'familyMembers' => 2,
+                'householdMembers' => [
+                    ['name' => 'Elena Santos', 'relationship' => 'Spouse'],
+                ],
+            ])
+            ->assertOk()
+            ->assertJsonPath('user.householdId', 'LEG-2026-001')
+            ->assertJsonPath('user.familyMembers', 2)
+            ->assertJsonPath('user.householdMembers.0.name', 'Elena Santos');
+
+        $this->withToken($login->json('token'))
+            ->patchJson('/api/admin/users/00000000-0000-4000-8000-000000000001', [
+                'householdMembers' => [['name' => 'Missing relationship']],
+            ])
+            ->assertBadRequest();
+
+        $this->withToken($login->json('token'))
             ->postJson('/api/announcements', [
                 'title' => 'Community update',
                 'content' => 'Scheduled public meeting',
@@ -109,5 +139,100 @@ class ApiContractTest extends TestCase
             ])
             ->assertCreated()
             ->assertJsonPath('announcement.socialChannels', ['facebook', 'instagram']);
+    }
+
+    public function test_quality_ratings_are_saved_per_user_and_only_aggregates_are_admin_visible(): void
+    {
+        $accounts = [
+            'resident' => ['00000000-0000-4000-8000-000000000011', 'resident-quality@example.test', '09'.'888888881', 'Resident'],
+            'staff' => ['00000000-0000-4000-8000-000000000012', 'staff-quality@example.test', '09'.'888888882', 'Staff'],
+            'admin' => ['00000000-0000-4000-8000-000000000013', 'admin-quality@example.test', '09'.'888888883', 'Admin'],
+        ];
+
+        foreach ($accounts as $role => [$id, $email, $mobile, $name]) {
+            DB::table('users')->insert([
+                'id' => $id,
+                'first_name' => $name,
+                'last_name' => 'Quality',
+                'mobile' => $mobile,
+                'email' => $email,
+                'password_hash' => password_hash('Quality!2026Pass', PASSWORD_BCRYPT),
+                'role' => $role,
+                'household_id' => 'QUALITY-'.$role,
+                'family_members' => 1,
+                'household_members' => '[]',
+                'status' => $role === 'staff' ? 'On Duty' : ($role === 'admin' ? 'Administrator' : 'Active Resident'),
+                'address' => 'Barangay Legaspi',
+                'zone' => 1,
+                'availability' => 'Available',
+                'mfa_enabled' => false,
+                'mfa_last_step' => 0,
+                'created_at' => now(),
+            ]);
+        }
+
+        $tokens = [];
+        foreach ($accounts as $role => [, $email]) {
+            $tokens[$role] = $this->postJson('/api/login', [
+                'identifier' => $email,
+                'password' => 'Quality!2026Pass',
+            ])->assertOk()->json('token');
+        }
+
+        $scores = [
+            'correctness' => 5,
+            'reliability' => null,
+            'efficiency' => null,
+            'integrity' => null,
+            'usability' => null,
+            'maintainability' => null,
+            'flexibility' => null,
+            'testability' => null,
+            'portability' => null,
+            'reusability' => null,
+            'interoperability' => null,
+        ];
+
+        $this->withToken($tokens['resident'])
+            ->putJson('/api/quality-assessment', [
+                'scores' => $scores,
+                'notes' => ['correctness' => 'This note must remain in the browser.'],
+            ])
+            ->assertOk()
+            ->assertJsonPath('assessment.scores.correctness', 5)
+            ->assertJsonMissingPath('assessment.notes');
+        $this->assertStringNotContainsString(
+            'This note must remain in the browser.',
+            DB::table('quality_assessments')->where('user_id', $accounts['resident'][0])->value('scores'),
+        );
+
+        $this->withToken($tokens['staff'])
+            ->getJson('/api/quality-assessment')
+            ->assertOk()
+            ->assertJsonPath('assessment.scores.correctness', null);
+
+        $scores['correctness'] = 3;
+        $this->withToken($tokens['staff'])
+            ->putJson('/api/quality-assessment', ['scores' => $scores])
+            ->assertOk();
+
+        $this->withToken($tokens['admin'])
+            ->getJson('/api/admin/quality-assessments')
+            ->assertOk()
+            ->assertJsonPath('summary.responseCount', 2)
+            ->assertJsonPath('summary.totalRatings', 2)
+            ->assertJsonPath('summary.average', 4)
+            ->assertJsonPath('summary.factors.correctness.average', 4)
+            ->assertJsonMissingPath('summary.resident-quality@example.test');
+
+        $this->withToken($tokens['resident'])
+            ->getJson('/api/admin/quality-assessments')
+            ->assertForbidden();
+
+        $scores['correctness'] = 6;
+        $this->withToken($tokens['resident'])
+            ->putJson('/api/quality-assessment', ['scores' => $scores])
+            ->assertBadRequest();
+        $this->assertDatabaseCount('quality_assessments', 2);
     }
 }
