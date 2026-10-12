@@ -5,6 +5,7 @@ import barangaySeal from './assets/barangay-seal-new.png'
 import legaspiHero from './assets/legaspi-community.png'
 import { getMauQuickOptions, getMauReply, getMauResidentAnswer, getMauWelcome } from './mau-responses'
 import { reportClientError } from './client-error-reporting'
+import { AdminQualitySummary, QualityModelPage } from './QualityAssessment'
 import translations from './translations'
 import './App.css'
 
@@ -37,7 +38,7 @@ const getRequestStatusLabel = (status, t) => ({
   Pending: t.statusSubmitted,
   'In Review': t.statusUnderReview,
   'Needs Information': t.statusNeedsInformation,
-  Approved: t.statusCompleted,
+  Approved: t.approved,
   Rejected: t.statusRejected,
   Available: t.availableLabel,
 }[status] || status || t.statusSubmitted)
@@ -53,13 +54,6 @@ const getStaffAvailabilityLabel = (availability, t) => ({
   Busy: t.busyStatus,
   'On Duty': t.onDutyStatus,
 }[availability] || availability)
-const nextRequestStatuses = {
-  Pending: ['In Review', 'Needs Information', 'Approved', 'Rejected'],
-  'In Review': ['Needs Information', 'Approved', 'Rejected'],
-  'Needs Information': ['In Review', 'Approved', 'Rejected'],
-  Approved: [],
-  Rejected: [],
-}
 const isValidIdentifier = (value) => /^[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}$|^09\d{9}$/.test(String(value).trim())
 const isValidPassword = (value) => {
   const password = String(value).trim()
@@ -190,12 +184,85 @@ const formatDateValue = (value) => {
   return parsed.toLocaleString()
 }
 
+function WorkflowModal({ title, onClose, children, wide = false, disableClose = false }) {
+  const titleId = 'workflow-modal-title'
+  useEffect(() => {
+    const previousOverflow = document.body.style.overflow
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape' && !disableClose) onClose()
+    }
+
+    document.body.style.overflow = 'hidden'
+    document.addEventListener('keydown', handleKeyDown)
+    return () => {
+      document.body.style.overflow = previousOverflow
+      document.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [disableClose, onClose])
+
+  return (
+    <div className="modal-overlay" onMouseDown={(event) => {
+      if (!disableClose && event.target === event.currentTarget) onClose()
+    }}>
+      <section
+        className={`modal-content workflow-modal${wide ? ' workflow-modal-wide' : ''}`}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+      >
+        <button type="button" className="modal-close" aria-label="Close dialog" onClick={onClose} disabled={disableClose}>×</button>
+        <div className="modal-header workflow-modal-header"><h2 id={titleId}>{title}</h2></div>
+        <div className="workflow-modal-body">{children}</div>
+      </section>
+    </div>
+  )
+}
+
+function ConfirmationModal({ title, message, onClose, onConfirm, confirmLabel = 'Confirm', cancelLabel = 'Cancel' }) {
+  const [busy, setBusy] = useState(false)
+  const [errorMessage, setErrorMessage] = useState('')
+
+  const confirm = async () => {
+    setBusy(true)
+    setErrorMessage('')
+    try {
+      await onConfirm()
+      onClose()
+    } catch (error) {
+      setErrorMessage(error.message || 'Unable to complete this action.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <WorkflowModal title={title} onClose={onClose} disableClose={busy}>
+      <p>{message}</p>
+      {errorMessage && <p className="modal-error" role="alert">{errorMessage}</p>}
+      <div className="modal-actions">
+        <button type="button" className="secondary-btn small" onClick={onClose} disabled={busy}>{cancelLabel}</button>
+        <button type="button" className="small-action danger" onClick={confirm} disabled={busy}>
+          {busy ? 'Working…' : confirmLabel}
+        </button>
+      </div>
+    </WorkflowModal>
+  )
+}
+
 function UserDetailModal({ user, onClose, onUserUpdated, allowEdit = false }) {
   const [editableUser, setEditableUser] = useState(() => ({ ...(user || {}) }))
+  const [householdMembersText, setHouseholdMembersText] = useState(() => (
+    Array.isArray(user?.householdMembers)
+      ? user.householdMembers.map((member) => `${member.name || ''} | ${member.relationship || ''}`).join('\n')
+      : ''
+  ))
   const [saving, setSaving] = useState(false)
 
   useEffect(() => {
     setEditableUser({ ...(user || {}) })
+    setHouseholdMembersText(Array.isArray(user?.householdMembers)
+      ? user.householdMembers.map((member) => `${member.name || ''} | ${member.relationship || ''}`).join('\n')
+      : '')
   }, [user])
 
   if (!user) return null
@@ -233,6 +300,14 @@ function UserDetailModal({ user, onClose, onUserUpdated, allowEdit = false }) {
         address: editableUser.address ?? '',
         householdId: editableUser.householdId ?? editableUser.household_id ?? null,
         familyMembers: editableUser.familyMembers ?? editableUser.family_members ?? 4,
+        householdMembers: householdMembersText
+          .split(/\r?\n/)
+          .map((line) => line.trim())
+          .filter(Boolean)
+          .map((line) => {
+            const [name = '', ...relationshipParts] = line.split('|')
+            return { name: name.trim(), relationship: relationshipParts.join('|').trim() }
+          }),
       }
 
       const response = await fetch(`${API_BASE}/admin/users/${editableUser.id}`, {
@@ -315,7 +390,15 @@ function UserDetailModal({ user, onClose, onUserUpdated, allowEdit = false }) {
                 <div><dt>Household ID</dt><dd>{allowEdit ? <input value={editableUser.householdId || editableUser.household_id || ''} onChange={(event) => handleFieldChange('householdId', event.target.value)} /> : (editableUser.householdId || editableUser.household_id || 'N/A')}</dd></div>
                 <div><dt>Family Members</dt><dd>{allowEdit ? <input type="number" min="1" value={editableUser.familyMembers ?? editableUser.family_members ?? 4} onChange={(event) => handleFieldChange('familyMembers', Number(event.target.value) || 0)} /> : (editableUser.familyMembers ?? editableUser.family_members ?? 'N/A')}</dd></div>
                 <div><dt>Address</dt><dd>{allowEdit ? <input value={editableUser.address || ''} onChange={(event) => handleFieldChange('address', event.target.value)} /> : (editableUser.address || 'N/A')}</dd></div>
-                <div><dt>Household Members</dt><dd>{Array.isArray(editableUser.householdMembers) && editableUser.householdMembers.length > 0 ? editableUser.householdMembers.map((member) => `${member.name} (${member.relationship})`).join(', ') : 'None listed'}</dd></div>
+                <div><dt>Household Members</dt><dd>{allowEdit ? (
+                  <textarea
+                    aria-label="Household members"
+                    rows="4"
+                    placeholder="One member per line: Full name | Relationship"
+                    value={householdMembersText}
+                    onChange={(event) => setHouseholdMembersText(event.target.value)}
+                  />
+                ) : (Array.isArray(editableUser.householdMembers) && editableUser.householdMembers.length > 0 ? editableUser.householdMembers.map((member) => `${member.name} (${member.relationship})`).join(', ') : 'None listed')}</dd></div>
               </dl>
             </div>
           )}
@@ -357,6 +440,129 @@ function ProtectedRoute({ isAuthenticated, allowedRoles, userRole, children }) {
   return children
 }
 
+async function optimizeCaptainPhoto(file) {
+  const bitmap = await createImageBitmap(file)
+  try {
+    const scale = Math.min(1, 1280 / Math.max(bitmap.width, bitmap.height))
+    const canvas = document.createElement('canvas')
+    canvas.width = Math.max(1, Math.round(bitmap.width * scale))
+    canvas.height = Math.max(1, Math.round(bitmap.height * scale))
+    canvas.getContext('2d').drawImage(bitmap, 0, 0, canvas.width, canvas.height)
+    return await new Promise((resolve, reject) => {
+      canvas.toBlob((blob) => {
+        if (blob) resolve(blob)
+        else reject(new Error('Unable to process the selected image.'))
+      }, 'image/webp', 0.82)
+    })
+  } finally {
+    bitmap.close()
+  }
+}
+
+function CaptainPhotoSettings({ language }) {
+  const t = translations[language] || translations.en
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const [photoVersion, setPhotoVersion] = useState(0)
+  const fileInput = useRef(null)
+
+  const handleUpload = async (event) => {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (!file) return
+    if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
+      setError(t.captainPhotoInvalid)
+      return
+    }
+    if (file.size < 1 || file.size > 5 * 1024 * 1024) {
+      setError(t.captainPhotoTooLarge)
+      return
+    }
+
+    setBusy(true)
+    setError('')
+    try {
+      const optimizedPhoto = await optimizeCaptainPhoto(file)
+      if (!['image/jpeg', 'image/png', 'image/webp'].includes(optimizedPhoto.type)) {
+        throw new Error(t.captainPhotoInvalid)
+      }
+      if (optimizedPhoto.size < 1 || optimizedPhoto.size > 5 * 1024 * 1024) {
+        throw new Error(t.captainPhotoTooLarge)
+      }
+      const linkResponse = await fetch(`${API_BASE}/admin/captain-photo/upload-url`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contentType: optimizedPhoto.type }),
+      })
+      const upload = await linkResponse.json().catch(() => ({}))
+      if (!linkResponse.ok) throw new Error(upload.message || t.captainPhotoUploadFailed)
+
+      const form = new FormData()
+      for (const [name, value] of Object.entries(upload.fields)) form.append(name, value)
+      form.append('file', optimizedPhoto, 'captain-photo.webp')
+      const storageResponse = await fetch(upload.url, { method: 'POST', body: form })
+      if (!storageResponse.ok) throw new Error(t.captainPhotoUploadFailed)
+
+      const finalizeResponse = await fetch(`${API_BASE}/admin/captain-photo`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: upload.key }),
+      })
+      const result = await finalizeResponse.json().catch(() => ({}))
+      if (!finalizeResponse.ok) throw new Error(result.message || t.captainPhotoUploadFailed)
+      setPhotoVersion(Date.now())
+    } catch (uploadError) {
+      console.error('upload captain photo failed', uploadError)
+      setError(uploadError.message || t.captainPhotoUploadFailed)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const handleRemove = async () => {
+    setBusy(true)
+    setError('')
+    try {
+      const response = await fetch(`${API_BASE}/admin/captain-photo`, { method: 'DELETE' })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(data.message || t.captainPhotoUploadFailed)
+      setPhotoVersion(Date.now())
+    } catch (removeError) {
+      console.error('remove captain photo failed', removeError)
+      setError(removeError.message || t.captainPhotoUploadFailed)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <article className="panel-card captain-photo-settings">
+      <div>
+        <h2>{t.captainPhotoSettings}</h2>
+        <p>{t.captainPhotoStorageHint}</p>
+        <input
+          ref={fileInput}
+          type="file"
+          accept="image/jpeg,image/png,image/webp"
+          aria-label={t.captainPhotoLabel}
+          disabled={busy}
+          onChange={handleUpload}
+        />
+        <div className="captain-photo-settings-actions">
+          <button className="primary-btn small" type="button" disabled={busy} onClick={() => fileInput.current?.click()}>
+            {busy ? t.captainPhotoUploading : t.captainPhotoChoose}
+          </button>
+          <button className="secondary-btn small" type="button" disabled={busy} onClick={handleRemove}>
+            {t.captainPhotoRemove}
+          </button>
+        </div>
+        {error && <p className="captain-photo-error" role="alert">{error}</p>}
+      </div>
+      <img key={photoVersion} src={`${API_BASE}/captain-photo?v=${photoVersion}`} alt={t.captainPortraitAlt} onError={(event) => { event.currentTarget.hidden = true }} />
+    </article>
+  )
+}
+
 function LoginPage({ onLogin, language, setLanguage }) {
   const navigate = useNavigate()
   const t = translations[language] || translations.en
@@ -373,32 +579,7 @@ function LoginPage({ onLogin, language, setLanguage }) {
   const [resetForm, setResetForm] = useState({ identifier: '', token: '', newPassword: '' })
   const [resetRequested, setResetRequested] = useState(false)
   const [resetting, setResetting] = useState(false)
-  const [captainPhoto, setCaptainPhoto] = useState('')
-  const [captainPhotoError, setCaptainPhotoError] = useState('')
-
-  useEffect(() => {
-    if (!captainPhoto) return undefined
-    return () => URL.revokeObjectURL(captainPhoto)
-  }, [captainPhoto])
-
-  const handleCaptainPhotoChange = (event) => {
-    const file = event.target.files?.[0]
-    event.target.value = ''
-    if (!file) return
-
-    if (!file.type.startsWith('image/')) {
-      setCaptainPhotoError(t.captainPhotoInvalid)
-      return
-    }
-
-    if (file.size > 5 * 1024 * 1024) {
-      setCaptainPhotoError(t.captainPhotoTooLarge)
-      return
-    }
-
-    setCaptainPhotoError('')
-    setCaptainPhoto(URL.createObjectURL(file))
-  }
+  const [captainPhotoAvailable, setCaptainPhotoAvailable] = useState(true)
 
   const handleChange = (event) => {
     const { name, value, type, checked } = event.target
@@ -578,36 +759,25 @@ function LoginPage({ onLogin, language, setLanguage }) {
               <span className="brand-location">Tayug, Pangasinan</span>
             </div>
             <section className="captain-card" aria-label={t.captainIdentification}>
-              <label className="captain-photo-picker">
-                <input
-                  type="file"
-                  accept="image/*"
-                  aria-label={t.captainPhotoLabel}
-                  onChange={handleCaptainPhotoChange}
-                />
-                {captainPhoto ? (
+              <div className="captain-photo-picker">
+                {captainPhotoAvailable ? (
                   <img
-                    src={captainPhoto}
+                    src={`${API_BASE}/captain-photo`}
                     alt={t.captainPortraitAlt}
-                    onError={() => {
-                      setCaptainPhotoError(t.captainPhotoInvalid)
-                      setCaptainPhoto('')
-                    }}
+                    onError={() => setCaptainPhotoAvailable(false)}
                   />
                 ) : (
                   <>
                     <svg viewBox="0 0 48 48" aria-hidden="true">
                       <path d="M24 24a9 9 0 1 0 0-18 9 9 0 0 0 0 18Zm0 4c-8.3 0-15 5-15 11v3h30v-3c0-6-6.7-11-15-11Z" />
                     </svg>
-                    <span>{t.addCaptainPhoto}</span>
                   </>
                 )}
-              </label>
+              </div>
               <div className="captain-details">
                 <span className="captain-role">{t.captainRole}</span>
                 <strong>Arnold C. Cabaong</strong>
                 <span className="captain-location">{t.captainLocation}</span>
-                {captainPhotoError && <span className="captain-photo-error" role="alert">{captainPhotoError}</span>}
               </div>
             </section>
             <div className="brand-social-links" aria-label={t.socialMediaLinks}>
@@ -1198,6 +1368,7 @@ function DashboardPage({ profile, requests, services, announcements, events, pay
             />
           </label>
           <LanguageToggle language={language} setLanguage={setLanguage} />
+          <Link to="/quality" className="secondary-btn small">{t.qualityModelNav}</Link>
           <button className="notification-button" type="button" aria-label={`${unreadNotificationCount} unread notifications`} onClick={() => setNotificationsOpen((current) => !current)}>
             <span aria-hidden="true">🔔</span>
             {unreadNotificationCount > 0 && <span className="notification-count">{unreadNotificationCount}</span>}
@@ -1225,6 +1396,7 @@ function DashboardPage({ profile, requests, services, announcements, events, pay
             <button type="button" onClick={() => document.getElementById('announcements-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}><span aria-hidden="true">📢</span> {t.updates}</button>
             <button type="button" onClick={() => navigate('/events')}><span aria-hidden="true">📅</span> {t.events}</button>
             <button type="button" onClick={() => navigate('/payments')}><span aria-hidden="true">💳</span> {t.payments}</button>
+            <button type="button" onClick={() => navigate('/quality')}><span aria-hidden="true">📊</span> {t.qualityModelNav}</button>
             <button type="button" onClick={() => window.dispatchEvent(new Event('brgy-open-mau'))}><span aria-hidden="true">💬</span> {t.mauQuickAccess}</button>
           </nav>
 
@@ -1503,6 +1675,7 @@ function RequestsPage({ requests, onSubmit, onRequestUpdated, onLogout, language
     deliveryNote: '',
   })
   const [submitted, setSubmitted] = useState(false)
+  const [requestModalOpen, setRequestModalOpen] = useState(Boolean(requestedService))
   const [followUpDrafts, setFollowUpDrafts] = useState({})
   const [followUpBusy, setFollowUpBusy] = useState({})
   const [followUpNotice, setFollowUpNotice] = useState('')
@@ -1575,6 +1748,7 @@ function RequestsPage({ requests, onSubmit, onRequestUpdated, onLogout, language
       })
 
       setSubmitted(true)
+      setRequestModalOpen(false)
       setForm({
         type: 'Barangay Certificate',
         purpose: '',
@@ -1672,44 +1846,48 @@ function RequestsPage({ requests, onSubmit, onRequestUpdated, onLogout, language
         <div className="page-card">
           <div className="panel-header big-gap">
             <h2>{t.requestService}</h2>
+            <button type="button" className="primary-btn small" onClick={() => setRequestModalOpen(true)}>{t.requestService}</button>
             <Link to="/dashboard" className="secondary-btn small">{t.backToDashboard}</Link>
           </div>
 
-          <form className="request-form" onSubmit={handleSubmit}>
-            <div className="form-grid two-col">
-              <div className="input-block">
-                <label>{t.requestType}</label>
-                <select name="type" value={form.type} onChange={handleChange}>
-                  {requestTypes.map((type) => <option key={type}>{type}</option>)}
-                </select>
-              </div>
-              <div className="input-block">
-                <label htmlFor="delivery-method">{t.deliveryMethodLabel}</label>
-                <select id="delivery-method" name="deliveryMethod" value={form.deliveryMethod} onChange={handleChange}>
-                  <option value="online">{t.onlineCopy}</option>
-                  <option value="physical">{t.physicalCopy}</option>
-                </select>
-              </div>
-              <div className="input-block">
-                <label>{t.purpose}</label>
-                <input type="text" name="purpose" value={form.purpose} onChange={handleChange} placeholder="e.g. school requirement" />
-              </div>
-              <div className="input-block full-width">
-                <label htmlFor="delivery-note">{t.deliveryNoteLabel}</label>
-                <input id="delivery-note" type="text" name="deliveryNote" value={form.deliveryNote} onChange={handleChange} maxLength={500} placeholder={t.deliveryNoteLabel} />
-              </div>
-              <div className="input-block full-width">
-                <label>{t.notes}</label>
-                <textarea name="notes" rows="5" value={form.notes} onChange={handleChange} placeholder="Add details for the barangay staff"></textarea>
-              </div>
-            </div>
-
-            {submitted && (
-              <div className="success-banner">Request submitted successfully. Barangay staff will review it soon.</div>
-            )}
-
-            <button type="submit" className="primary-btn wide">{t.submitRequest}</button>
-          </form>
+          {submitted && <div className="success-banner" role="status">Request submitted successfully. Barangay staff will review it soon.</div>}
+          {requestModalOpen && (
+            <WorkflowModal title={t.requestService} onClose={() => setRequestModalOpen(false)} wide>
+              <form className="request-form workflow-modal-form" onSubmit={handleSubmit}>
+                <div className="form-grid two-col">
+                  <div className="input-block">
+                    <label>{t.requestType}</label>
+                    <select name="type" value={form.type} onChange={handleChange}>
+                      {requestTypes.map((type) => <option key={type}>{type}</option>)}
+                    </select>
+                  </div>
+                  <div className="input-block">
+                    <label htmlFor="delivery-method">{t.deliveryMethodLabel}</label>
+                    <select id="delivery-method" name="deliveryMethod" value={form.deliveryMethod} onChange={handleChange}>
+                      <option value="online">{t.onlineCopy}</option>
+                      <option value="physical">{t.physicalCopy}</option>
+                    </select>
+                  </div>
+                  <div className="input-block">
+                    <label>{t.purpose}</label>
+                    <input type="text" name="purpose" value={form.purpose} onChange={handleChange} placeholder="e.g. school requirement" />
+                  </div>
+                  <div className="input-block full-width">
+                    <label htmlFor="delivery-note">{t.deliveryNoteLabel}</label>
+                    <input id="delivery-note" type="text" name="deliveryNote" value={form.deliveryNote} onChange={handleChange} maxLength={500} placeholder={t.deliveryNoteLabel} />
+                  </div>
+                  <div className="input-block full-width">
+                    <label>{t.notes}</label>
+                    <textarea name="notes" rows="5" value={form.notes} onChange={handleChange} placeholder="Add details for the barangay staff"></textarea>
+                  </div>
+                </div>
+                <div className="modal-actions">
+                  <button type="button" className="secondary-btn small" onClick={() => setRequestModalOpen(false)}>{t.cancel}</button>
+                  <button type="submit" className="primary-btn small">{t.submitRequest}</button>
+                </div>
+              </form>
+            </WorkflowModal>
+          )}
 
           <div className="status-tracker-panel">
             <div className="panel-header big-gap">
@@ -2185,13 +2363,30 @@ function SettingsPage({ profile, onLogout, language, setLanguage }) {
   )
 }
 
-function StaffPage({ requests, staffMembers = [], announcements = [], currentUser, userRole = 'staff', onProcessRequest, onLogout, onAddStaffMember, onAddAnnouncement, onDeleteAnnouncement, onDeleteStaffMember, language, setLanguage }) {
+function StaffPage({ staffMembers = [], announcements = [], currentUser, userRole = 'staff', onProcessRequest, onLogout, onAddStaffMember, onAddAnnouncement, onDeleteAnnouncement, onDeleteStaffMember, language, setLanguage }) {
   const t = translations[language] || translations.en
   const [activeTab, setActiveTab] = useState('queue')
-  const [openRequestPanel, setOpenRequestPanel] = useState(null)
+  const [openRequestPanel, setOpenRequestPanel] = useState('queue')
   const [queueSearch, setQueueSearch] = useState('')
+  const [debouncedQueueSearch, setDebouncedQueueSearch] = useState('')
   const [queueStatus, setQueueStatus] = useState('active')
   const [queueZone, setQueueZone] = useState('all')
+  const [queueType, setQueueType] = useState('all')
+  const [queueFrom, setQueueFrom] = useState('')
+  const [queueTo, setQueueTo] = useState('')
+  const [queueSort, setQueueSort] = useState('date')
+  const [queueDirection, setQueueDirection] = useState('desc')
+  const [queuePage, setQueuePage] = useState(1)
+  const [queuePageSize, setQueuePageSize] = useState(10)
+  const [dashboardRequests, setDashboardRequests] = useState([])
+  const [dashboardSummary, setDashboardSummary] = useState({ total: 0, pending: 0, inReview: 0, needsInformation: 0, approved: 0, rejected: 0 })
+  const [dashboardDocumentTypes, setDashboardDocumentTypes] = useState([])
+  const [dashboardTotal, setDashboardTotal] = useState(0)
+  const [dashboardLoading, setDashboardLoading] = useState(true)
+  const [dashboardError, setDashboardError] = useState('')
+  const [dashboardUpdatedAt, setDashboardUpdatedAt] = useState(null)
+  const [dashboardRefreshKey, setDashboardRefreshKey] = useState(0)
+  const [todayDate] = useState(() => new Date())
   const [requestStatusDrafts, setRequestStatusDrafts] = useState({})
   const [requestStatusNotes, setRequestStatusNotes] = useState({})
   const [selectedUser, setSelectedUser] = useState(null)
@@ -2212,22 +2407,91 @@ function StaffPage({ requests, staffMembers = [], announcements = [], currentUse
     date: new Date().toLocaleDateString(),
     socialChannels: [],
   })
+  const [showStaffForm, setShowStaffForm] = useState(false)
+  const [showAnnouncementForm, setShowAnnouncementForm] = useState(false)
   const [archiveFiles, setArchiveFiles] = useState([])
   const [archiveStatus, setArchiveStatus] = useState(null)
   const [archiving, setArchiving] = useState(false)
   const [activeRecordsPanel, setActiveRecordsPanel] = useState(null)
+  const [selectedRequest, setSelectedRequest] = useState(null)
+  const [selectedArchive, setSelectedArchive] = useState(null)
+  const [confirmation, setConfirmation] = useState(null)
 
-  const pendingCount = requests.filter((item) => ['Pending', 'In Review', 'Needs Information'].includes(item.status)).length
-  const approvedCount = requests.filter((item) => item.status === 'Approved').length
-  const totalRequests = requests.length
-  const filteredQueueRequests = requests.filter((item) => {
-    const search = queueSearch.trim().toLowerCase()
-    const residentName = `${item.first_name || item.firstName || ''} ${item.last_name || item.lastName || ''}`.toLowerCase()
-    const matchesSearch = !search || residentName.includes(search) || String(item.type || '').toLowerCase().includes(search) || String(item.purpose || '').toLowerCase().includes(search)
-    const matchesStatus = queueStatus === 'all' || (queueStatus === 'active' ? !['Approved', 'Rejected'].includes(item.status) : item.status === queueStatus)
-    const matchesZone = queueZone === 'all' || String(item.zone || item.zoneNumber || '') === queueZone
-    return matchesSearch && matchesStatus && matchesZone
-  })
+  useEffect(() => {
+    const timeout = window.setTimeout(() => setDebouncedQueueSearch(queueSearch.trim()), 300)
+    return () => window.clearTimeout(timeout)
+  }, [queueSearch])
+
+  const effectiveQueueStatus = activeTab === 'approvals' ? 'Approved' : queueStatus
+  useEffect(() => {
+    let active = true
+    const loadingTimer = window.setTimeout(() => {
+      if (active) {
+        setDashboardLoading(true)
+        setDashboardError('')
+      }
+    }, 0)
+    const loadRequestDashboard = async () => {
+      const params = new URLSearchParams({
+        search: debouncedQueueSearch,
+        status: effectiveQueueStatus,
+        zone: queueZone === 'all' ? '' : queueZone,
+        type: queueType === 'all' ? '' : queueType,
+        from: queueFrom,
+        to: queueTo,
+        sort: queueSort,
+        direction: queueDirection,
+        page: String(queuePage),
+        pageSize: String(queuePageSize),
+      })
+      try {
+        const response = await fetch(`${API_BASE}/staff/dashboard-requests?${params}`)
+        const data = await response.json().catch(() => ({}))
+        if (!response.ok) throw new Error(data.message || t.requestDashboardUnavailable)
+        if (active) {
+          setDashboardRequests(Array.isArray(data.requests) ? data.requests : [])
+          setDashboardSummary(data.summary || { total: 0, pending: 0, inReview: 0, needsInformation: 0, approved: 0, rejected: 0 })
+          setDashboardDocumentTypes(Array.isArray(data.documentTypes) ? data.documentTypes : [])
+          setDashboardTotal(Number(data.total) || 0)
+          setDashboardUpdatedAt(new Date())
+          setDashboardError('')
+        }
+      } catch (error) {
+        console.error('load staff request dashboard error', error)
+        if (active) setDashboardError(error.message || t.requestDashboardUnavailable)
+      } finally {
+        window.clearTimeout(loadingTimer)
+        if (active) setDashboardLoading(false)
+      }
+    }
+    loadRequestDashboard()
+    return () => {
+      active = false
+      window.clearTimeout(loadingTimer)
+    }
+  }, [debouncedQueueSearch, effectiveQueueStatus, queueZone, queueType, queueFrom, queueTo, queueSort, queueDirection, queuePage, queuePageSize, dashboardRefreshKey, t.requestDashboardUnavailable])
+
+  const pendingCount = Number(dashboardSummary.pending) || 0
+  const inReviewCount = Number(dashboardSummary.inReview) || 0
+  const needsInformationCount = Number(dashboardSummary.needsInformation) || 0
+  const approvedCount = Number(dashboardSummary.approved) || 0
+  const totalRequests = Number(dashboardSummary.total) || 0
+  const filteredQueueRequests = dashboardRequests
+  const requestPages = Math.max(1, Math.ceil(dashboardTotal / queuePageSize))
+
+  const setQueueFilter = (status) => {
+    setActiveTab('queue')
+    setQueueStatus(status)
+    setQueuePage(1)
+    setOpenRequestPanel('queue')
+  }
+
+  const formatRequestDate = (value) => {
+    const date = new Date(value)
+    return Number.isNaN(date.getTime())
+      ? '—'
+      : new Intl.DateTimeFormat(language === 'fil' ? 'fil-PH' : 'en-PH', { dateStyle: 'medium', timeZone: 'Asia/Manila' }).format(date)
+  }
 
   const handleRequestStatusSubmit = async (event, item) => {
     event.preventDefault()
@@ -2237,6 +2501,8 @@ function StaffPage({ requests, staffMembers = [], announcements = [], currentUse
       await onProcessRequest(item.id, status, requestStatusNotes[item.id] || '')
       setRequestStatusDrafts((current) => ({ ...current, [item.id]: '' }))
       setRequestStatusNotes((current) => ({ ...current, [item.id]: '' }))
+      setDashboardRefreshKey((current) => current + 1)
+      setSelectedRequest(null)
     } catch (error) {
       alert(error.message || 'Unable to update request status.')
     }
@@ -2261,16 +2527,16 @@ function StaffPage({ requests, staffMembers = [], announcements = [], currentUse
     try {
       const response = await fetch(`${API_BASE}/staff/archive-file?name=${encodeURIComponent(fileName)}`)
       if (!response.ok) throw new Error('Unable to open archive file.')
-      const blobUrl = URL.createObjectURL(await response.blob())
       if (download) {
+        const blobUrl = URL.createObjectURL(await response.blob())
         const link = document.createElement('a')
         link.href = blobUrl
         link.download = fileName
         link.click()
+        window.setTimeout(() => URL.revokeObjectURL(blobUrl), 30_000)
       } else {
-        window.open(blobUrl, '_blank', 'noopener,noreferrer')
+        setSelectedArchive({ name: fileName, contents: await response.json() })
       }
-      window.setTimeout(() => URL.revokeObjectURL(blobUrl), 30_000)
     } catch (error) {
       alert(error.message || 'Unable to open archive file.')
     }
@@ -2344,6 +2610,7 @@ function StaffPage({ requests, staffMembers = [], announcements = [], currentUse
         mobile: '',
         password: '',
       })
+      setShowStaffForm(false)
     } catch (error) {
       alert(error.message || 'Unable to add staff member.')
     }
@@ -2388,6 +2655,7 @@ function StaffPage({ requests, staffMembers = [], announcements = [], currentUse
         date: new Date().toLocaleDateString(),
         socialChannels: [],
       })
+      setShowAnnouncementForm(false)
     } catch (error) {
       alert(error.message || 'Unable to publish announcement.')
     }
@@ -2407,7 +2675,7 @@ function StaffPage({ requests, staffMembers = [], announcements = [], currentUse
         <div className="topbar-actions">
           <LanguageToggle language={language} setLanguage={setLanguage} />
           <Link to="/settings" className="secondary-btn small">{t.settings}</Link>
-          <span className="role-chip">{getDisplayName(currentUser)} • {userRole === 'admin' ? t.administrator : t.staffRole}</span>
+          <span className="role-chip">{getDisplayName(currentUser)} • {getStaffPositionLabel(currentUser?.position || (userRole === 'admin' ? t.administrator : 'Staff'), t)}</span>
           <button className="logout-btn" type="button" onClick={onLogout}>{t.logout}</button>
         </div>
       </header>
@@ -2421,13 +2689,13 @@ function StaffPage({ requests, staffMembers = [], announcements = [], currentUse
               aria-current={activeTab === 'queue' ? 'page' : undefined}
               onClick={() => setActiveTab('queue')}
             >
-              <span className="nav-icon">📄</span><span>{t.queue}</span>
+              <span className="nav-icon">📄</span><span>{t.staffDashboardTitle}</span>
             </button>
             <button
               type="button"
               className={`nav-item ${activeTab === 'approvals' ? 'active' : ''}`}
               aria-current={activeTab === 'approvals' ? 'page' : undefined}
-              onClick={() => setActiveTab('approvals')}
+              onClick={() => { setActiveTab('approvals'); setOpenRequestPanel('approvals'); setQueuePage(1) }}
             >
               <span className="nav-icon">✓</span><span>{t.approvals}</span>
             </button>
@@ -2462,49 +2730,75 @@ function StaffPage({ requests, staffMembers = [], announcements = [], currentUse
           <div className="welcome-row">
             <div>
               <p className="eyebrow">{t.operations}</p>
-              <h1>{activeTab === 'queue' ? t.residentRequestReview : activeTab === 'reports' ? t.serviceReports : activeTab === 'announcements' ? t.announcements : activeTab === 'staff' ? t.staffDirectory : t.approvalsManagement}</h1>
+              <h1>{activeTab === 'queue' ? t.staffDashboardTitle : activeTab === 'reports' ? t.serviceReports : activeTab === 'announcements' ? t.announcements : activeTab === 'staff' ? t.staffDirectory : t.approvalsManagement}</h1>
+              {activeTab === 'queue' && <p className="staff-dashboard-subtitle">{t.staffDashboardSubtitle}</p>}
             </div>
-            <span className="counter-pill">{activeTab === 'queue' ? totalRequests : activeTab === 'approvals' ? approvedCount : ''} {activeTab === 'queue' ? t.requests : activeTab === 'approvals' ? t.processed : ''}</span>
+            {activeTab === 'queue' ? (
+              <div className="staff-dashboard-meta">
+                <span>{new Intl.DateTimeFormat(language === 'fil' ? 'fil-PH' : 'en-PH', { dateStyle: 'full', timeZone: 'Asia/Manila' }).format(todayDate)}</span>
+                <span>{t.lastUpdated}: {dashboardUpdatedAt ? new Intl.DateTimeFormat(language === 'fil' ? 'fil-PH' : 'en-PH', { hour: 'numeric', minute: '2-digit', timeZone: 'Asia/Manila' }).format(dashboardUpdatedAt) : '—'}</span>
+                <button className="secondary-btn small" type="button" disabled={dashboardLoading} onClick={() => setDashboardRefreshKey((current) => current + 1)}>
+                  {dashboardLoading ? t.loadingRequests : t.refreshRequests}
+                </button>
+              </div>
+            ) : <span className="counter-pill">{activeTab === 'approvals' ? approvedCount : totalRequests} {activeTab === 'approvals' ? t.processed : t.requests}</span>}
           </div>
 
-          <div className="stats-grid" aria-label={t.staffSummaryLabel}>
-            <article className="stat-card accent">
-              <div className="stat-header">
-                <span className="label">{t.pending}</span>
-              </div>
-              <div className="stat-number">{pendingCount}</div>
-              <p>{t.needsReview}</p>
+          <div className="stats-grid staff-dashboard-metrics" aria-label={t.staffSummaryLabel}>
+            <button className="stat-card staff-metric-card accent" type="button" onClick={() => setQueueFilter('Pending')}>
+              <span className="label">{t.pendingReviewMetric}</span>
+              <span className="stat-number">{pendingCount}</span>
+              <span className="staff-metric-description">{t.pendingReviewDescription}</span>
+            </button>
+            <button className="stat-card staff-metric-card" type="button" onClick={() => setQueueFilter('In Review')}>
+              <span className="label">{t.inProcessingMetric}</span>
+              <span className="stat-number">{inReviewCount}</span>
+              <span className="staff-metric-description">{t.inProcessingDescription}</span>
+            </button>
+            <article className="stat-card staff-metric-card unavailable">
+              <span className="label">{t.readyForReleaseMetric}</span>
+              <span className="stat-number" aria-label={t.systemUnknown}>—</span>
+              <span className="staff-metric-description">{t.releaseStageNotTracked}</span>
             </article>
-
-            <article className="stat-card">
-              <div className="stat-header">
-                <span className="label">{t.approved}</span>
-              </div>
-              <div className="stat-number">{approvedCount}</div>
-              <p>{t.completed}</p>
-            </article>
-
-            <article className="stat-card">
-              <div className="stat-header">
-                <span className="label">{t.responseTime}</span>
-              </div>
-              <div className="stat-number">2h</div>
-              <p>{t.averageTurnaround}</p>
-            </article>
-
-            <article className="stat-card">
-              <div className="stat-header">
-                <span className="label">{t.onQueue}</span>
-              </div>
-              <div className="stat-number">{Math.max(totalRequests - approvedCount, 0)}</div>
-              <p>{t.activeCases}</p>
+            <article className="stat-card staff-metric-card unavailable">
+              <span className="label">{t.overdueRequestsMetric}</span>
+              <span className="stat-number" aria-label={t.systemUnknown}>—</span>
+              <span className="staff-metric-description">{t.deadlinesNotTracked}</span>
             </article>
           </div>
 
           <div className="dashboard-body">
             <div className="main-column">
               {activeTab === 'queue' && (
-                <article className="panel-card">
+                <>
+                <section className="panel-card needs-attention" aria-labelledby="needs-attention-title">
+                  <div className="panel-header left-align">
+                    <h2 id="needs-attention-title">{t.needsAttention}</h2>
+                  </div>
+                  <div className="attention-items">
+                    {pendingCount > 0 && (
+                      <button type="button" onClick={() => setQueueFilter('Pending')}>
+                        <strong>{pendingCount}</strong><span>{t.pendingReviewMetric}</span><small>{t.pendingAttentionDescription}</small>
+                      </button>
+                    )}
+                    {inReviewCount > 0 && (
+                      <button type="button" onClick={() => setQueueFilter('In Review')}>
+                        <strong>{inReviewCount}</strong><span>{t.inProcessingMetric}</span><small>{t.reviewAttentionDescription}</small>
+                      </button>
+                    )}
+                    {needsInformationCount > 0 && (
+                      <button type="button" onClick={() => setQueueFilter('Needs Information')}>
+                        <strong>{needsInformationCount}</strong><span>{t.statusNeedsInformation}</span><small>{t.informationAttentionDescription}</small>
+                      </button>
+                    )}
+                    {!dashboardLoading && !dashboardError && pendingCount + inReviewCount + needsInformationCount === 0 && (
+                      <p className="attention-empty">{t.attentionEmpty}</p>
+                    )}
+                  </div>
+                  <p className="workflow-limit-notice">{t.noReleaseOrDeadlineTracking}</p>
+                </section>
+
+                <article className="panel-card" id="staff-request-queue">
                   <button
                     type="button"
                     className="collapsible-panel-header"
@@ -2520,26 +2814,59 @@ function StaffPage({ requests, staffMembers = [], announcements = [], currentUse
 
                   {openRequestPanel === 'queue' && <>
                   <div className="staff-queue-filters">
-                    <input type="search" value={queueSearch} onChange={(event) => setQueueSearch(event.target.value)} placeholder={t.requestQueueSearch} aria-label={t.requestQueueSearch} />
-                    <select value={queueStatus} onChange={(event) => setQueueStatus(event.target.value)} aria-label={t.requestStatusFilter}>
+                    <input type="search" value={queueSearch} onChange={(event) => { setQueueSearch(event.target.value); setQueuePage(1) }} placeholder={t.requestQueueSearch} aria-label={t.requestQueueSearch} />
+                    <select value={queueStatus} onChange={(event) => { setQueueStatus(event.target.value); setQueuePage(1) }} aria-label={t.requestStatusFilter}>
                       <option value="active">{t.activeQueue}</option>
                       <option value="all">{t.allStatuses}</option>
                       <option value="Pending">{t.pending}</option>
-                      {nextRequestStatuses[item.status]?.map((status) => (
-                        <option key={status} value={status}>{getRequestStatusLabel(status, t)}</option>
+                      <option value="In Review">{t.statusUnderReview}</option>
+                      <option value="Needs Information">{t.statusNeedsInformation}</option>
+                      <option value="Approved">{t.approved}</option>
+                      <option value="Rejected">{t.statusRejected}</option>
+                    </select>
+                    <select value={queueType} onChange={(event) => { setQueueType(event.target.value); setQueuePage(1) }} aria-label={t.documentTypeFilter}>
+                      <option value="all">{t.allDocumentTypes}</option>
+                      {dashboardDocumentTypes.map((type) => (
+                        <option key={type} value={type}>{type}</option>
                       ))}
                     </select>
-                    <select value={queueZone} onChange={(event) => setQueueZone(event.target.value)} aria-label={t.requestZoneFilter}>
+                    <select value={queueZone} onChange={(event) => { setQueueZone(event.target.value); setQueuePage(1) }} aria-label={t.requestZoneFilter}>
                       <option value="all">{t.allZonesLabel}</option>
                       {[1, 2, 3, 4, 5, 6, 7].map((zone) => <option key={zone} value={String(zone)}>Zone {zone}</option>)}
                     </select>
+                    <label>{t.fromDate}<input type="date" max={queueTo || undefined} value={queueFrom} onChange={(event) => { setQueueFrom(event.target.value); setQueuePage(1) }} /></label>
+                    <label>{t.toDate}<input type="date" min={queueFrom || undefined} value={queueTo} onChange={(event) => { setQueueTo(event.target.value); setQueuePage(1) }} /></label>
+                    <label>{t.sortRequestsBy}
+                      <select value={queueSort} onChange={(event) => { setQueueSort(event.target.value); setQueuePage(1) }}>
+                        <option value="date">{t.sortSubmissionDate}</option>
+                        <option value="status">{t.sortStatus}</option>
+                      </select>
+                    </label>
+                    <label>{t.sortDirection}
+                      <select value={queueDirection} onChange={(event) => { setQueueDirection(event.target.value); setQueuePage(1) }}>
+                        <option value="desc">{t.descending}</option>
+                        <option value="asc">{t.ascending}</option>
+                      </select>
+                    </label>
+                    <label>{t.requestPageSize}
+                      <select value={queuePageSize} onChange={(event) => { setQueuePageSize(Number(event.target.value)); setQueuePage(1) }}>
+                        {[10, 25, 50].map((size) => <option key={size} value={size}>{size}</option>)}
+                      </select>
+                    </label>
                   </div>
-                  <div className="request-table-wrap">
+                  {dashboardLoading && <p className="request-dashboard-loading" role="status">{t.loadingRequests}</p>}
+                  {dashboardError && <div className="request-dashboard-error" role="alert">
+                    <span>{dashboardError}</span>
+                    <button type="button" className="secondary-btn small" onClick={() => setDashboardRefreshKey((current) => current + 1)}>{t.retry}</button>
+                  </div>}
+                  <div className="request-table-wrap" aria-busy={dashboardLoading}>
                     <table className="request-table">
                       <thead>
                         <tr>
+                          <th>{t.requestId}</th>
                           <th>{t.resident}</th>
-                          <th>Type</th>
+                          <th>{t.requestType}</th>
+                          <th>{t.submissionDate}</th>
                           <th>{t.purpose}</th>
                           <th>{t.status}</th>
                           <th>{t.deliveryMethodLabel}</th>
@@ -2552,8 +2879,10 @@ function StaffPage({ requests, staffMembers = [], announcements = [], currentUse
                       <tbody>
                         {filteredQueueRequests.map((item) => (
                           <tr key={item.id}>
+                            <td><button type="button" className="request-id-button" aria-label={t.viewRequestDetails.replace('{id}', String(item.id))} onClick={() => setSelectedRequest(item)}>{item.id}</button></td>
                             <td>{item.first_name || item.firstName || t.resident} {item.last_name || item.lastName || ''}</td>
                             <td>{item.type}</td>
+                            <td>{formatRequestDate(item.date || item.createdAt || item.created_at)}</td>
                             <td>{item.purpose}</td>
                             <td><span className={`status-badge ${(item.status || '').toLowerCase().replace(/\s+/g, '-')}`}>{getRequestStatusLabel(item.status, t)}</span></td>
                             <td>
@@ -2566,41 +2895,25 @@ function StaffPage({ requests, staffMembers = [], announcements = [], currentUse
                             <td>
                               {['Approved', 'Rejected'].includes(item.status)
                                 ? <span>{getRequestStatusLabel(item.status, t)}</span>
-                                : (
-                                  <form className="request-status-action-form" onSubmit={(event) => handleRequestStatusSubmit(event, item)}>
-                                    <select
-                                      aria-label={t.newStatusFor.replace('{service}', item.type)}
-                                      value={requestStatusDrafts[item.id] || ''}
-                                      onChange={(event) => setRequestStatusDrafts((current) => ({ ...current, [item.id]: event.target.value }))}
-                                      required
-                                    >
-                                      <option value="">{t.selectStatus}</option>
-                                      <option value="In Review">{t.statusUnderReview}</option>
-                                      <option value="Needs Information">{t.statusNeedsInformation}</option>
-                                      <option value="Approved">{t.statusCompleted}</option>
-                                      <option value="Rejected">{t.statusRejected}</option>
-                                    </select>
-                                    <textarea
-                                      aria-label={t.staffNoteFor.replace('{service}', item.type)}
-                                      value={requestStatusNotes[item.id] || ''}
-                                      onChange={(event) => setRequestStatusNotes((current) => ({ ...current, [item.id]: event.target.value }))}
-                                      placeholder={t.statusNoteLabel}
-                                      maxLength={1000}
-                                      required={requestStatusDrafts[item.id] === 'Needs Information'}
-                                    />
-                                    <button type="submit" className="small-action success">{t.requestStatusAction}</button>
-                                  </form>
-                                )}
+                                : <button type="button" className="small-action success" onClick={() => setSelectedRequest(item)}>{t.requestStatusAction}</button>}
                             </td>
                           </tr>
                         ))}
                       </tbody>
                     </table>
-                    {filteredQueueRequests.length === 0 && <div className="empty-state">{t.noRequestsMatchFilters}</div>}
+                    {!dashboardLoading && !dashboardError && filteredQueueRequests.length === 0 && <div className="empty-state">{t.noRequestsMatchFilters}</div>}
+                  </div>
+                  <div className="request-pagination">
+                    <span>{t.pageOfPages.replace('{page}', String(queuePage)).replace('{pages}', String(requestPages))} · {dashboardTotal}</span>
+                    <div>
+                      <button type="button" className="secondary-btn small" disabled={dashboardLoading || queuePage <= 1} onClick={() => setQueuePage((page) => Math.max(1, page - 1))}>{t.previousPage}</button>
+                      <button type="button" className="secondary-btn small" disabled={dashboardLoading || queuePage >= requestPages} onClick={() => setQueuePage((page) => Math.min(requestPages, page + 1))}>{t.nextPage}</button>
+                    </div>
                   </div>
                   </>}
 
                 </article>
+                </>
               )}
 
               {activeTab === 'approvals' && (
@@ -2613,7 +2926,7 @@ function StaffPage({ requests, staffMembers = [], announcements = [], currentUse
                   >
                     <span>
                       <h2>{t.approvedRequests}</h2>
-                      <span className="soft-label">{approvedCount} {t.completed}</span>
+                      <span className="soft-label">{approvedCount} {t.approved}</span>
                     </span>
                     <span className={`collapse-chevron ${openRequestPanel === 'approvals' ? 'open' : ''}`}>▾</span>
                   </button>
@@ -2626,21 +2939,34 @@ function StaffPage({ requests, staffMembers = [], announcements = [], currentUse
                           <th>{t.requestType}</th>
                           <th>{t.purpose}</th>
                           <th>{t.status}</th>
-                          <th>{t.approved}</th>
+                          <th>{t.submissionDate}</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {requests.filter((item) => item.status === 'Approved').map((item) => (
+                        {dashboardRequests.map((item) => (
                           <tr key={item.id}>
                             <td>{item.first_name || item.firstName || t.resident} {item.last_name || item.lastName || ''}</td>
                             <td>{item.type}</td>
                             <td>{item.purpose}</td>
                             <td><span className={`status-badge approved`}>{getRequestStatusLabel(item.status, t)}</span></td>
-                            <td><span className="soft-label">{item.date}</span></td>
+                            <td><span className="soft-label">{formatRequestDate(item.date || item.createdAt || item.created_at)}</span></td>
                           </tr>
                         ))}
                       </tbody>
                     </table>
+                    {dashboardLoading && <p className="request-dashboard-loading" role="status">{t.loadingRequests}</p>}
+                    {!dashboardLoading && !dashboardError && dashboardRequests.length === 0 && <div className="empty-state">{t.approvalsEmpty}</div>}
+                  </div>}
+                  {dashboardError && <div className="request-dashboard-error" role="alert">
+                    <span>{dashboardError}</span>
+                    <button type="button" className="secondary-btn small" onClick={() => setDashboardRefreshKey((current) => current + 1)}>{t.retry}</button>
+                  </div>}
+                  {openRequestPanel === 'approvals' && <div className="request-pagination">
+                    <span>{t.pageOfPages.replace('{page}', String(queuePage)).replace('{pages}', String(requestPages))} · {dashboardTotal}</span>
+                    <div>
+                      <button type="button" className="secondary-btn small" disabled={dashboardLoading || queuePage <= 1} onClick={() => setQueuePage((page) => Math.max(1, page - 1))}>{t.previousPage}</button>
+                      <button type="button" className="secondary-btn small" disabled={dashboardLoading || queuePage >= requestPages} onClick={() => setQueuePage((page) => Math.min(requestPages, page + 1))}>{t.nextPage}</button>
+                    </div>
                   </div>}
 
                 </article>
@@ -2657,7 +2983,7 @@ function StaffPage({ requests, staffMembers = [], announcements = [], currentUse
                     <div className="report-item">
                       <div className="report-badge green">📈</div>
                       <div>
-                        <h4>{t.totalRequestsProcessed}</h4>
+                        <h4>{t.requests}</h4>
                         <p className="report-value">{totalRequests}</p>
                       </div>
                     </div>
@@ -2678,8 +3004,8 @@ function StaffPage({ requests, staffMembers = [], announcements = [], currentUse
                     <div className="report-item">
                       <div className="report-badge">⚡</div>
                       <div>
-                        <h4>Average Response Time</h4>
-                        <p className="report-value">2 hours</p>
+                        <h4>{t.averageTurnaround}</h4>
+                        <p className="report-value">{t.systemUnknown}</p>
                       </div>
                     </div>
                   </div>
@@ -2689,7 +3015,6 @@ function StaffPage({ requests, staffMembers = [], announcements = [], currentUse
                     <dl>
                       <div><dt>Approval Rate</dt><dd>{totalRequests > 0 ? Math.round((approvedCount / totalRequests) * 100) : 0}%</dd></div>
                       <div><dt>Pending Rate</dt><dd>{totalRequests > 0 ? Math.round((pendingCount / totalRequests) * 100) : 0}%</dd></div>
-                      <div><dt>Processing Time Target</dt><dd>Under 2 hours</dd></div>
                     </dl>
                   </div>
                 </article>
@@ -2700,9 +3025,12 @@ function StaffPage({ requests, staffMembers = [], announcements = [], currentUse
                   <div className="panel-header">
                     <h2>{t.announcements}</h2>
                     <span className="soft-label">{announcements.length} active</span>
+                    <button type="button" className="primary-btn small" onClick={() => setShowAnnouncementForm(true)}>{t.publishAnnouncement}</button>
                   </div>
 
-                  <form className="editor-panel" onSubmit={handleAnnouncementSubmit}>
+                  {showAnnouncementForm && (
+                    <WorkflowModal title={t.publishAnnouncement} onClose={() => setShowAnnouncementForm(false)} wide>
+                    <form className="editor-panel workflow-modal-form" onSubmit={handleAnnouncementSubmit}>
                     <div className="editor-grid">
                       <div className="input-block full-width">
                         <label>Title</label>
@@ -2747,9 +3075,12 @@ function StaffPage({ requests, staffMembers = [], announcements = [], currentUse
                       </div>
                     </div>
                     <div className="editor-actions">
+                      <button type="button" className="secondary-btn small" onClick={() => setShowAnnouncementForm(false)}>{t.cancel}</button>
                       <button type="submit" className="primary-btn small">{t.publishAnnouncement}</button>
                     </div>
-                  </form>
+                    </form>
+                    </WorkflowModal>
+                  )}
 
                   <div className="announcement-list">
                     {announcements.map((item) => (
@@ -2764,11 +3095,12 @@ function StaffPage({ requests, staffMembers = [], announcements = [], currentUse
                         <button
                           type="button"
                           className="small-action danger"
-                          onClick={() => {
-                            if (window.confirm(t.deleteAnnouncementConfirm)) {
-                              onDeleteAnnouncement?.(item.id || item.title)
-                            }
-                          }}
+                          onClick={() => setConfirmation({
+                            title: t.delete,
+                            message: t.deleteAnnouncementConfirm,
+                            confirmLabel: t.delete,
+                            onConfirm: () => onDeleteAnnouncement?.(item.id || item.title),
+                          })}
                         >
                           {t.delete}
                         </button>
@@ -2783,9 +3115,12 @@ function StaffPage({ requests, staffMembers = [], announcements = [], currentUse
                   <div className="panel-header">
                     <h2>{t.staffDirectory}</h2>
                     <span className="soft-label">{staffMembers.length} {t.staffMembersAvailable}</span>
+                    {userRole === 'admin' && <button type="button" className="primary-btn small" onClick={() => setShowStaffForm(true)}>{t.addStaffMember}</button>}
                   </div>
 
-                  <form className="editor-panel" onSubmit={handleStaffSubmit}>
+                  {showStaffForm && (
+                    <WorkflowModal title={t.addStaffMember} onClose={() => setShowStaffForm(false)} wide>
+                    <form className="editor-panel workflow-modal-form" onSubmit={handleStaffSubmit}>
                     <div className="editor-grid">
                       <div className="input-block">
                         <label>{t.firstName}</label>
@@ -2824,9 +3159,12 @@ function StaffPage({ requests, staffMembers = [], announcements = [], currentUse
                       <PasswordField id="staff-initial-password" label={t.initialPassword} value={staffForm.password} onChange={(event) => setStaffForm((prev) => ({ ...prev, password: event.target.value }))} placeholder={t.staffPasswordPlaceholder} helpText={`${passwordRequirements}.`} />
                     </div>
                     <div className="editor-actions">
+                      <button type="button" className="secondary-btn small" onClick={() => setShowStaffForm(false)}>{t.cancel}</button>
                       <button type="submit" className="primary-btn small">{t.addStaffMember}</button>
                     </div>
-                  </form>
+                    </form>
+                    </WorkflowModal>
+                  )}
 
                   <div className="staff-grid">
                     {staffMembers.map((member) => (
@@ -2840,21 +3178,27 @@ function StaffPage({ requests, staffMembers = [], announcements = [], currentUse
                               {getStaffAvailabilityLabel(member.availability, t)}
                             </span>
                           </p>
+                          <p className="contact">{t.status}: {member.status || 'N/A'}</p>
                           <p className="contact">{member.mobile}</p>
                           <p className="contact">{member.email}</p>
                         </div>
-                        <button
-                          type="button"
-                          className="small-action danger"
-                          onClick={(event) => {
-                            event.stopPropagation()
-                            if (window.confirm(t.deleteStaffConfirm.replace('{name}', `${member.firstName} ${member.lastName}`))) {
-                              onDeleteStaffMember?.(member.id)
-                            }
-                          }}
-                        >
-                          {t.delete}
-                        </button>
+                        {userRole === 'admin' && (
+                          <button
+                            type="button"
+                            className="small-action danger"
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              setConfirmation({
+                                title: t.delete,
+                                message: t.deleteStaffConfirm.replace('{name}', `${member.firstName} ${member.lastName}`),
+                                confirmLabel: t.delete,
+                                onConfirm: () => onDeleteStaffMember?.(member.id),
+                              })
+                            }}
+                          >
+                            {t.delete}
+                          </button>
+                        )}
                       </div>
                     ))}
                   </div>
@@ -2887,23 +3231,18 @@ function StaffPage({ requests, staffMembers = [], announcements = [], currentUse
                         <div className="record-section">
                           <h4>Queue</h4>
                           <ul>
-                            {requests.slice(0, 6).map((item) => (
+                            {dashboardRequests.slice(0, 6).map((item) => (
                               <li key={item.id}><span>{item.type}</span><strong>{getRequestStatusLabel(item.status, t)}</strong></li>
                             ))}
                             {totalRequests > 6 && <li className="summary-item">+ {totalRequests - 6} {t.moreRequestsWaiting}</li>}
-                            {requests.length === 0 && <li className="summary-item">{t.queueEmpty}</li>}
+                            {totalRequests === 0 && <li className="summary-item">{t.queueEmpty}</li>}
                           </ul>
                         </div>
 
                         <div className="record-section">
                           <h4>{t.approvals}</h4>
-                          <ul>
-                            {requests.filter((item) => item.status === 'Approved').slice(0, 6).map((item) => (
-                              <li key={item.id}><span>{item.type}</span><strong>{getRequestStatusLabel(item.status, t)}</strong></li>
-                            ))}
-                            {approvedCount > 6 && <li className="summary-item">+ {approvedCount - 6} {t.moreApprovalsSaved}</li>}
-                            {approvedCount === 0 && <li className="summary-item">{t.approvalsEmpty}</li>}
-                          </ul>
+                          <p>{approvedCount} {t.approvedRequests.toLowerCase()}</p>
+                          <button className="secondary-btn small" type="button" onClick={() => { setActiveTab('approvals'); setOpenRequestPanel('approvals'); setQueuePage(1) }}>{t.approvedRequests}</button>
                         </div>
                       </div>
                     </div>
@@ -2969,10 +3308,78 @@ function StaffPage({ requests, staffMembers = [], announcements = [], currentUse
           </div>
         </section>
       </main>
-      {selectedUser && <UserDetailModal user={selectedUser} onClose={() => setSelectedUser(null)} allowEdit onUserUpdated={(updated) => {
+      {selectedRequest && (
+        <div className="modal-overlay" onMouseDown={(event) => { if (event.target === event.currentTarget) setSelectedRequest(null) }}>
+          <section className="modal-content staff-request-details" role="dialog" aria-modal="true" aria-labelledby="staff-request-details-title">
+            <button type="button" className="modal-close" aria-label={t.closeRequestDetails} onClick={() => setSelectedRequest(null)}>×</button>
+            <div className="modal-header">
+              <div>
+                <p className="eyebrow">{t.requestId}</p>
+                <h2 id="staff-request-details-title">{selectedRequest.id}</h2>
+              </div>
+            </div>
+            <dl className="profile-list">
+              <div><dt>{t.resident}</dt><dd>{selectedRequest.first_name || selectedRequest.firstName || t.resident} {selectedRequest.last_name || selectedRequest.lastName || ''}</dd></div>
+              <div><dt>{t.requestType}</dt><dd>{selectedRequest.type}</dd></div>
+              <div><dt>{t.submissionDate}</dt><dd>{formatRequestDate(selectedRequest.date || selectedRequest.createdAt || selectedRequest.created_at)}</dd></div>
+              <div><dt>{t.status}</dt><dd>{getRequestStatusLabel(selectedRequest.status, t)}</dd></div>
+              <div><dt>{t.purpose}</dt><dd>{selectedRequest.purpose || '—'}</dd></div>
+              {(selectedRequest.notes || selectedRequest.deliveryNote || selectedRequest.delivery_note) && (
+                <div><dt>{t.notesLabel}</dt><dd>{selectedRequest.notes || selectedRequest.deliveryNote || selectedRequest.delivery_note}</dd></div>
+              )}
+            </dl>
+            <details className="request-history-details" open>
+              <summary>{t.requestStatusHistory}</summary>
+              <RequestHistory history={selectedRequest.statusHistory || selectedRequest.status_history} t={t} />
+            </details>
+            {!['Approved', 'Rejected'].includes(selectedRequest.status) && (
+              <form className="request-status-action-form workflow-status-form" onSubmit={(event) => handleRequestStatusSubmit(event, selectedRequest)}>
+                <label htmlFor="staff-request-next-status">{t.newStatusFor.replace('{service}', selectedRequest.type)}</label>
+                <select
+                  id="staff-request-next-status"
+                  value={requestStatusDrafts[selectedRequest.id] || ''}
+                  onChange={(event) => setRequestStatusDrafts((current) => ({ ...current, [selectedRequest.id]: event.target.value }))}
+                  required
+                >
+                  <option value="">{t.selectStatus}</option>
+                  <option value="In Review">{t.statusUnderReview}</option>
+                  <option value="Needs Information">{t.statusNeedsInformation}</option>
+                  <option value="Approved">{t.approved}</option>
+                  <option value="Rejected">{t.statusRejected}</option>
+                </select>
+                <textarea
+                  aria-label={t.staffNoteFor.replace('{service}', selectedRequest.type)}
+                  value={requestStatusNotes[selectedRequest.id] || ''}
+                  onChange={(event) => setRequestStatusNotes((current) => ({ ...current, [selectedRequest.id]: event.target.value }))}
+                  placeholder={requestStatusDrafts[selectedRequest.id] === 'Rejected' ? t.rejectionReasonPrompt : t.statusNoteLabel}
+                  maxLength={1000}
+                  required={['Needs Information', 'Rejected'].includes(requestStatusDrafts[selectedRequest.id])}
+                />
+                <button type="submit" className="primary-btn small">{t.requestStatusAction}</button>
+              </form>
+            )}
+          </section>
+        </div>
+      )}
+      {selectedArchive && (
+        <WorkflowModal title={selectedArchive.name} onClose={() => setSelectedArchive(null)} wide>
+          <pre className="archive-preview">{JSON.stringify(selectedArchive.contents, null, 2)}</pre>
+        </WorkflowModal>
+      )}
+      {selectedUser && <UserDetailModal user={selectedUser} onClose={() => setSelectedUser(null)} allowEdit={userRole === 'admin'} onUserUpdated={(updated) => {
         setSelectedUser((prev) => ({ ...(prev || {}), ...updated }))
         setUsers((prev) => prev.map((user) => user.id === updated.id ? { ...user, ...updated } : user))
       }} />}
+      {confirmation && (
+        <ConfirmationModal
+          title={confirmation.title}
+          message={confirmation.message}
+          confirmLabel={confirmation.confirmLabel}
+          cancelLabel={t.cancel}
+          onClose={() => setConfirmation(null)}
+          onConfirm={confirmation.onConfirm}
+        />
+      )}
     </div>
   )
 }
@@ -2982,9 +3389,12 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
   const zoneNumbers = [1, 2, 3, 4, 5, 6, 7]
   const [managedUsers, setManagedUsers] = useState(users)
   const [activeTab, setActiveTab] = useState('overview')
+  const [healthRefreshKey, setHealthRefreshKey] = useState(0)
+  const [apiHealth, setApiHealth] = useState({ status: 'checking', storage: null, checkedAt: null })
   const [searchQuery, setSearchQuery] = useState('')
   const [accessSearch, setAccessSearch] = useState('')
   const [adminForm, setAdminForm] = useState({ firstName: '', lastName: '', email: '', mobile: '', password: '' })
+  const [showAdminForm, setShowAdminForm] = useState(false)
   const [selectedZone, setSelectedZone] = useState('all')
   const [selectedUser, setSelectedUser] = useState(null)
   const [selectedReport, setSelectedReport] = useState(null)
@@ -2994,6 +3404,7 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
   const [archiving, setArchiving] = useState(false)
   const [archiveResult, setArchiveResult] = useState(null)
   const [retentionDays, setRetentionDays] = useState(0)
+  const [confirmation, setConfirmation] = useState(null)
   const [expandedZone, setExpandedZone] = useState(null)
   const [residentZoneSort, setResidentZoneSort] = useState(() => {
     return Object.fromEntries(zoneNumbers.map((zone) => [zone, 'alphabetical']))
@@ -3005,6 +3416,35 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
   useEffect(() => {
     setManagedUsers(users)
   }, [users])
+
+  useEffect(() => {
+    let active = true
+    const checkApiHealth = async () => {
+      if (active) setApiHealth((current) => ({ ...current, status: 'checking' }))
+      try {
+        const response = await fetch(`${API_BASE}/health`)
+        if (response.status === 429) {
+          if (active) setApiHealth({ status: 'limited', storage: null, checkedAt: new Date() })
+          return
+        }
+        const data = await response.json().catch(() => ({}))
+        if (!response.ok || data.ok !== true) {
+          throw new Error(data.message || 'API health check failed.')
+        }
+        if (active) setApiHealth({ status: 'ok', storage: data.storage || null, checkedAt: new Date() })
+      } catch (error) {
+        console.error('admin API health check failed', error)
+        if (active) setApiHealth({ status: 'error', storage: null, checkedAt: new Date() })
+      }
+    }
+
+    checkApiHealth()
+    const interval = window.setInterval(checkApiHealth, 60_000)
+    return () => {
+      active = false
+      window.clearInterval(interval)
+    }
+  }, [healthRefreshKey])
   
   const residentCount = managedUsers.filter((user) => user.role === 'resident').length
   const staffCount = managedUsers.filter((user) => user.role === 'staff').length
@@ -3085,6 +3525,7 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
       if (!response.ok) throw new Error(data.message || 'Unable to create administrator.')
       setManagedUsers((current) => [data.user, ...current])
       setAdminForm({ firstName: '', lastName: '', email: '', mobile: '', password: '' })
+      setShowAdminForm(false)
       alert('Administrator account created. Share the initial password securely and ask them to change it after signing in.')
     } catch (error) {
       alert(error.message || 'Unable to create administrator.')
@@ -3092,7 +3533,13 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
   }
 
   const handleVerification = (user, status) => {
-    updateManagedUser(user.id, { status })
+    const approved = status === 'Active Resident'
+    setConfirmation({
+      title: approved ? t.approve : t.reject,
+      message: `${approved ? 'Approve' : 'Reject'} ${getDisplayName(user)}'s resident account?`,
+      confirmLabel: approved ? t.approve : t.reject,
+      onConfirm: () => updateManagedUser(user.id, { status }),
+    })
   }
 
   const getSortName = (person = {}) => {
@@ -3249,7 +3696,6 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
 
   const handleDeleteArchive = async (fileName) => {
     if (!fileName) return
-    if (!window.confirm(`Delete archive ${fileName}?`)) return
 
     try {
       const resp = await fetch(`${API_BASE}/admin/archive-file?name=${encodeURIComponent(fileName)}`, { method: 'DELETE' })
@@ -3324,19 +3770,27 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
             >
               <span className="nav-icon">🚨</span><span>{t.emergencies}</span>
             </button>
+            <button
+              type="button"
+              className={`nav-item ${activeTab === 'quality' ? 'active' : ''}`}
+              aria-current={activeTab === 'quality' ? 'page' : undefined}
+              onClick={() => setActiveTab('quality')}
+            >
+              <span className="nav-icon">📊</span><span>{t.qualityModelNav}</span>
+            </button>
           </nav>
         </aside>
 
         <section className="content-panel" aria-label={t.adminOverviewLabel}>
           <div className="welcome-row">
             <div>
-              <p className="eyebrow">{t.governance}</p>
-              <h1>{activeTab === 'overview' ? t.adminConsoleTitle : activeTab === 'residents' ? t.residentsByZone : activeTab === 'access' ? t.userAccessManagement : t.emergencyReportsTitle}</h1>
+              <p className="eyebrow">{activeTab === 'quality' ? t.qualityModelNav : t.governance}</p>
+              <h1 id={activeTab === 'quality' ? 'quality-assessment-title' : undefined}>{activeTab === 'quality' ? t.qualityModelTitle : activeTab === 'overview' ? t.adminConsoleTitle : activeTab === 'residents' ? t.residentsByZone : activeTab === 'access' ? t.userAccessManagement : t.emergencyReportsTitle}</h1>
             </div>
-            <span className="counter-pill">{pending} {t.pending}</span>
+            {activeTab !== 'quality' && <span className="counter-pill">{pending} {t.pending}</span>}
           </div>
 
-          <div className="stats-grid" aria-label={t.adminSummaryLabel}>
+          <div className="stats-grid" aria-label={t.adminSummaryLabel} hidden={activeTab === 'quality'}>
             <article className="stat-card accent">
               <div className="stat-header">
                 <span className="label">{t.residents}</span>
@@ -3370,8 +3824,15 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
             </article>
           </div>
 
-          <div className="dashboard-body">
+          <div className={`dashboard-body ${activeTab === 'quality' ? 'quality-dashboard-body' : ''}`}>
             <div className="main-column">
+              {activeTab === 'quality' && (
+                <>
+                  <AdminQualitySummary language={language} />
+                  <QualityAssessmentPanel key={`admin:${currentUser?.id}`} accountId={currentUser?.id} audience="admin" language={language} />
+                </>
+              )}
+              {activeTab === 'overview' && <CaptainPhotoSettings language={language} />}
               {activeTab === 'overview' && (
                 <article className="panel-card compact-panel">
                   <div className="panel-header">
@@ -3449,7 +3910,7 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
                     </div>
                     <div className="overview-grid admin-metric-grid">
                       <div className="overview-item"><h4>{t.pending}</h4><p className="overview-value">{pending}</p><small>{t.awaitingStaffAction}</small></div>
-                      <div className="overview-item"><h4>{t.approved}</h4><p className="overview-value">{requests.filter((item) => item.status === 'Approved').length}</p><small>{t.completedRequests}</small></div>
+                      <div className="overview-item"><h4>{t.approved}</h4><p className="overview-value">{requests.filter((item) => item.status === 'Approved').length}</p><small>{t.approvals}</small></div>
                       <div className="overview-item"><h4>{t.rejected || 'Rejected'}</h4><p className="overview-value">{requests.filter((item) => item.status === 'Rejected').length}</p><small>{t.declinedRequests}</small></div>
                       <div className="overview-item"><h4>{t.approvedResidents || 'Approved residents'}</h4><p className="overview-value">{approvedUsers}</p><small>{t.verifiedAccounts}</small></div>
                     </div>
@@ -3550,6 +4011,7 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
                                   <table className="request-table">
                                     <thead>
                                       <tr>
+                                        <th>Resident</th>
                                         <th>Household ID</th>
                                         <th>Zone</th>
                                         <th>Family Members</th>
@@ -3559,7 +4021,8 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
                                     <tbody>
                                       {zoneResidents.map((resident) => (
                                         <tr key={resident.id}>
-                                          <td>{resident.householdId}</td>
+                                          <td><button type="button" className="link-button" onClick={() => setSelectedUser(managedUsers.find((user) => user.id === resident.id) || resident)}>{getDisplayName(resident)}</button></td>
+                                          <td>{resident.householdId || 'N/A'}</td>
                                           <td><span className="zone-badge">Zone {resident.zone}</span></td>
                                           <td>{resident.familyMembers}</td>
                                           <td>{resident.email}</td>
@@ -3579,6 +4042,7 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
                       <table className="request-table">
                         <thead>
                           <tr>
+                            <th>Resident</th>
                             <th>Household ID</th>
                             <th>Zone</th>
                             <th>Family Members</th>
@@ -3588,7 +4052,8 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
                         <tbody>
                           {filteredResidents.map((resident) => (
                             <tr key={resident.id}>
-                              <td>{resident.householdId}</td>
+                              <td><button type="button" className="link-button" onClick={() => setSelectedUser(managedUsers.find((user) => user.id === resident.id) || resident)}>{getDisplayName(resident)}</button></td>
+                              <td>{resident.householdId || 'N/A'}</td>
                               <td><span className="zone-badge">Zone {resident.zone}</span></td>
                               <td>{resident.familyMembers}</td>
                               <td>{resident.email}</td>
@@ -3607,23 +4072,31 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
                   <div className="panel-header">
                     <h2>User Access Management</h2>
                     <span className="soft-label">{managedUsers.length} total users</span>
+                    <button type="button" className="primary-btn small" onClick={() => setShowAdminForm(true)}>Create Administrator</button>
                   </div>
 
-                  <form className="editor-panel admin-create-panel" onSubmit={handleCreateAdmin}>
-                    <div className="panel-header left-align">
-                      <h3>Create Administrator</h3>
-                      <span className="soft-label">{t.adminOnly}</span>
-                    </div>
-                    <div className="editor-grid">
-                      <input aria-label="Administrator first name" placeholder="First name" value={adminForm.firstName} onChange={(event) => setAdminForm((current) => ({ ...current, firstName: event.target.value }))} required />
-                      <input aria-label="Administrator last name" placeholder="Last name" value={adminForm.lastName} onChange={(event) => setAdminForm((current) => ({ ...current, lastName: event.target.value }))} required />
-                      <input aria-label="Administrator email" type="email" placeholder="Email" value={adminForm.email} onChange={(event) => setAdminForm((current) => ({ ...current, email: event.target.value }))} required />
-                      <input aria-label="Administrator mobile" placeholder="09XXXXXXXXX" value={adminForm.mobile} onChange={(event) => setAdminForm((current) => ({ ...current, mobile: event.target.value }))} required />
-                      <PasswordField id="admin-initial-password" label="Administrator initial password" value={adminForm.password} onChange={(event) => setAdminForm((current) => ({ ...current, password: event.target.value }))} placeholder="Initial password" helpText={null} />
-                    </div>
-                    <small>{passwordRequirements}.</small>
-                    <div className="editor-actions"><button type="submit" className="primary-btn small">Create Administrator</button></div>
-                  </form>
+                  {showAdminForm && (
+                    <WorkflowModal title="Create Administrator" onClose={() => setShowAdminForm(false)} wide>
+                      <form className="editor-panel admin-create-panel workflow-modal-form" onSubmit={handleCreateAdmin}>
+                        <div className="panel-header left-align">
+                          <h3>Create Administrator</h3>
+                          <span className="soft-label">{t.adminOnly}</span>
+                        </div>
+                        <div className="editor-grid">
+                          <input aria-label="Administrator first name" placeholder="First name" value={adminForm.firstName} onChange={(event) => setAdminForm((current) => ({ ...current, firstName: event.target.value }))} required />
+                          <input aria-label="Administrator last name" placeholder="Last name" value={adminForm.lastName} onChange={(event) => setAdminForm((current) => ({ ...current, lastName: event.target.value }))} required />
+                          <input aria-label="Administrator email" type="email" placeholder="Email" value={adminForm.email} onChange={(event) => setAdminForm((current) => ({ ...current, email: event.target.value }))} required />
+                          <input aria-label="Administrator mobile" placeholder="09XXXXXXXXX" value={adminForm.mobile} onChange={(event) => setAdminForm((current) => ({ ...current, mobile: event.target.value }))} required />
+                          <PasswordField id="admin-initial-password" label="Administrator initial password" value={adminForm.password} onChange={(event) => setAdminForm((current) => ({ ...current, password: event.target.value }))} placeholder="Initial password" helpText={null} />
+                        </div>
+                        <small>{passwordRequirements}.</small>
+                        <div className="editor-actions">
+                          <button type="button" className="secondary-btn small" onClick={() => setShowAdminForm(false)}>{t.cancel}</button>
+                          <button type="submit" className="primary-btn small">Create Administrator</button>
+                        </div>
+                      </form>
+                    </WorkflowModal>
+                  )}
 
                   <div className="search-and-filter">
                     <input
@@ -3816,21 +4289,46 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
               )}
             </div>
 
-            <aside className="side-column">
-              <article className="profile-card">
+            <aside className="side-column" hidden={activeTab === 'quality'}>
+              <article className="profile-card system-status-card">
                 <div className="profile-head">
-                  <div className="profile-avatar">A</div>
-                  <div>
+                  <div className="system-status-heading">
                     <h3>{t.systemStatus}</h3>
-                    <span>{t.liveOverview}</span>
+                    <span>{t.systemChecksSubtitle}</span>
                   </div>
+                  <button className="secondary-btn tiny" type="button" onClick={() => setHealthRefreshKey((current) => current + 1)} disabled={apiHealth.status === 'checking'}>
+                    {t.refreshStatus}
+                  </button>
                 </div>
-                <dl className="profile-list">
-                  <div><dt>{t.portal}</dt><dd>{t.operational}</dd></div>
+                <div className={`system-health-badge ${apiHealth.status}`} role="status" aria-live="polite">
+                  <span className="system-health-dot" aria-hidden="true" />
+                  {apiHealth.status === 'checking' ? t.systemChecking : apiHealth.status === 'ok' ? t.systemOperational : apiHealth.status === 'limited' ? t.systemRateLimited : t.systemUnavailable}
+                </div>
+                <dl className="profile-list system-status-list">
+                  <div><dt>{t.portal}</dt><dd>{apiHealth.status === 'error' ? t.systemUnavailable : apiHealth.status === 'checking' ? t.systemChecking : apiHealth.status === 'limited' ? t.systemRateLimited : t.systemOperational}</dd></div>
+                  <div><dt>{t.dataStorage}</dt><dd>{apiHealth.storage === 'postgres' ? t.postgresConnected : apiHealth.storage === 'json-fallback' ? t.localJsonStorage : t.systemUnknown}</dd></div>
                   <div><dt>{t.security}</dt><dd>{t.rbacEnabled}</dd></div>
-                  <div><dt>{t.servicesLabel}</dt><dd>{requests.length} {t.activeSuffix}</dd></div>
-                  <div><dt>{t.alerts}</dt><dd>{pending} {t.requireAttention}</dd></div>
+                  <div><dt>{t.servicesLabel}</dt><dd>{requests.length} {t.trackedRequests}</dd></div>
+                  <div><dt>{t.alerts}</dt><dd>{pending} {t.pendingRequests}</dd></div>
                 </dl>
+                {apiHealth.checkedAt && (
+                  <p className="system-health-checked">
+                    {t.lastChecked}: {new Intl.DateTimeFormat(language === 'fil' ? 'fil-PH' : 'en-PH', { hour: 'numeric', minute: '2-digit' }).format(apiHealth.checkedAt)}
+                  </p>
+                )}
+                <div className="system-improvements">
+                  <h4>{t.recommendedImprovements}</h4>
+                  <ul>
+                    {apiHealth.status === 'error' && <li>{t.systemCheckApiRecommendation}</li>}
+                    {apiHealth.status === 'limited' && <li>{t.systemRateLimitRecommendation}</li>}
+                    {apiHealth.storage === 'json-fallback' && <li>{t.systemStorageRecommendation}</li>}
+                    {pending > 0 && <li>{t.systemRequestsRecommendation.replace('{count}', String(pending))}</li>}
+                    {apiHealth.status === 'ok' && apiHealth.storage === 'postgres' && pending === 0 && (
+                      <li>{t.systemMonitoringRecommendation}</li>
+                    )}
+                    {apiHealth.status === 'checking' && <li>{t.systemRecommendationsLoading}</li>}
+                  </ul>
+                </div>
               </article>
 
               <article className="panel-card archive-card">
@@ -3866,7 +4364,16 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
                               alert('Download failed')
                             }
                           }}>{t.download}</button>
-                          <button type="button" className="small-action danger" onClick={() => handleDeleteArchive(f.name)}>{t.delete}</button>
+                          <button
+                            type="button"
+                            className="small-action danger"
+                            onClick={() => setConfirmation({
+                              title: t.delete,
+                              message: `Delete archive ${f.name}?`,
+                              confirmLabel: t.delete,
+                              onConfirm: () => handleDeleteArchive(f.name),
+                            })}
+                          >{t.delete}</button>
                         </div>
                       </div>
                     ))}
@@ -3902,6 +4409,16 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
             </div>
           </div>
         </div>
+      )}
+      {confirmation && (
+        <ConfirmationModal
+          title={confirmation.title}
+          message={confirmation.message}
+          confirmLabel={confirmation.confirmLabel}
+          cancelLabel={t.cancel}
+          onClose={() => setConfirmation(null)}
+          onConfirm={confirmation.onConfirm}
+        />
       )}
     </div>
   )
@@ -4218,12 +4735,12 @@ function App() {
         if (['staff', 'admin'].includes(userRole)) {
           try {
             const [staffRequestsResp, staffMembersResp, announcementsResp] = await Promise.all([
-              fetch(`${API_BASE}/staff/requests`),
+              userRole === 'admin' ? fetch(`${API_BASE}/staff/requests`) : Promise.resolve(null),
               fetch(`${API_BASE}/staff/members`),
               fetch(`${API_BASE}/announcements`),
             ])
 
-            if (staffRequestsResp.ok) {
+            if (staffRequestsResp?.ok) {
               const d = await staffRequestsResp.json()
               setRequests(d.requests || d || [])
             }
@@ -4424,12 +4941,13 @@ function App() {
         <Route path="/" element={isAuthenticated ? <Navigate to={userRole === 'staff' ? '/staff' : userRole === 'admin' ? '/admin' : '/dashboard'} replace /> : <LoginPage onLogin={handleLogin} language={language} setLanguage={switchLanguage} />} />
         <Route path="/register" element={isAuthenticated ? <Navigate to={userRole === 'staff' ? '/staff' : userRole === 'admin' ? '/admin' : '/dashboard'} replace /> : <RegisterPage language={language} setLanguage={switchLanguage} />} />
         <Route path="/dashboard" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['resident']} userRole={userRole}><DashboardPage profile={profile} requests={requests} services={services} announcements={announcementsData} events={events} payments={payments} onLogout={handleLogout} onProfileUpdated={setProfile} language={language} setLanguage={switchLanguage} /></ProtectedRoute>} />
+        <Route path="/quality" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['resident', 'staff', 'admin']} userRole={userRole}><QualityModelPage accountId={session?.user?.id} audience={userRole} language={language} setLanguage={switchLanguage} onLogout={handleLogout} /></ProtectedRoute>} />
         <Route path="/requests" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['resident']} userRole={userRole}><RequestsPage requests={requests} onSubmit={handleRequestSubmit} onRequestUpdated={handleRequestUpdated} onLogout={handleLogout} language={language} setLanguage={switchLanguage} userId={session?.user?.id} /></ProtectedRoute>} />
         <Route path="/profile" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['resident']} userRole={userRole}><ProfilePage profile={profile} onLogout={handleLogout} language={language} setLanguage={switchLanguage} /></ProtectedRoute>} />
         <Route path="/payments" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['resident']} userRole={userRole}><PaymentsPage payments={payments} onLogout={handleLogout} language={language} setLanguage={switchLanguage} /></ProtectedRoute>} />
         <Route path="/events" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['resident']} userRole={userRole}><EventsPage events={events} onLogout={handleLogout} language={language} setLanguage={switchLanguage} /></ProtectedRoute>} />
         <Route path="/settings" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['resident', 'staff', 'admin']} userRole={userRole}><SettingsPage profile={profile} onLogout={handleLogout} language={language} setLanguage={switchLanguage} /></ProtectedRoute>} />
-        <Route path="/staff" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['staff', 'admin']} userRole={userRole}><StaffPage requests={requests} staffMembers={staffMembers} announcements={announcementsData} currentUser={session?.user} userRole={userRole} onProcessRequest={handleRequestStatus} onLogout={handleLogout} onAddStaffMember={handleAddStaffMember} onAddAnnouncement={handleAddAnnouncement} onDeleteAnnouncement={handleDeleteAnnouncement} onDeleteStaffMember={handleDeleteStaffMember} language={language} setLanguage={switchLanguage} /></ProtectedRoute>} />
+        <Route path="/staff" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['staff', 'admin']} userRole={userRole}><StaffPage staffMembers={staffMembers} announcements={announcementsData} currentUser={session?.user} userRole={userRole} onProcessRequest={handleRequestStatus} onLogout={handleLogout} onAddStaffMember={handleAddStaffMember} onAddAnnouncement={handleAddAnnouncement} onDeleteAnnouncement={handleDeleteAnnouncement} onDeleteStaffMember={handleDeleteStaffMember} language={language} setLanguage={switchLanguage} /></ProtectedRoute>} />
         <Route path="/admin" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['admin']} userRole={userRole}><AdminPage users={users} residents={residents} requests={requests} reports={reports} currentUser={session?.user} onLogout={handleLogout} language={language} setLanguage={switchLanguage} /></ProtectedRoute>} />
         <Route path="*" element={<Navigate to={userRole === 'staff' ? '/staff' : userRole === 'admin' ? '/admin' : '/dashboard'} replace />} />
       </Routes>
