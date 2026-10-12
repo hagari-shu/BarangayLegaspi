@@ -17,6 +17,16 @@ Deploy the React/Vite frontend to Vercel and the Laravel API to Render:
 
 The API migration preserves the `/api` routes and PostgreSQL data model. Laravel runs the schema migration on container startup. Back up the database before the first Laravel deployment and review the migration against a staging copy first. Keep database credentials, application keys, and webhook secrets in deployment environment variables, never in source control.
 
+Residents and staff can rate their experience with the portal against all 11 factors in the McCall’s Quality Model page. Ratings are saved to the authenticated account in the API database, and administrators can review overall anonymized averages and response counts. The database retains account ownership to update the same person’s assessment and prevent duplicate submissions; admin summaries do not expose respondent identities. Optional written feedback notes remain in the user’s browser and are never uploaded. Ratings can be loaded across devices after signing in.
+
+### Mau assistant maintenance
+
+Mau currently uses client-side, keyword-matched responses; it is not a machine-learning model and does not continuously train on conversations. Adapt it through staff-approved, version-controlled FAQ updates: maintain role- and language-specific intents in `src/mau-responses.js`, keep English and Filipino answers aligned in `src/translations.js`, and add question, role, language, and out-of-scope coverage in `tests/translations.test.js`. Recheck these answers whenever a portal workflow or policy changes, and keep claims about unavailable features explicit.
+
+Do not collect or use resident conversations for training without an explicit privacy review, user notice and consent, retention limits, and a human review process for proposed answer changes. Keep user-submitted quality notes in the browser unless a separately approved design changes that privacy boundary.
+
+The official captain photo is resized in the browser and uploaded directly from the admin portal to S3-compatible object storage using a short-lived, size-limited upload policy; the API does not buffer image bytes. Configure `OBJECT_STORAGE_ENDPOINT`, `OBJECT_STORAGE_REGION`, `OBJECT_STORAGE_BUCKET`, `OBJECT_STORAGE_ACCESS_KEY_ID`, and `OBJECT_STORAGE_SECRET_ACCESS_KEY` on the Express API. Set `OBJECT_STORAGE_FORCE_PATH_STYLE=true` only if required by your provider. Scope the storage credentials to the `official/captain-portrait` prefix, configure bucket CORS to allow `POST` from the web app’s exact origin, and add a lifecycle rule to remove stale objects under `official/captain-portrait/pending/`. Keep the bucket private; the API issues short-lived signed read URLs. Uploads accept JPEG, PNG, and WebP images up to 5 MB and validate the file signature before publishing the replacement portrait. Without these settings, the upload controls report that image storage is unavailable.
+
 Payment records remain empty until a real billing/payment source is integrated. The previous API's hard-coded invoice examples were demonstration data, not resident charges; neither API should create or display them as real payments.
 
 Keep the Vercel `VITE_API_BASE` pointed at the existing Node API until authenticated resident, staff, and administrator workflows have been verified against Laravel. The public Laravel health and read endpoints are live, but a healthy database connection alone is not a cutover sign-off.
@@ -24,6 +34,8 @@ Keep the Vercel `VITE_API_BASE` pointed at the existing Node API until authentic
 ### Coordinated MFA/JWT key rotation
 
 Node-issued sessions are signed with `JWT_SECRET` and expire after seven days. Do not accept tokens signed with a compromised previous key during rotation. Existing MFA secrets are stored as `v1` ciphertext encrypted using the JWT key; both APIs support a separate `MFA_ENCRYPTION_KEY` and `v2` ciphertext for a controlled migration. A temporary, comma-separated `MFA_ENCRYPTION_KEY_PREVIOUS` list supports deployments whose services currently use different MFA keys while records are being re-encrypted.
+
+If only `MFA_ENCRYPTION_KEY` is exposed, follow the MFA re-encryption steps below but do not rotate `JWT_SECRET`; changing the JWT key invalidates sessions and is unnecessary unless the JWT key itself is compromised or rotation is separately planned.
 
 1. Back up PostgreSQL and verify the backup before changing service secrets.
 2. Deploy the backward-compatible API code while leaving `MFA_ENCRYPTION_KEY` unset. Confirm the production API remains healthy.
@@ -45,11 +57,23 @@ Enable GitHub Actions failure notifications in your GitHub account or repository
 
 These checks cover uptime and public read paths; they do not replace authenticated workflow tests, application-log review, or verified database backups.
 
+### Staff request dashboard metrics
+
+The staff request dashboard reads request totals from the authenticated staff dashboard API. Pending review counts only `Pending`; in-processing counts only `In Review`. Needs-information requests remain a separate attention category. The request table is filtered, sorted, and paginated by the API, with date filters interpreted in `Asia/Manila`.
+
+The current request workflow has no release/completion state, processing deadline, or staff assignment field. Therefore the dashboard deliberately shows release and overdue metrics as untracked instead of treating `Approved` as completed or estimating deadlines. Average response time is also not reported because the request model does not persist a reliable first-response timestamp. Add these workflow fields and guarded transitions before enabling those metrics.
+
+Administrators can maintain a resident's household ID, address, family count, and household-member names and relationships from the resident detail editor. These details remain attached to the resident account; a separate household registry, multi-head household workflow, and Laravel API parity are not yet implemented.
+
 ## Local development
 
-Install Node.js dependencies from the repository root with `npm install`, then run `npm run dev`. The Vite frontend runs on port 5173 and the local Express API runs on port 3001, using the local JSON store unless `DATABASE_URL` is configured. Do not point local development or tests at the production database.
+Install Node.js dependencies from the repository root with `npm install`, then run `npm run dev`. The Vite frontend runs on port 5173 and the local Express API runs on port 3001, using the local JSON store unless `DATABASE_URL` is configured. Do not point local development or tests at the production database. Run `npm test` and `npm run build` before submitting changes.
 
 The Node API request workflow stores the resident's online/physical copy choice, status history, and staff notes. Staff can request missing information; a resident follow-up returns that request to review. The resident request page and staff queue show the same status timeline. Browser reminders are scoped to the signed-in resident and can alert while the app is open; they are not push notifications when the browser is closed. Announcement channel selections are planning metadata only until official social accounts are connected; the app does not claim to publish posts automatically.
+
+The Express API uses JSON storage only when `DATABASE_URL` is absent in local development. When PostgreSQL is configured, database errors fail the affected operation; records are not silently written to a parallel JSON file. Production Express startup requires `DATABASE_URL`. Local JSON data is not synchronized with PostgreSQL and must not be treated as a database backup. The JSON adapter strips legacy plaintext `password` fields when reading and writing user records; only password hashes are retained.
+
+Empty reports, announcements, and event lists are returned as empty until actual records are entered. The former demonstration reports and sample announcements/events were removed so they cannot be mistaken for barangay records. Events currently have no persistent management workflow.
 
 Do not upload official scans to the current local JSON store or use the empty payment screens for real transactions. Document storage needs an access-controlled persistent storage design, while real payment recording needs an agreed reconciliation workflow. Keep Laravel cutover and production key changes paused until there is a verified database backup and restore.
 
