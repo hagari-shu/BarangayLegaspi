@@ -1,11 +1,9 @@
-import fs from 'node:fs/promises'
-import path from 'node:path'
+import { randomUUID } from 'node:crypto'
 import pg from 'pg'
 import { hashPassword } from './auth.js'
 import { ADMIN_SEED, IS_PRODUCTION, SHOULD_SKIP_SEED } from './config.js'
 
 const { Pool } = pg
-const jsonDbPath = path.join(process.cwd(), 'server', 'data', 'db.json')
 const databaseUrl = process.env.DATABASE_URL?.replace(/[?&]sslmode=[^&]*/i, '')
 
 const pool = new Pool({
@@ -49,18 +47,12 @@ const normalizeRequest = (request = null) => {
 }
 
 export async function readDb() {
-  try {
-   const raw = await fs.readFile(jsonDbPath, 'utf8')
-   return JSON.parse(raw)
-  } catch {
-   return { users: [], requests: [], reports: [], approvals: [] }
-  }
+  throw new Error('Direct JSON database access is disabled when PostgreSQL storage is configured.')
 }
 
 export async function writeDb(data) {
-  await fs.mkdir(path.dirname(jsonDbPath), { recursive: true })
-  await fs.writeFile(jsonDbPath, JSON.stringify(data, null, 2), 'utf8')
-  return data
+  void data
+  throw new Error('Direct JSON database writes are disabled when PostgreSQL storage is configured.')
 }
 
 export async function query(text, params = []) {
@@ -127,6 +119,41 @@ export async function initDatabase() {
   await query('ALTER TABLE requests ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ')
 
   await query(`
+    CREATE TABLE IF NOT EXISTS approvals (
+      id VARCHAR(100) PRIMARY KEY,
+      request_id UUID,
+      approved_by UUID,
+      approved_by_role VARCHAR(30),
+      date_approved TIMESTAMPTZ,
+      request_snapshot JSONB,
+      archived_at TIMESTAMPTZ
+    );
+  `)
+
+  await query(`
+    CREATE TABLE IF NOT EXISTS reports (
+      id VARCHAR(100) PRIMARY KEY,
+      type VARCHAR(100) NOT NULL,
+      title VARCHAR(200) NOT NULL,
+      description TEXT,
+      severity VARCHAR(50),
+      zone INTEGER,
+      status VARCHAR(50) NOT NULL DEFAULT 'Open',
+      report_date TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `)
+
+  await query(`
+    CREATE TABLE IF NOT EXISTS archives (
+      id UUID PRIMARY KEY,
+      name VARCHAR(255) UNIQUE NOT NULL,
+      category VARCHAR(50) NOT NULL,
+      contents JSONB NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `)
+
+  await query(`
     CREATE TABLE IF NOT EXISTS audit_logs (
       id UUID PRIMARY KEY,
       actor_id UUID,
@@ -151,6 +178,15 @@ export async function initDatabase() {
     );
   `)
   await query("ALTER TABLE announcements ADD COLUMN IF NOT EXISTS social_channels JSONB NOT NULL DEFAULT '[]'::jsonb")
+
+  await query(`
+    CREATE TABLE IF NOT EXISTS quality_assessments (
+      user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+      role VARCHAR(30) NOT NULL,
+      scores JSONB NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `)
 
   if (SHOULD_SKIP_SEED || (IS_PRODUCTION && !ADMIN_SEED.password)) {
     return
@@ -182,60 +218,53 @@ export async function initDatabase() {
   }
 }
 
+export async function getQualityAssessment(userId) {
+  const result = await query(
+    'SELECT user_id AS "userId", role, scores, updated_at AS "updatedAt" FROM quality_assessments WHERE user_id = $1',
+    [userId],
+  )
+  return result.rows[0] || null
+}
+
+export async function saveQualityAssessment(assessment) {
+  const result = await query(
+    `INSERT INTO quality_assessments (user_id, role, scores, updated_at)
+     VALUES ($1, $2, $3, $4)
+     ON CONFLICT (user_id) DO UPDATE
+     SET role = EXCLUDED.role, scores = EXCLUDED.scores, updated_at = EXCLUDED.updated_at
+     RETURNING user_id AS "userId", role, scores, updated_at AS "updatedAt"`,
+    [assessment.userId, assessment.role, JSON.stringify(assessment.scores), assessment.updatedAt],
+  )
+  return result.rows[0]
+}
+
+export async function listQualityAssessments() {
+  const result = await query('SELECT scores FROM quality_assessments')
+  return result.rows
+}
+
 export async function findUserByIdentifier(identifier) {
   const value = String(identifier).trim()
-
-  try {
-    const result = await query(
-      `SELECT * FROM users WHERE mobile = $1 OR email = $2 LIMIT 1`,
-      [value, value.toLowerCase()]
-    )
-    if (result.rows[0]) return normalizeUser(result.rows[0])
-  } catch (error) {
-    console.warn('findUserByIdentifier fallback triggered', error.message)
-  }
-
-  const db = await readDb()
-  return db.users.find((user) => user.mobile === value || String(user.email || '').toLowerCase() === value.toLowerCase()) || null
+  const result = await query(
+    `SELECT * FROM users WHERE mobile = $1 OR email = $2 LIMIT 1`,
+    [value, value.toLowerCase()]
+  )
+  return result.rows[0] ? normalizeUser(result.rows[0]) : null
 }
 
 export async function findUserById(id) {
-  try {
-    const result = await query('SELECT * FROM users WHERE id = $1 LIMIT 1', [id])
-    if (result.rows[0]) return normalizeUser(result.rows[0])
-  } catch (error) {
-    console.warn('findUserById fallback triggered', error.message)
-  }
-
-  const db = await readDb()
-  return db.users.find((user) => user.id === id) || null
+  const result = await query('SELECT * FROM users WHERE id = $1 LIMIT 1', [id])
+  return result.rows[0] ? normalizeUser(result.rows[0]) : null
 }
 
 export async function createUser(user) {
   const { id, firstName, lastName, mobile, email, passwordHash, role, householdId, familyMembers, householdMembers = [], status, address, zone, position, availability } = user
-  try {
-    await query(
-      `INSERT INTO users (id, first_name, last_name, mobile, email, password_hash, role, household_id, family_members, household_members, status, address, zone, position, availability)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
-      [id, firstName, lastName, mobile, email, passwordHash, role, householdId, familyMembers, JSON.stringify(householdMembers), status, address, zone ?? null, position ?? null, availability ?? 'Available']
-    )
-    return { ...user, firstName, lastName, mobile, email }
-  } catch (error) {
-    console.warn('createUser fallback triggered', error.message)
-    const db = await readDb()
-    db.users = db.users || []
-    db.users.push({
-      ...user,
-      firstName: user.firstName ?? user.first_name,
-      lastName: user.lastName ?? user.last_name,
-      householdId: user.householdId ?? user.household_id,
-      familyMembers: user.familyMembers ?? user.family_members,
-      passwordHash: user.passwordHash ?? user.password_hash,
-      createdAt: user.createdAt ?? new Date().toISOString(),
-    })
-    await writeDb(db)
-    return { ...user, firstName, lastName, mobile, email }
-  }
+  await query(
+    `INSERT INTO users (id, first_name, last_name, mobile, email, password_hash, role, household_id, family_members, household_members, status, address, zone, position, availability)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
+    [id, firstName, lastName, mobile, email, passwordHash, role, householdId, familyMembers, JSON.stringify(householdMembers), status, address, zone ?? null, position ?? null, availability ?? 'Available']
+  )
+  return { ...user, firstName, lastName, mobile, email }
 }
 
 export async function listAnnouncements() {
@@ -281,7 +310,7 @@ export async function updateUser(userId, updates = {}) {
     mfaSecret: updates.mfaSecret,
     mfaEnabled: updates.mfaEnabled,
     mfaLastStep: updates.mfaLastStep,
-  }).filter(([, value]) => value !== undefined && value !== null)
+  }).filter(([, value]) => value !== undefined)
 
   if (entries.length === 0) {
     return null
@@ -307,42 +336,21 @@ export async function updateUser(userId, updates = {}) {
     mfaLastStep: 'mfa_last_step',
   }
 
-  const assignments = entries.map(([key]) => `${columns[key]} = $${entries.indexOf([key, entries.find(([, value]) => value === updates[key] || value === updates[key])?.[1]]) + 1}`)
-
-  try {
-    const values = entries.map(([, value]) => value)
-    const result = await query(
-      `UPDATE users SET ${entries.map(([key], index) => `${columns[key]} = $${index + 1}`).join(', ')} WHERE id = $${entries.length + 1} RETURNING *`,
-      [...values, userId]
-    )
-    return result.rows[0] ? normalizeUser(result.rows[0]) : null
-  } catch (error) {
-    console.warn('updateUser fallback triggered', error.message)
-    const db = await readDb()
-    const index = (db.users || []).findIndex((user) => user.id === userId)
-    if (index === -1) return null
-    db.users[index] = { ...db.users[index], ...updates }
-    await writeDb(db)
-    return { ...db.users[index] }
-  }
+  const values = entries.map(([key, value]) => key === 'householdMembers' ? JSON.stringify(value) : value)
+  const result = await query(
+    `UPDATE users SET ${entries.map(([key], index) => `${columns[key]} = $${index + 1}`).join(', ')} WHERE id = $${entries.length + 1} RETURNING *`,
+    [...values, userId]
+  )
+  return result.rows[0] ? normalizeUser(result.rows[0]) : null
 }
 
 export async function createRequest(request) {
-  try {
-    await query(
-      `INSERT INTO requests (id, user_id, type, purpose, notes, status, delivery_method, delivery_note, follow_ups, status_history, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
-      [request.id, request.userId, request.type, request.purpose, request.notes || '', request.status, request.deliveryMethod || 'online', request.deliveryNote || '', JSON.stringify(request.followUps || []), JSON.stringify(request.statusHistory || []), new Date(request.date || Date.now()).toISOString()]
-    )
-    return request
-  } catch (error) {
-    console.warn('createRequest fallback triggered', error.message)
-    const db = await readDb()
-    db.requests = db.requests || []
-    db.requests.push(request)
-    await writeDb(db)
-    return request
-  }
+  await query(
+    `INSERT INTO requests (id, user_id, type, purpose, notes, status, delivery_method, delivery_note, follow_ups, status_history, created_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+    [request.id, request.userId, request.type, request.purpose, request.notes || '', request.status, request.deliveryMethod || 'online', request.deliveryNote || '', JSON.stringify(request.followUps || []), JSON.stringify(request.statusHistory || []), new Date(request.date || Date.now()).toISOString()]
+  )
+  return request
 }
 
 export async function saveRequest(request) {
@@ -350,67 +358,132 @@ export async function saveRequest(request) {
 }
 
 export async function deleteUser(userId) {
-  try {
-    const result = await query('DELETE FROM users WHERE id = $1 RETURNING *', [userId])
-    return result.rows[0] ? normalizeUser(result.rows[0]) : null
-  } catch (error) {
-    console.warn('deleteUser fallback triggered', error.message)
-    const db = await readDb()
-    const user = (db.users || []).find((item) => item.id === userId)
-    if (!user) return null
-    await writeDb({ ...db, users: db.users.filter((item) => item.id !== userId) })
-    return user
-  }
+  const result = await query('DELETE FROM users WHERE id = $1 RETURNING *', [userId])
+  return result.rows[0] ? normalizeUser(result.rows[0]) : null
 }
 
 export async function listRequestsForUser(userId) {
-  try {
-    const result = await query(
-      `SELECT * FROM requests WHERE user_id = $1 ORDER BY created_at DESC`,
-      [userId]
-    )
-    return result.rows.map(normalizeRequest)
-  } catch (error) {
-    console.warn('listRequestsForUser fallback triggered', error.message)
-    const db = await readDb()
-    return (db.requests || []).filter((request) => request.userId === userId)
-  }
+  const result = await query(
+    `SELECT * FROM requests WHERE user_id = $1 ORDER BY created_at DESC`,
+    [userId]
+  )
+  return result.rows.map(normalizeRequest)
 }
 
 export async function listAllRequests() {
+  const result = await query(
+    `SELECT r.*, u.first_name, u.last_name, u.email, u.mobile
+     FROM requests r
+     JOIN users u ON u.id = r.user_id
+     ORDER BY r.created_at DESC`
+  )
+  return result.rows.map(normalizeRequest)
+}
+
+export async function listReports() {
+  const result = await query(
+    `SELECT id, type, title, description, severity, zone, status, report_date AS date
+     FROM reports ORDER BY report_date DESC`
+  )
+  return result.rows
+}
+
+export async function createReport(report) {
+  await query(
+    `INSERT INTO reports (id, type, title, description, severity, zone, status, report_date)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+    [report.id, report.type, report.title, report.description || '', report.severity || null,
+      report.zone || null, report.status, report.date]
+  )
+  return report
+}
+
+export async function listStaffRequestDashboard({
+  search = '',
+  status = '',
+  type = '',
+  zone = '',
+  from = '',
+  to = '',
+  sort = 'date',
+  direction = 'desc',
+  page = 1,
+  pageSize = 10,
+} = {}) {
+  const values = []
+  const conditions = []
+  const addValue = (value) => {
+    values.push(value)
+    return `$${values.length}`
+  }
+
+  if (search) {
+    const term = addValue(`%${search}%`)
+    conditions.push(`(r.id::text ILIKE ${term} OR r.type ILIKE ${term} OR r.purpose ILIKE ${term} OR u.first_name ILIKE ${term} OR u.last_name ILIKE ${term})`)
+  }
+  if (status === 'active') conditions.push(`r.status NOT IN ('Approved', 'Rejected')`)
+  else if (status) conditions.push(`r.status = ${addValue(status)}`)
+  if (type) conditions.push(`r.type = ${addValue(type)}`)
+  if (zone) conditions.push(`u.zone::text = ${addValue(zone)}`)
+  if (from) conditions.push(`(r.created_at AT TIME ZONE 'Asia/Manila')::date >= ${addValue(from)}::date`)
+  if (to) conditions.push(`(r.created_at AT TIME ZONE 'Asia/Manila')::date <= ${addValue(to)}::date`)
+  const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''
+  const sortColumn = sort === 'status' ? 'r.status' : 'r.created_at'
+  const order = direction === 'asc' ? 'ASC' : 'DESC'
+  const limit = addValue(pageSize)
+  const offset = addValue((page - 1) * pageSize)
+
   try {
-    const result = await query(
-      `SELECT r.*, u.first_name, u.last_name, u.email, u.mobile
-       FROM requests r
-       JOIN users u ON u.id = r.user_id
-       ORDER BY r.created_at DESC`
-    )
-    return result.rows.map(normalizeRequest)
+    const [rows, total, summary] = await Promise.all([
+      query(
+        `SELECT r.*, u.first_name, u.last_name
+         FROM requests r
+         JOIN users u ON u.id = r.user_id
+         ${where}
+         ORDER BY ${sortColumn} ${order} NULLS LAST, r.id
+         LIMIT ${limit} OFFSET ${offset}`,
+        values.slice(0, values.length - 2)
+          .concat([pageSize, (page - 1) * pageSize])
+      ),
+      query(
+        `SELECT COUNT(*)::int AS count FROM requests r JOIN users u ON u.id = r.user_id ${where}`,
+        values.slice(0, values.length - 2)
+      ),
+      query(
+        `SELECT COUNT(*)::int AS total,
+          COUNT(*) FILTER (WHERE status = 'Pending')::int AS pending,
+          COUNT(*) FILTER (WHERE status = 'In Review')::int AS "inReview",
+          COUNT(*) FILTER (WHERE status = 'Needs Information')::int AS "needsInformation",
+          COUNT(*) FILTER (WHERE status = 'Approved')::int AS approved,
+          COUNT(*) FILTER (WHERE status = 'Rejected')::int AS rejected,
+          array_agg(DISTINCT type ORDER BY type) FILTER (WHERE type IS NOT NULL) AS "documentTypes"
+         FROM requests`
+      ),
+    ])
+    return {
+      requests: rows.rows.map(normalizeRequest),
+      total: total.rows[0].count,
+      page,
+      pageSize,
+      documentTypes: summary.rows[0].documentTypes || [],
+      summary: { ...summary.rows[0], deadlineTracking: false, releaseTracking: false },
+    }
   } catch (error) {
-    console.warn('listAllRequests fallback triggered', error.message)
-    const db = await readDb()
-    return db.requests || []
+    console.error('PostgreSQL staff request dashboard query failed', error)
+    throw error
   }
 }
 
 export async function listAllUsers() {
   try {
     const result = await query(
-      `SELECT id, first_name, last_name, mobile, email, role, status, household_id, family_members, address, created_at
+      `SELECT id, first_name, last_name, mobile, email, role, status, household_id, family_members, household_members, address, zone, position, availability, created_at
        FROM users ORDER BY created_at DESC`
     )
     return result.rows.map(normalizeUser)
   } catch (error) {
-    console.warn('listAllUsers fallback triggered', error.message)
-    const db = await readDb()
-    return (db.users || []).map((user) => ({
-      ...user,
-      firstName: user.firstName ?? user.first_name,
-      lastName: user.lastName ?? user.last_name,
-      householdId: user.householdId ?? user.household_id,
-      familyMembers: user.familyMembers ?? user.family_members,
-      createdAt: user.createdAt ?? user.created_at,
-    }))
+    console.error('PostgreSQL user list query failed', error)
+    throw error
   }
 }
 
@@ -434,15 +507,8 @@ export async function updateRequestStatus(requestId, status, historyEntry) {
     )
     return normalizeRequest(result.rows[0])
   } catch (error) {
-    console.warn('updateRequestStatus fallback triggered', error.message)
-    const db = await readDb()
-    const request = (db.requests || []).find((item) => item.id === requestId)
-    if (!request) return null
-    const previousStatus = request.status
-    request.status = status
-    request.updatedAt = new Date().toISOString()
-    await writeDb({ ...db, requests: (db.requests || []).map((item) => item.id === requestId ? request : item) })
-    return { ...request, previousStatus }
+    console.error('PostgreSQL request status update failed', error)
+    throw error
   }
 }
 
@@ -478,44 +544,29 @@ export async function appendRequestFollowUp(requestId, followUp) {
     )
     return normalizeRequest(result.rows[0])
   } catch (error) {
-    console.warn('appendRequestFollowUp fallback triggered', error.message)
-    const db = await readDb()
-    const request = (db.requests || []).find((item) => item.id === requestId)
-    if (!request) return null
-    request.followUps = [...(Array.isArray(request.followUps) ? request.followUps : []), followUp]
-    request.updatedAt = followUp.createdAt
-    request.statusHistory = [
-      ...(Array.isArray(request.statusHistory) && request.statusHistory.length
-        ? request.statusHistory
-        : [{ kind: 'status', status: request.status, createdAt: request.date, actorRole: 'system' }]),
-      { ...followUp, kind: 'follow-up', actorRole: 'resident' },
-    ]
-    if (request.status === 'Needs Information') {
-      request.status = 'In Review'
-      request.statusHistory.push({
-        kind: 'status',
-        status: 'In Review',
-        note: 'Resident provided a follow-up.',
-        createdAt: followUp.createdAt,
-        actorRole: 'system',
-      })
-    }
-    await writeDb(db)
-    return request
+    console.error('PostgreSQL request follow-up update failed', error)
+    throw error
   }
 }
 
 export async function addApproval(approval) {
-  const db = await readDb()
-  db.approvals = db.approvals || []
-  db.approvals.push(approval)
-  await writeDb(db)
+  await query(
+    `INSERT INTO approvals (id, request_id, approved_by, approved_by_role, date_approved, request_snapshot, archived_at)
+     VALUES ($1, $2, $3, $4, $5, $6, NULL)`,
+    [approval.id, approval.requestId, approval.approvedBy || null, approval.approvedByRole || null,
+      approval.dateApproved, JSON.stringify(approval.requestSnapshot || {})]
+  )
   return approval
 }
 
 export async function listApprovals() {
-  const db = await readDb()
-  return db.approvals || []
+  const result = await query(
+    `SELECT id, request_id AS "requestId", approved_by AS "approvedBy",
+            approved_by_role AS "approvedByRole", date_approved AS "dateApproved",
+            request_snapshot AS "requestSnapshot", archived_at AS "archivedAt"
+     FROM approvals WHERE archived_at IS NULL ORDER BY date_approved DESC`
+  )
+  return result.rows
 }
 
 export async function addAuditLog(entry) {
@@ -527,12 +578,8 @@ export async function addAuditLog(entry) {
     )
     return result.rows[0]
   } catch (error) {
-    console.warn('audit log fallback triggered', error.message)
-    const db = await readDb()
-    db.auditLogs = db.auditLogs || []
-    db.auditLogs.push(entry)
-    await writeDb(db)
-    return entry
+    console.error('PostgreSQL audit log insert failed', error)
+    throw error
   }
 }
 
@@ -541,87 +588,146 @@ export async function listAuditLogs(limit = 100) {
     const result = await query('SELECT * FROM audit_logs ORDER BY created_at DESC LIMIT $1', [Math.max(1, Math.min(Number(limit) || 100, 500))])
     return result.rows
   } catch (error) {
-    const db = await readDb()
-    return (db.auditLogs || []).slice(-Math.max(1, Math.min(Number(limit) || 100, 500))).reverse()
+    console.error('PostgreSQL audit log query failed', error)
+    throw error
   }
 }
 
 export async function archiveApprovalsOlderThan(days = 7) {
-  const db = await readDb()
-  db.approvals = db.approvals || []
-
-  let old = []
-  if (days === 0) {
-    old = db.approvals
-  } else {
-    const cutoff = Date.now() - Number(days) * 24 * 60 * 60 * 1000
-    old = db.approvals.filter((approval) => new Date(approval.dateApproved).getTime() <= cutoff)
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+    const result = await client.query(
+      `SELECT id, request_id AS "requestId", approved_by AS "approvedBy",
+              approved_by_role AS "approvedByRole", date_approved AS "dateApproved",
+              request_snapshot AS "requestSnapshot", archived_at AS "archivedAt"
+       FROM approvals
+       WHERE archived_at IS NULL AND ($1 = 0 OR date_approved <= NOW() - ($1 * INTERVAL '1 day'))
+       ORDER BY date_approved
+       FOR UPDATE`,
+      [Number(days)]
+    )
+    const approvals = result.rows
+    if (approvals.length === 0) {
+      await client.query('COMMIT')
+      return { count: 0, filename: null }
+    }
+    const from = new Date(approvals[0].dateApproved).toISOString().slice(0, 10)
+    const to = new Date(approvals[approvals.length - 1].dateApproved).toISOString().slice(0, 10)
+    const filename = `approvals-${from}_to_${to}.json`
+    await client.query(
+      `INSERT INTO archives (id, name, category, contents, created_at)
+       VALUES ($1, $2, 'approvals', $3, NOW())
+       ON CONFLICT (name) DO UPDATE SET contents = EXCLUDED.contents, created_at = EXCLUDED.created_at`,
+      [randomUUID(), filename, JSON.stringify(approvals)]
+    )
+    await client.query(
+      'UPDATE approvals SET archived_at = NOW() WHERE id = ANY($1::varchar[])',
+      [approvals.map((approval) => approval.id)]
+    )
+    await client.query('COMMIT')
+    return { count: approvals.length, filename }
+  } catch (error) {
+    await client.query('ROLLBACK')
+    console.error('PostgreSQL approval archival failed', error)
+    throw error
+  } finally {
+    client.release()
   }
-
-  if (old.length === 0) return { count: 0, filename: null }
-
-  const archiveDir = path.join(process.cwd(), 'server', 'data', 'archives')
-  await fs.mkdir(archiveDir, { recursive: true })
-  const from = new Date(Math.min(...old.map((item) => new Date(item.dateApproved).getTime()))).toISOString().slice(0, 10)
-  const to = new Date(Math.max(...old.map((item) => new Date(item.dateApproved).getTime()))).toISOString().slice(0, 10)
-  const filename = path.join(archiveDir, `approvals-${from}_to_${to}.json`)
-  await fs.writeFile(filename, JSON.stringify(old, null, 2), 'utf8')
-
-  db.approvals = db.approvals.filter((item) => !old.some((oldItem) => oldItem.id === item.id))
-  await writeDb(db)
-
-  return { filename, count: old.length }
 }
 
 export async function archiveProcessedRequestsOlderThan(days = 1) {
-  const db = await readDb()
-  db.requests = db.requests || []
-
-  const processed = db.requests.filter((request) => ['Approved', 'Rejected'].includes(request.status))
-  const daysValue = Number(days) || 1
-  const cutoff = Date.now() - daysValue * 24 * 60 * 60 * 1000
-
-  const old = daysValue === 0
-    ? processed
-    : processed.filter((request) => {
-        const source = request.updatedAt || request.date || request.createdAt || new Date().toISOString()
-        const timestamp = new Date(source).getTime()
-        return Number.isFinite(timestamp) && timestamp <= cutoff
-      })
-
-  if (old.length === 0) {
-    return { count: 0, filename: null, archivedAt: null }
+  const daysValue = Math.max(0, Number(days) || 0)
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+    const result = await client.query(
+      `SELECT * FROM requests
+       WHERE status IN ('Approved', 'Rejected')
+         AND ($1 = 0 OR COALESCE(updated_at, created_at) <= NOW() - ($1 * INTERVAL '1 day'))
+       ORDER BY created_at
+       FOR UPDATE`,
+      [daysValue]
+    )
+    const records = result.rows.map(normalizeRequest)
+    if (records.length === 0) {
+      await client.query('COMMIT')
+      return { count: 0, filename: null, archivedAt: null }
+    }
+    const archivedAt = new Date().toISOString()
+    const filename = `queue-approvals-${archivedAt.slice(0, 10)}.json`
+    const payload = {
+      archivedAt,
+      archivedFor: daysValue === 0 ? 'manual' : `${daysValue} day(s)`,
+      total: records.length,
+      records,
+    }
+    await client.query(
+      `INSERT INTO archives (id, name, category, contents, created_at)
+       VALUES ($1, $2, 'queue-approvals', $3, $4)
+       ON CONFLICT (name) DO UPDATE SET contents = EXCLUDED.contents, created_at = EXCLUDED.created_at`,
+      [randomUUID(), filename, JSON.stringify(payload), archivedAt]
+    )
+    await client.query('DELETE FROM requests WHERE id = ANY($1::uuid[])', [records.map((request) => request.id)])
+    await client.query('COMMIT')
+    return { count: records.length, filename, archivedAt }
+  } catch (error) {
+    await client.query('ROLLBACK')
+    console.error('PostgreSQL processed request archival failed', error)
+    throw error
+  } finally {
+    client.release()
   }
+}
 
-  const archiveDir = path.join(process.cwd(), 'server', 'data', 'archives')
-  await fs.mkdir(archiveDir, { recursive: true })
+export async function createArchive(name, category, contents) {
+  const result = await query(
+    `INSERT INTO archives (id, name, category, contents, created_at)
+     VALUES ($1, $2, $3, $4, NOW())
+     ON CONFLICT (name) DO UPDATE SET category = EXCLUDED.category, contents = EXCLUDED.contents, created_at = EXCLUDED.created_at
+     RETURNING id`,
+    [randomUUID(), name, category, JSON.stringify(contents)]
+  )
+  return result.rows[0] || null
+}
 
-  const today = new Date().toISOString().slice(0, 10)
-  const filename = path.join(archiveDir, `queue-approvals-${today}.json`)
-  const payload = {
-    archivedAt: new Date().toISOString(),
-    archivedFor: daysValue === 0 ? 'manual' : `${daysValue} day(s)`,
-    total: old.length,
-    records: old,
-  }
-  await fs.writeFile(filename, JSON.stringify(payload, null, 2), 'utf8')
+export async function listArchives() {
+  const result = await query(
+    `SELECT name, octet_length(contents::text) AS size, created_at AS mtime
+     FROM archives ORDER BY created_at DESC`
+  )
+  return result.rows
+}
 
-  db.requests = db.requests.filter((request) => !old.some((archived) => archived.id === request.id))
-  await writeDb(db)
+export async function getArchive(name) {
+  const result = await query('SELECT contents FROM archives WHERE name = $1', [name])
+  return result.rows[0]?.contents ?? null
+}
 
-  return { count: old.length, filename, archivedAt: payload.archivedAt }
+export async function deleteArchive(name) {
+  const result = await query('DELETE FROM archives WHERE name = $1 RETURNING name', [name])
+  return result.rows[0] || null
 }
 
 export async function clearData(options = { keepAdmins: true }) {
-  const db = await readDb()
-  if (options.keepAdmins) {
-    db.users = (db.users || []).filter((user) => ['admin', 'staff'].includes(user.role))
-  } else {
-    db.users = []
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+    await client.query('DELETE FROM requests')
+    await client.query('DELETE FROM reports')
+    await client.query('DELETE FROM approvals')
+    if (options.keepAdmins) {
+      await client.query("DELETE FROM users WHERE role = 'resident'")
+    } else {
+      await client.query('DELETE FROM users')
+    }
+    await client.query('COMMIT')
+    return true
+  } catch (error) {
+    await client.query('ROLLBACK')
+    console.error('PostgreSQL data clear failed', error)
+    throw error
+  } finally {
+    client.release()
   }
-  db.requests = []
-  db.reports = []
-  db.approvals = []
-  await writeDb(db)
-  return true
 }

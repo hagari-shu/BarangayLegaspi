@@ -41,6 +41,10 @@ if (IS_PRODUCTION && (!process.env.JWT_SECRET || process.env.JWT_SECRET.length <
   throw new Error('JWT_SECRET must be configured with at least 32 characters in production.')
 }
 
+if (IS_PRODUCTION && !process.env.DATABASE_URL) {
+  throw new Error('DATABASE_URL must be configured in production; JSON storage is for local development only.')
+}
+
 if (IS_PRODUCTION && CORS_ORIGINS.length === 0) {
   throw new Error('CORS_ORIGINS must be configured in production.')
 }
