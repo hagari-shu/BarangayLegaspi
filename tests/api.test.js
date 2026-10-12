@@ -7,6 +7,7 @@ import { createApp, seedDemoResident } from '../server/app.js'
 import { hashPassword } from '../server/auth.js'
 import * as jsonDb from '../server/db.js'
 import { DB_PATH } from '../server/config.js'
+import { isCaptainPhotoStorageConfigured } from '../server/captain-photo-storage.js'
 import { randomUUID } from 'node:crypto'
 
 const testDbPath = DB_PATH
@@ -28,6 +29,203 @@ const createTestServer = async () => {
     baseUrl: `http://127.0.0.1:${port}`,
   }
 }
+
+test('API rate-limit responses retain CORS headers for the frontend origin', async () => {
+  const { server, baseUrl } = await createTestServer()
+  const origin = 'http://localhost:5173'
+
+  try {
+    let response
+    for (let request = 0; request <= 300; request += 1) {
+      response = await fetch(`${baseUrl}/api/health`, { headers: { Origin: origin } })
+    }
+
+    assert.equal(response.status, 429)
+    assert.equal(response.headers.get('access-control-allow-origin'), origin)
+  } finally {
+    server.close()
+  }
+})
+
+test('JSON storage removes plaintext passwords from existing and future user records', async () => {
+  const legacyPlaintext = 'plaintext-only-test-sentinel'
+  await fs.writeFile(testDbPath, JSON.stringify({
+    users: [{ id: 'legacy-user', password: legacyPlaintext, passwordHash: 'hashed-password' }],
+    requests: [],
+    announcements: [],
+    reports: [],
+  }), 'utf8')
+
+  await jsonDb.readDb()
+  const stored = await fs.readFile(testDbPath, 'utf8')
+  assert.equal(stored.includes(legacyPlaintext), false)
+  assert.equal((await jsonDb.findUserById('legacy-user')).password, undefined)
+
+  await jsonDb.writeDb({
+    users: [{ id: 'new-user', password: legacyPlaintext, passwordHash: 'hashed-password' }],
+    requests: [],
+    announcements: [],
+    reports: [],
+  })
+  assert.equal((await fs.readFile(testDbPath, 'utf8')).includes(legacyPlaintext), false)
+})
+
+test('staff request dashboard returns authorized, filtered, paginated records and real totals', async () => {
+  const { server, baseUrl } = await createTestServer()
+  const users = await jsonDb.listAllUsers()
+  const resident = users.find((user) => user.role === 'resident')
+  const staff = {
+    id: randomUUID(),
+    firstName: 'Staff',
+    lastName: 'Dashboard',
+    mobile: `092${Math.floor(10000000 + Math.random() * 90000000)}`,
+    email: `staff.${Date.now()}@example.com`,
+    passwordHash: await hashPassword('StaffPass123!'),
+    role: 'staff',
+    status: 'On Duty',
+    zone: 1,
+  }
+
+  try {
+    await jsonDb.saveUser(staff)
+    const requestIds = [randomUUID(), randomUUID()]
+    await jsonDb.saveRequest({
+      id: requestIds[0],
+      userId: resident.id,
+      type: 'Barangay Clearance',
+      purpose: 'Employment',
+      status: 'Pending',
+      date: '2026-10-09T10:00:00+08:00',
+    })
+    await jsonDb.saveRequest({
+      id: requestIds[1],
+      userId: resident.id,
+      type: 'Certificate of Residency',
+      purpose: 'School enrollment',
+      status: 'In Review',
+      date: '2026-10-10T10:00:00+08:00',
+    })
+
+    const loginResponse = await fetch(`${baseUrl}/api/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ identifier: staff.email, password: 'StaffPass123!' }),
+    })
+    assert.equal(loginResponse.status, 200)
+    const { token } = await loginResponse.json()
+
+    const response = await fetch(`${baseUrl}/api/staff/dashboard-requests?status=all&page=1&pageSize=1&sort=date&direction=desc`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    assert.equal(response.status, 200)
+    const dashboard = await response.json()
+    assert.equal(dashboard.total, 2)
+    assert.equal(dashboard.requests.length, 1)
+    assert.equal(dashboard.requests[0].id, requestIds[1])
+    assert.equal(dashboard.requests[0].first_name, resident.firstName)
+    assert.equal(dashboard.summary.pending, 1)
+    assert.equal(dashboard.summary.inReview, 1)
+    assert.equal(dashboard.summary.deadlineTracking, false)
+    assert.equal(dashboard.summary.releaseTracking, false)
+
+    const searchResponse = await fetch(`${baseUrl}/api/staff/dashboard-requests?status=all&search=${requestIds[0]}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    const searchResult = await searchResponse.json()
+    assert.equal(searchResult.total, 1)
+    assert.equal(searchResult.requests[0].id, requestIds[0])
+
+    const residentLoginResponse = await fetch(`${baseUrl}/api/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ identifier: resident.email, password: 'ResidentPass123!' }),
+    })
+    const residentToken = (await residentLoginResponse.json()).token
+    const forbiddenResponse = await fetch(`${baseUrl}/api/staff/dashboard-requests`, {
+      headers: { Authorization: `Bearer ${residentToken}` },
+    })
+    assert.equal(forbiddenResponse.status, 403)
+
+    const invalidPageSize = await fetch(`${baseUrl}/api/staff/dashboard-requests?pageSize=500`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    assert.equal(invalidPageSize.status, 400)
+  } finally {
+    server.close()
+  }
+})
+
+test('disabled accounts cannot log in or continue using an existing session', async () => {
+  const { server, baseUrl } = await createTestServer()
+  const staff = {
+    id: randomUUID(),
+    firstName: 'Inactive',
+    lastName: 'Staff',
+    mobile: `092${Math.floor(10000000 + Math.random() * 90000000)}`,
+    email: `inactive.${Date.now()}@example.com`,
+    passwordHash: await hashPassword('StaffPass123!'),
+    role: 'staff',
+    status: 'On Duty',
+  }
+
+  try {
+    await jsonDb.saveUser(staff)
+    const login = await fetch(`${baseUrl}/api/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ identifier: staff.email, password: 'StaffPass123!' }),
+    })
+    assert.equal(login.status, 200)
+    const { token } = await login.json()
+
+    await jsonDb.updateUser(staff.id, { status: 'Disabled' })
+    const dashboard = await fetch(`${baseUrl}/api/dashboard`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    assert.equal(dashboard.status, 403)
+
+    const protectedQueue = await fetch(`${baseUrl}/api/staff/dashboard-requests`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    assert.equal(protectedQueue.status, 403)
+
+    const secondLogin = await fetch(`${baseUrl}/api/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ identifier: staff.email, password: 'StaffPass123!' }),
+    })
+    assert.equal(secondLogin.status, 403)
+  } finally {
+    server.close()
+  }
+})
+
+test('reports, announcements, and events do not return seeded demonstration content', async () => {
+  const { server, baseUrl } = await createTestServer()
+
+  try {
+    const login = await fetch(`${baseUrl}/api/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ identifier: 'admin@barangay.gov.ph', password: 'AdminPass123' }),
+    })
+    assert.equal(login.status, 200)
+    const { token } = await login.json()
+
+    const reports = await fetch(`${baseUrl}/api/admin/reports`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    assert.deepEqual((await reports.json()).reports, [])
+
+    const announcements = await fetch(`${baseUrl}/api/announcements`)
+    assert.deepEqual((await announcements.json()).announcements, [])
+
+    const events = await fetch(`${baseUrl}/api/events`)
+    assert.deepEqual((await events.json()).events, [])
+  } finally {
+    server.close()
+  }
+})
 
 test('registers a resident and waits for administrator approval', async () => {
   const { server, baseUrl } = await createTestServer()
@@ -236,6 +434,16 @@ test('request lifecycle preserves copy preference, status history, and resident 
     assert.equal(followedUpRequest.statusHistory.at(-2).kind, 'follow-up')
     assert.equal(followedUpRequest.statusHistory.at(-1).status, 'In Review')
 
+    const missingRejectionReasonResponse = await fetch(`${baseUrl}/api/requests/${createdRequest.id}/status`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${staffToken}`,
+      },
+      body: JSON.stringify({ status: 'Rejected' }),
+    })
+    assert.equal(missingRejectionReasonResponse.status, 400)
+
     const completeResponse = await fetch(`${baseUrl}/api/requests/${createdRequest.id}/status`, {
       method: 'PATCH',
       headers: {
@@ -311,6 +519,11 @@ test('admin can update user role and status', async () => {
         role: 'staff',
         status: 'On Duty',
         zone: 4,
+        familyMembers: 3,
+        householdMembers: [
+          { name: 'Ana Villanueva', relationship: 'Spouse' },
+          { name: 'Luis Villanueva', relationship: 'Child' },
+        ],
       }),
     })
 
@@ -319,6 +532,23 @@ test('admin can update user role and status', async () => {
     assert.equal(updateData.user.role, 'staff')
     assert.equal(updateData.user.status, 'On Duty')
     assert.equal(updateData.user.zone, 4)
+    assert.equal(updateData.user.familyMembers, 3)
+    assert.deepEqual(updateData.user.householdMembers, [
+      { name: 'Ana Villanueva', relationship: 'Spouse' },
+      { name: 'Luis Villanueva', relationship: 'Child' },
+    ])
+
+    const invalidHouseholdResponse = await fetch(`${baseUrl}/api/admin/users/${residentId}`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${adminToken}`,
+      },
+      body: JSON.stringify({
+        householdMembers: [{ name: 'No relationship' }],
+      }),
+    })
+    assert.equal(invalidHouseholdResponse.status, 400)
 
     const usersResponse = await fetch(`${baseUrl}/api/admin/users`, {
       headers: { Authorization: `Bearer ${adminToken}` },
@@ -378,6 +608,222 @@ test('staff cannot create staff accounts', async () => {
     })
 
     assert.equal(createResponse.status, 403)
+  } finally {
+    await new Promise((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()))
+    })
+  }
+})
+
+test('admin-assigned staff positions persist in login profiles and the staff directory', async () => {
+  const { server, baseUrl } = await createTestServer()
+  const email = `secretary.${Date.now()}@example.com`
+  const mobile = `091${Math.floor(10000000 + Math.random() * 90000000)}`
+
+  try {
+    const adminLogin = await fetch(`${baseUrl}/api/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ identifier: 'admin@barangay.gov.ph', password: 'AdminPass123' }),
+    })
+    assert.equal(adminLogin.status, 200)
+    const { token: adminToken } = await adminLogin.json()
+
+    const createResponse = await fetch(`${baseUrl}/api/staff/members`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${adminToken}`,
+      },
+      body: JSON.stringify({
+        firstName: 'Maria',
+        lastName: 'Secretary',
+        position: 'Secretary',
+        email,
+        mobile,
+        password: 'StaffPass123!',
+      }),
+    })
+    assert.equal(createResponse.status, 201)
+    const { staffMember } = await createResponse.json()
+    assert.equal(staffMember.position, 'Secretary')
+
+    const staffLogin = await fetch(`${baseUrl}/api/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ identifier: email, password: 'StaffPass123!' }),
+    })
+    assert.equal(staffLogin.status, 200)
+    const { user } = await staffLogin.json()
+    assert.equal(user.position, 'Secretary')
+
+    const directoryResponse = await fetch(`${baseUrl}/api/staff/members`, {
+      headers: { Authorization: `Bearer ${adminToken}` },
+    })
+    assert.equal(directoryResponse.status, 200)
+    const { staffMembers } = await directoryResponse.json()
+    assert.equal(staffMembers.find((member) => member.id === staffMember.id)?.position, 'Secretary')
+  } finally {
+    await new Promise((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()))
+    })
+  }
+})
+
+test('authenticated roles save private quality ratings and admins receive anonymous aggregates only', async () => {
+  const { server, baseUrl } = await createTestServer()
+  const staffPassword = 'StaffPass123!'
+  await jsonDb.saveUser({
+    id: randomUUID(),
+    firstName: 'Quality',
+    lastName: 'Staff',
+    mobile: `091${Math.floor(10000000 + Math.random() * 90000000)}`,
+    email: `quality.staff.${Date.now()}@example.com`,
+    passwordHash: await hashPassword(staffPassword),
+    role: 'staff',
+    status: 'On Duty',
+    createdAt: new Date().toISOString(),
+  })
+
+  const database = await jsonDb.readDb()
+  const staff = database.users.find((user) => user.role === 'staff' && user.email.startsWith('quality.staff.'))
+
+  try {
+    const login = async (identifier, password) => {
+      const response = await fetch(`${baseUrl}/api/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ identifier, password }),
+      })
+      assert.equal(response.status, 200)
+      return (await response.json()).token
+    }
+    const [residentToken, staffToken, adminToken] = await Promise.all([
+      login('maria.delacruz@email.com', 'ResidentPass123!'),
+      login(staff.email, staffPassword),
+      login('admin@barangay.gov.ph', 'AdminPass123'),
+    ])
+    const factorScores = (correctness) => ({
+      correctness,
+      reliability: null,
+      efficiency: null,
+      integrity: null,
+      usability: null,
+      maintainability: null,
+      flexibility: null,
+      testability: null,
+      portability: null,
+      reusability: null,
+      interoperability: null,
+    })
+    const save = (token, scores) => fetch(`${baseUrl}/api/quality-assessment`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ scores, notes: { correctness: 'This private browser note must not reach the API.' } }),
+    })
+
+    assert.equal((await fetch(`${baseUrl}/api/quality-assessment`)).status, 401)
+    assert.equal((await save(residentToken, { ...factorScores(5), unsupported: 4 })).status, 400)
+
+    for (const [token, score] of [[residentToken, 5], [staffToken, 3], [adminToken, 1]]) {
+      const saveResponse = await save(token, factorScores(score))
+      assert.equal(saveResponse.status, 200)
+      const saveData = await saveResponse.json()
+      assert.equal(saveData.assessment.scores.correctness, score)
+
+      const ownAssessmentResponse = await fetch(`${baseUrl}/api/quality-assessment`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      assert.equal(ownAssessmentResponse.status, 200)
+      assert.equal((await ownAssessmentResponse.json()).assessment.scores.correctness, score)
+    }
+
+    const aggregateResponse = await fetch(`${baseUrl}/api/admin/quality-assessments`, {
+      headers: { Authorization: `Bearer ${adminToken}` },
+    })
+    assert.equal(aggregateResponse.status, 200)
+    const { summary } = await aggregateResponse.json()
+    assert.equal(summary.responseCount, 3)
+    assert.equal(summary.totalRatings, 3)
+    assert.equal(summary.average, 3)
+    assert.equal(summary.factors.correctness.average, 3)
+    assert.equal(summary.factors.correctness.ratedCount, 3)
+    assert.equal(JSON.stringify(summary).includes(staff.email), false)
+    assert.equal(JSON.stringify(summary).includes('private browser note'), false)
+
+    const forbiddenSummaryResponse = await fetch(`${baseUrl}/api/admin/quality-assessments`, {
+      headers: { Authorization: `Bearer ${residentToken}` },
+    })
+    assert.equal(forbiddenSummaryResponse.status, 403)
+
+    const storedAssessments = await jsonDb.listQualityAssessments()
+    assert.equal(storedAssessments.length, 3)
+    assert.equal(JSON.stringify(storedAssessments).includes('private browser note'), false)
+  } finally {
+    await new Promise((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()))
+    })
+  }
+})
+
+test('captain photo upload links require an administrator and bounded object storage', async () => {
+  const { server, baseUrl } = await createTestServer()
+
+  try {
+    const login = async (identifier, password) => {
+      const response = await fetch(`${baseUrl}/api/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ identifier, password }),
+      })
+      assert.equal(response.status, 200)
+      return (await response.json()).token
+    }
+    const [adminToken, residentToken] = await Promise.all([
+      login('admin@barangay.gov.ph', 'AdminPass123'),
+      login('maria.delacruz@email.com', 'ResidentPass123!'),
+    ])
+    const endpoint = `${baseUrl}/api/admin/captain-photo/upload-url`
+    assert.equal((await fetch(endpoint, { method: 'POST' })).status, 401)
+    if (!isCaptainPhotoStorageConfigured()) {
+      const photoResponse = await fetch(`${baseUrl}/api/captain-photo`)
+      assert.equal(photoResponse.status, 404)
+      assert.equal(photoResponse.headers.get('cross-origin-resource-policy'), 'cross-origin')
+    }
+
+    const residentResponse = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${residentToken}` },
+      body: JSON.stringify({ contentType: 'image/jpeg' }),
+    })
+    assert.equal(residentResponse.status, 403)
+
+    const adminResponse = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${adminToken}` },
+      body: JSON.stringify({ contentType: 'image/svg+xml' }),
+    })
+    assert.equal(adminResponse.status, 400)
+
+    if (isCaptainPhotoStorageConfigured()) {
+      const uploadResponse = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${adminToken}` },
+        body: JSON.stringify({ contentType: 'image/webp' }),
+      })
+      assert.equal(uploadResponse.status, 200)
+      const upload = await uploadResponse.json()
+      assert.ok(upload.url)
+      assert.match(upload.key, /^official\/captain-portrait\/pending\/[0-9a-f-]{36}$/i)
+      assert.ok(upload.fields.Policy)
+    } else {
+      const unavailableResponse = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${adminToken}` },
+        body: JSON.stringify({ contentType: 'image/webp' }),
+      })
+      assert.equal(unavailableResponse.status, 503)
+    }
   } finally {
     await new Promise((resolve, reject) => {
       server.close((error) => (error ? reject(error) : resolve()))
