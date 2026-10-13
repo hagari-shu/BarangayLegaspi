@@ -3154,8 +3154,8 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
                         <input type="email" value={staffForm.email} onChange={(event) => setStaffForm((prev) => ({ ...prev, email: event.target.value }))} placeholder="name@barangay.gov.ph" />
                       </div>
                       <div className="input-block">
-                        <label>{t.mobile}</label>
-                        <input type="text" value={staffForm.mobile} onChange={(event) => setStaffForm((prev) => ({ ...prev, mobile: event.target.value }))} placeholder="09XXXXXXXXX" />
+                        <label htmlFor="staff-member-mobile">{t.mobileNumberLabel}</label>
+                        <input id="staff-member-mobile" type="tel" inputMode="tel" value={staffForm.mobile} onChange={(event) => setStaffForm((prev) => ({ ...prev, mobile: event.target.value }))} placeholder="09XXXXXXXXX" />
                       </div>
                       <PasswordField id="staff-initial-password" label={t.initialPassword} value={staffForm.password} onChange={(event) => setStaffForm((prev) => ({ ...prev, password: event.target.value }))} placeholder={t.staffPasswordPlaceholder} helpText={`${passwordRequirements}.`} />
                     </div>
@@ -4166,7 +4166,7 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
                             <input id="admin-staff-email" type="email" value={staffForm.email} onChange={(event) => setStaffForm((current) => ({ ...current, email: event.target.value }))} required />
                           </div>
                           <div className="input-block">
-                            <label htmlFor="admin-staff-mobile">{t.mobile}</label>
+                            <label htmlFor="admin-staff-mobile">{t.mobileNumberLabel}</label>
                             <input id="admin-staff-mobile" type="tel" inputMode="tel" value={staffForm.mobile} onChange={(event) => setStaffForm((current) => ({ ...current, mobile: event.target.value }))} placeholder="09XXXXXXXXX" required />
                           </div>
                           <PasswordField id="admin-staff-initial-password" label={t.staffInitialPassword} value={staffForm.password} onChange={(event) => setStaffForm((current) => ({ ...current, password: event.target.value }))} placeholder={t.staffPasswordPlaceholder} helpText={`${passwordRequirements}.`} />
@@ -4215,7 +4215,7 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
                               <th>{t.name}</th>
                               <th>{t.positionLabel}</th>
                               <th>{t.email}</th>
-                              <th>{t.mobile}</th>
+                              <th>{t.mobileNumberLabel}</th>
                               <th>{t.status}</th>
                             </tr>
                           </thead>

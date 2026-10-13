@@ -336,5 +336,6 @@ test('staff account creation labels are available in both supported languages', 
     assert.ok(locale.staffInitialPassword)
     assert.ok(locale.staffCreatedNotice)
     assert.ok(locale.staffCreateFailed)
+    assert.ok(locale.mobileNumberLabel)
   }
 })
