@@ -4054,6 +4054,30 @@ textarea:focus {
   }
 }
 
+@media (min-width: 761px) and (max-width: 980px) {
+  .dashboard-topbar.resident-topbar {
+    flex-wrap: wrap;
+    gap: 8px 16px;
+  }
+
+  .dashboard-topbar.resident-topbar .brand-wrap {
+    flex: 1 1 100%;
+  }
+
+  .dashboard-topbar.resident-topbar .topbar-actions {
+    width: 100%;
+    min-width: 0;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 8px;
+  }
+
+  .dashboard-topbar.resident-topbar .search-box {
+    flex: 1 1 240px;
+    min-width: 0;
+  }
+}
+
 @media (max-width: 760px) {
   body {
     display: block;

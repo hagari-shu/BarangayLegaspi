@@ -1692,6 +1692,14 @@ function RequestsPage({ requests, onSubmit, onRequestUpdated, onLogout, language
 
   const recentRequests = [...(requests || [])].slice(0, 3)
 
+  const formatRequestDate = (date) => {
+    if (!date) return ''
+    const parsedDate = new Date(date)
+    return Number.isNaN(parsedDate.getTime())
+      ? date
+      : parsedDate.toLocaleDateString(language === 'fil' ? 'fil-PH' : 'en-PH')
+  }
+
   const getRequestStatusMessage = (status) => {
     if (status === 'Approved') return t.requestStatusApprovedMessage
     if (status === 'Rejected') return t.requestStatusRejectedMessage
@@ -1712,7 +1720,7 @@ function RequestsPage({ requests, onSubmit, onRequestUpdated, onLogout, language
     const cleanedNotes = sanitizeText(form.notes)
 
     if (!cleanedPurpose) {
-      alert('Please enter the purpose of your request.')
+      alert(t.requestPurposeRequired)
       return
     }
 
@@ -1851,14 +1859,14 @@ function RequestsPage({ requests, onSubmit, onRequestUpdated, onLogout, language
             <Link to="/dashboard" className="secondary-btn small">{t.backToDashboard}</Link>
           </div>
 
-          {submitted && <div className="success-banner" role="status">Request submitted successfully. Barangay staff will review it soon.</div>}
+          {submitted && <div className="success-banner" role="status">{t.requestSubmittedSuccess}</div>}
           {requestModalOpen && (
             <WorkflowModal title={t.requestService} onClose={() => setRequestModalOpen(false)} wide>
               <form className="request-form workflow-modal-form" onSubmit={handleSubmit}>
                 <div className="form-grid two-col">
                   <div className="input-block">
-                    <label>{t.requestType}</label>
-                    <select name="type" value={form.type} onChange={handleChange}>
+                    <label htmlFor="request-type">{t.requestType}</label>
+                    <select id="request-type" name="type" value={form.type} onChange={handleChange}>
                       {requestTypes.map((type) => <option key={type}>{type}</option>)}
                     </select>
                   </div>
@@ -1870,16 +1878,16 @@ function RequestsPage({ requests, onSubmit, onRequestUpdated, onLogout, language
                     </select>
                   </div>
                   <div className="input-block">
-                    <label>{t.purpose}</label>
-                    <input type="text" name="purpose" value={form.purpose} onChange={handleChange} placeholder="e.g. school requirement" />
+                    <label htmlFor="request-purpose">{t.purpose}</label>
+                    <input id="request-purpose" type="text" name="purpose" value={form.purpose} onChange={handleChange} placeholder={t.requestPurposePlaceholder} />
                   </div>
                   <div className="input-block full-width">
                     <label htmlFor="delivery-note">{t.deliveryNoteLabel}</label>
                     <input id="delivery-note" type="text" name="deliveryNote" value={form.deliveryNote} onChange={handleChange} maxLength={500} placeholder={t.deliveryNoteLabel} />
                   </div>
                   <div className="input-block full-width">
-                    <label>{t.notes}</label>
-                    <textarea name="notes" rows="5" value={form.notes} onChange={handleChange} placeholder="Add details for the barangay staff"></textarea>
+                    <label htmlFor="request-notes">{t.notes}</label>
+                    <textarea id="request-notes" name="notes" rows="5" value={form.notes} onChange={handleChange} placeholder={t.requestNotesPlaceholder}></textarea>
                   </div>
                 </div>
                 <div className="modal-actions">
@@ -1945,7 +1953,7 @@ function RequestsPage({ requests, onSubmit, onRequestUpdated, onLogout, language
                   </form>
                 </div>
               )
-            }) : <div className="empty-state">Your recent requests will appear here after submission.</div>}
+            }) : <div className="empty-state">{t.noRecentRequests}</div>}
           </div>
 
           <div className="request-table-wrap">
@@ -1955,7 +1963,7 @@ function RequestsPage({ requests, onSubmit, onRequestUpdated, onLogout, language
                 <tr>
                   <th>{t.requestType}</th>
                   <th>{t.purpose}</th>
-                  <th>Status</th>
+                  <th>{t.status}</th>
                   <th>{t.deliveryMethodLabel}</th>
                   <th>{t.when}</th>
                   <th>{t.requestStatusHistory}</th>
@@ -1968,7 +1976,7 @@ function RequestsPage({ requests, onSubmit, onRequestUpdated, onLogout, language
                     <td>{item.purpose}</td>
                     <td><span className={'status-badge ' + (item.status || '').toLowerCase().replace(/\s+/g, '-')}>{getRequestStatusLabel(item.status, t)}</span></td>
                     <td>{item.deliveryMethod === 'physical' ? t.physicalCopy : t.onlineCopy}{item.deliveryNote && <small className="request-staff-note">{item.deliveryNote}</small>}</td>
-                    <td>{item.date}</td>
+                    <td>{formatRequestDate(item.date)}</td>
                     <td><details className="request-history-details"><summary>{t.requestStatusHistory}</summary><RequestHistory history={item.statusHistory} t={t} /></details></td>
                   </tr>
                 ))}

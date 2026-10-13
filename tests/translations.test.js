@@ -50,7 +50,7 @@ test('Filipino resident, staff, and admin dashboard copy is localized', () => {
   assert.equal(fil.noRequestsMatchFilters, 'Walang kahilingang tumutugma sa mga piniling filter.')
   assert.equal(fil.staffNoteFor, 'Tala ng kawani para sa {service}')
   assert.ok(!translations.en.requestStatusApprovedMessage.toLowerCase().includes('completed'))
-  assert.ok(translations.en.requestStatusApprovedMessage.includes('released'))
+  assert.match(translations.en.requestStatusApprovedMessage, /release is not tracked/i)
   assert.ok(!fil.requestStatusApprovedMessage.toLowerCase().includes('natapos'))
   assert.equal(fil.residentManagement, 'Pamamahala sa Resident')
   assert.equal(fil.noEmergencyReports, 'Walang naitalang ulat sa emergency.')
@@ -126,6 +126,29 @@ test('staff request dashboard labels are localized and distinguish approval from
 
   assert.notEqual(translations.en.approved, translations.en.completed)
   assert.notEqual(translations.fil.approved, translations.fil.completed)
+})
+
+test('resident request status messages distinguish approval from document release in both locales', () => {
+  for (const locale of [translations.en, translations.fil]) {
+    for (const key of [
+      'requestStatusApprovedMessage',
+      'requestStatusRejectedMessage',
+      'requestStatusNeedsInformationMessage',
+      'requestStatusInReviewMessage',
+      'requestStatusPendingMessage',
+      'requestSubmittedSuccess',
+      'requestPurposeRequired',
+      'requestPurposePlaceholder',
+      'requestNotesPlaceholder',
+      'noRecentRequests',
+    ]) {
+      assert.equal(typeof locale[key], 'string')
+      assert.ok(locale[key].length > 0)
+    }
+  }
+
+  assert.match(translations.en.requestStatusApprovedMessage, /release is not tracked/i)
+  assert.match(translations.fil.requestStatusApprovedMessage, /Hindi sinusubaybayan/i)
 })
 
 test('homepage header actions are localized', () => {
