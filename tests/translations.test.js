@@ -67,6 +67,7 @@ test('system health and improvement labels are localized in both supported langu
       'recommendedImprovements',
       'systemStorageRecommendation',
       'systemMonitoringRecommendation',
+      'systemNoStaffRecommendation',
     ]) {
       assert.equal(typeof locale[key], 'string')
       assert.ok(locale[key].length > 0)
@@ -75,6 +76,10 @@ test('system health and improvement labels are localized in both supported langu
 
   assert.match(translations.en.systemRequestsRecommendation, /\{count\}/)
   assert.match(translations.fil.systemRequestsRecommendation, /\{count\}/)
+  assert.match(translations.en.systemMonitoringRecommendation, /does not verify backups/i)
+  assert.match(translations.fil.systemMonitoringRecommendation, /Hindi sinusuri.*backup/i)
+  assert.equal(translations.en.servicesLabel, 'Service requests')
+  assert.equal(translations.fil.servicesLabel, 'Mga Kahilingan sa Serbisyo')
 })
 
 test('staff request dashboard labels are localized and distinguish approval from release', () => {

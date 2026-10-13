@@ -4557,6 +4557,7 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
                 <div className="system-improvements">
                   <h4>{t.recommendedImprovements}</h4>
                   <ul>
+                    {staffCount === 0 && <li>{t.systemNoStaffRecommendation}</li>}
                     {apiHealth.status === 'error' && <li>{t.systemCheckApiRecommendation}</li>}
                     {apiHealth.status === 'limited' && <li>{t.systemRateLimitRecommendation}</li>}
                     {apiHealth.storage === 'json-fallback' && <li>{t.systemStorageRecommendation}</li>}

@@ -63,6 +63,8 @@ Enable GitHub Actions failure notifications in your GitHub account or repository
 
 These checks cover uptime and public read paths; they do not replace authenticated workflow tests, application-log review, or verified database backups.
 
+The admin portal health card checks API availability and, for PostgreSQL deployments, database connectivity. It does not inspect backup schedules, alert delivery, restoreability, or staff coverage. Verify automated database backups and perform a restore test separately; add authorized staff accounts in Admin → Access only when the barangay has assigned those responsibilities.
+
 ### Staff request dashboard metrics
 
 The staff request dashboard reads request totals from the authenticated staff dashboard API. Pending review counts only `Pending`; in-processing counts only `In Review`. Needs-information requests remain a separate attention category. The request table is filtered, sorted, and paginated by the API, with date filters interpreted in `Asia/Manila`.
