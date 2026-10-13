@@ -22,13 +22,31 @@ async function writeJsonFile(data) {
   }
 }
 
+function stripPlaintextUserPasswords(data) {
+  let changed = false
+  const users = Array.isArray(data.users) ? data.users.map((user) => {
+    if (!user || typeof user !== 'object' || Array.isArray(user) || !Object.prototype.hasOwnProperty.call(user, 'password')) {
+      return user
+    }
+
+    changed = true
+    const safeUser = { ...user }
+    delete safeUser.password
+    return safeUser
+  }) : data.users
+
+  return { data: changed ? { ...data, users } : data, changed }
+}
+
 export async function readDb() {
   try {
     const raw = await fs.readFile(DB_PATH, 'utf8')
-    return JSON.parse(raw)
+    const { data, changed } = stripPlaintextUserPasswords(JSON.parse(raw))
+    if (changed) await writeJsonFile(data)
+    return data
   } catch (error) {
     if (error.code === 'ENOENT') {
-      const fallbackDb = { users: [], requests: [], announcements: [], reports: [], approvals: [], auditLogs: [] }
+      const fallbackDb = { users: [], requests: [], announcements: [], reports: [], approvals: [], auditLogs: [], qualityAssessments: [] }
       await writeJsonFile(fallbackDb)
       return fallbackDb
     }
@@ -37,8 +55,28 @@ export async function readDb() {
   }
 }
 
+export async function getQualityAssessment(userId) {
+  const db = await readDb()
+  return (db.qualityAssessments || []).find((assessment) => assessment.userId === userId) || null
+}
+
+export async function saveQualityAssessment(assessment) {
+  const db = await readDb()
+  db.qualityAssessments = db.qualityAssessments || []
+  const index = db.qualityAssessments.findIndex((item) => item.userId === assessment.userId)
+  if (index === -1) db.qualityAssessments.push(assessment)
+  else db.qualityAssessments[index] = assessment
+  await writeDb(db)
+  return assessment
+}
+
+export async function listQualityAssessments() {
+  const db = await readDb()
+  return db.qualityAssessments || []
+}
+
 export async function writeDb(data) {
-  await writeJsonFile(data)
+  await writeJsonFile(stripPlaintextUserPasswords(data).data)
 }
 
 export async function findUserByIdentifier(identifier) {
@@ -88,6 +126,7 @@ export async function deleteUser(userId) {
   if (!user) return null
 
   db.users = db.users.filter((item) => item.id !== userId)
+  db.qualityAssessments = (db.qualityAssessments || []).filter((item) => item.userId !== userId)
   await writeDb(db)
   return user
 }
@@ -103,6 +142,131 @@ export async function listAllRequests() {
     ...request,
     userId: request.userId,
   }))
+}
+
+export async function listReports() {
+  const db = await readDb()
+  return db.reports || []
+}
+
+export async function createReport(report) {
+  const db = await readDb()
+  db.reports = db.reports || []
+  db.reports.push(report)
+  await writeDb(db)
+  return report
+}
+
+const archiveDirectory = path.join(dbDir, 'archives')
+
+export async function createArchive(name, category, contents) {
+  await fs.mkdir(archiveDirectory, { recursive: true })
+  await fs.writeFile(path.join(archiveDirectory, name), JSON.stringify(contents, null, 2), 'utf8')
+  return { name, category }
+}
+
+export async function listArchives() {
+  try {
+    const files = await fs.readdir(archiveDirectory)
+    const list = await Promise.all(files.map(async (name) => {
+      const stat = await fs.stat(path.join(archiveDirectory, name))
+      return { name, size: stat.size, mtime: stat.mtime.toISOString() }
+    }))
+    return list.sort((left, right) => right.mtime.localeCompare(left.mtime))
+  } catch (error) {
+    if (error.code === 'ENOENT') return []
+    throw error
+  }
+}
+
+export async function getArchive(name) {
+  try {
+    return JSON.parse(await fs.readFile(path.join(archiveDirectory, name), 'utf8'))
+  } catch (error) {
+    if (error.code === 'ENOENT') return null
+    throw error
+  }
+}
+
+export async function deleteArchive(name) {
+  try {
+    await fs.unlink(path.join(archiveDirectory, name))
+    return { name }
+  } catch (error) {
+    if (error.code === 'ENOENT') return null
+    throw error
+  }
+}
+
+export async function listStaffRequestDashboard({
+  search = '',
+  status = '',
+  type = '',
+  zone = '',
+  from = '',
+  to = '',
+  sort = 'date',
+  direction = 'desc',
+  page = 1,
+  pageSize = 10,
+} = {}) {
+  const db = await readDb()
+  const usersById = new Map((db.users || []).map((user) => [user.id, user]))
+  const requests = (db.requests || []).map((request) => {
+    const user = usersById.get(request.userId || request.user_id) || {}
+    return {
+      ...request,
+      first_name: request.first_name || request.firstName || user.firstName || user.first_name || '',
+      last_name: request.last_name || request.lastName || user.lastName || user.last_name || '',
+      zone: request.zone ?? request.zoneNumber ?? user.zone ?? user.zone_number ?? '',
+    }
+  })
+  const fromTime = from ? Date.parse(`${from}T00:00:00+08:00`) : null
+  const toTime = to ? Date.parse(`${to}T00:00:00+08:00`) + 24 * 60 * 60 * 1000 : null
+  const needle = search.toLowerCase()
+  const filtered = requests.filter((request) => {
+    const createdAt = new Date(request.date || request.createdAt || request.created_at || 0).getTime()
+    const searchable = [request.id, request.type, request.purpose, request.first_name, request.last_name]
+      .join(' ')
+      .toLowerCase()
+    return (!needle || searchable.includes(needle))
+      && (!status || (status === 'active' ? !['Approved', 'Rejected'].includes(request.status) : request.status === status))
+      && (!type || request.type === type)
+      && (!zone || String(request.zone) === zone)
+      && (fromTime === null || (Number.isFinite(createdAt) && createdAt >= fromTime))
+      && (toTime === null || (Number.isFinite(createdAt) && createdAt < toTime))
+  })
+  const statusCounts = requests.reduce((counts, request) => {
+    counts[request.status] = (counts[request.status] || 0) + 1
+    return counts
+  }, {})
+  const sortValue = (request) => sort === 'status'
+    ? String(request.status || '')
+    : new Date(request.date || request.createdAt || request.created_at || 0).getTime()
+  filtered.sort((left, right) => {
+    const leftValue = sortValue(left)
+    const rightValue = sortValue(right)
+    const order = leftValue < rightValue ? -1 : leftValue > rightValue ? 1 : 0
+    return direction === 'asc' ? order : -order
+  })
+  const offset = (page - 1) * pageSize
+  return {
+    requests: filtered.slice(offset, offset + pageSize),
+    total: filtered.length,
+    page,
+    pageSize,
+    documentTypes: [...new Set(requests.map((request) => request.type).filter(Boolean))].sort((left, right) => left.localeCompare(right)),
+    summary: {
+      total: requests.length,
+      pending: statusCounts.Pending || 0,
+      inReview: statusCounts['In Review'] || 0,
+      needsInformation: statusCounts['Needs Information'] || 0,
+      approved: statusCounts.Approved || 0,
+      rejected: statusCounts.Rejected || 0,
+      deadlineTracking: false,
+      releaseTracking: false,
+    },
+  }
 }
 
 export async function listAllUsers() {

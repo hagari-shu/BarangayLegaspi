@@ -19,6 +19,9 @@ Route::middleware('auth.api')->group(function () {
     Route::post('/change-password', [ApiController::class, 'changePassword']);
     Route::get('/profile', [ApiController::class, 'profile']);
     Route::patch('/profile', [ApiController::class, 'updateProfile']);
+    Route::get('/quality-assessment', [ApiController::class, 'qualityAssessment'])->middleware('role:resident,staff,admin');
+    Route::put('/quality-assessment', [ApiController::class, 'saveQualityAssessment'])->middleware('role:resident,staff,admin');
+    Route::get('/admin/quality-assessments', [ApiController::class, 'qualityAssessmentSummary'])->middleware('role:admin');
     Route::get('/dashboard', [ApiController::class, 'dashboard']);
     Route::get('/payments', [ApiController::class, 'payments']);
     Route::patch('/payments/{id}/status', [ApiController::class, 'updatePayment'])->middleware('role:admin');

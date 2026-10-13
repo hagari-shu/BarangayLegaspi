@@ -3,6 +3,10 @@ const topics = {
     { response: 'mauRegisterReply', keywords: ['register', 'create an account', 'create account', 'sign up', 'new account'] },
     { response: 'mauLoginReply', keywords: ['how do i log in', 'how do i login', 'sign in', 'log in', 'login'] },
     {
+      response: 'mauTimelineReply',
+      keywords: ['when will it be ready', 'when can i pick up', 'pick up my request', 'how long will', 'processing time', 'completion date', 'due date', 'deadline', 'release date', 'overdue request'],
+    },
+    {
       response: 'mauStatusReply',
       keywords: [
         'request status',
@@ -28,6 +32,10 @@ const topics = {
       keywords: ['announcement', 'announcements', 'barangay news', 'barangay update', 'barangay updates', 'alerts'],
     },
     {
+      response: 'mauPaymentsReply',
+      keywords: ['payment', 'payments', 'pay online', 'online payment', 'billing', 'invoice', 'service fee', 'receipt'],
+    },
+    {
       response: 'mauReply',
       keywords: [
         'service request',
@@ -47,6 +55,10 @@ const topics = {
   fil: [
     { response: 'mauRegisterReply', keywords: ['magrehistro', 'magparehistro', 'mag register', 'gumawa ng account', 'gumawa ng resident account', 'mag sign up', 'mag signup'] },
     { response: 'mauLoginReply', keywords: ['paano mag sign in', 'paano mag log in', 'mag sign in', 'mag log in', 'mag login', 'mag-login'] },
+    {
+      response: 'mauTimelineReply',
+      keywords: ['kailan magiging handa', 'kailan ko makukuha', 'gaano katagal', 'tagal ng proseso', 'takdang petsa', 'deadline', 'petsa ng release', 'lampas na sa takdang oras'],
+    },
     {
       response: 'mauStatusReply',
       keywords: [
@@ -95,6 +107,10 @@ const topics = {
     {
       response: 'mauAnnouncementReply',
       keywords: ['anunsyo', 'anunsyo ng barangay', 'balita ng barangay', 'update ng barangay', 'mga update ng barangay', 'abiso'],
+    },
+    {
+      response: 'mauPaymentsReply',
+      keywords: ['bayad', 'magbayad', 'pagbabayad', 'online na bayad', 'singil', 'invoice', 'resibo'],
     },
     {
       response: 'mauReply',
@@ -189,6 +205,10 @@ export function getMauQuickOptions(language, userRole, isAuthenticated, isHomepa
 export function getMauReply(input, language, translations, userRole = 'resident', isAuthenticated = true, isHomepage = false, residencyCheck = 'confirmed') {
   const normalizedInput = normalize(input)
   const locale = topics[language] || topics.en
+
+  const asksAboutPrivilegedLogin = /\b(admin|administrator|administrador|staff|employee|personnel|kawani)\b/.test(normalizedInput)
+    && /\b(login|log in|sign in|access|account|portal|mag login|mag log in|mag sign in|makapasok)\b/.test(normalizedInput)
+  if (asksAboutPrivilegedLogin) return translations.mauPrivilegedLoginReply
 
   if (!isAuthenticated && isHomepage && residencyCheck === 'asked') {
     const answer = residentAnswer(input)

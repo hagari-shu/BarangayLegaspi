@@ -7,9 +7,21 @@ import { comparePassword, hashPassword, signToken, verifyToken } from './auth.js
 import { createTotpSecret, createTotpUri, decryptTotpSecret, encryptTotpSecret, verifyTotp } from './mfa.js'
 import * as jsonDb from './db.js'
 import * as pgDb from './db-postgres.js'
+import {
+  CAPTAIN_PHOTO_CONTENT_TYPES,
+  CAPTAIN_PHOTO_KEY,
+  createCaptainPhotoUpload,
+  deleteCaptainPhoto,
+  finalizeCaptainPhotoUpload,
+  getCaptainPhotoUrl,
+  isCaptainPhotoStorageConfigured,
+} from './captain-photo-storage.js'
+import {
+  createEmptyQualityAssessment,
+  parseQualityScores,
+  summarizeQualityResponses,
+} from '../src/mccall-quality-model.js'
 import { ADMIN_SEED, CORS_ORIGINS, IS_PRODUCTION, PORT, SHOULD_SKIP_SEED } from './config.js'
-import fs from 'node:fs'
-import path from 'node:path'
 
 let store = process.env.DATABASE_URL ? pgDb : jsonDb
 
@@ -68,25 +80,16 @@ const serviceCatalog = [
   { icon: '🚨', title: 'Emergency Help', subtitle: 'Call for immediate support', tone: 'red' },
 ]
 
-const announcements = [
-  { tag: 'green', title: 'Free vaccination schedule', date: 'June 18 • 8:00 AM', content: 'Vaccination drive for all residents. Come to the barangay hall.', socialChannels: ['facebook', 'instagram'] },
-  { tag: 'amber', title: 'Senior citizen ID renewal', date: 'June 20 • 9:00 AM', content: 'Senior citizens are encouraged to renew their IDs.', socialChannels: ['facebook'] },
-  { tag: 'blue', title: 'Clean-up drive reminder', date: 'June 25 • 7:00 AM', content: 'Community clean-up drive scheduled for next Saturday.', socialChannels: ['facebook', 'messenger'] },
-  { tag: 'red', title: 'Emergency hotline now active', date: 'August 29 • 3:30 PM', content: 'Emergency hotline is available 24/7 for all barangay residents.', socialChannels: ['facebook', 'instagram', 'x'] },
-]
-
-const residentEvents = [
-  { title: 'Barangay health drive', date: '2026-09-05', location: 'Covered Court' },
-  { title: 'Tree planting program', date: '2026-09-12', location: 'Barangay Park' },
-  { title: 'Senior citizen support session', date: '2026-09-18', location: 'Barangay Hall' },
-]
-
 const reminderStore = new Map()
 
 export async function seedDemoResident() {
   if (process.env.DATABASE_URL) {
     await pgDb.initDatabase()
     return
+  }
+
+  if (IS_PRODUCTION) {
+    throw new Error('JSON demo accounts cannot be seeded in production.')
   }
 
   if (SHOULD_SKIP_SEED) {
@@ -162,22 +165,22 @@ export function createApp() {
   app.set('trust proxy', 1)
   app.disable('x-powered-by')
   app.use(helmet({ contentSecurityPolicy: false }))
+  const allowedOrigins = CORS_ORIGINS
+  app.use(cors({
+    origin: (origin, callback) => {
+      const allowLocalNetwork = !IS_PRODUCTION && /^https?:\/\/192\.168\.\d+\.\d+:\d+$/.test(origin || '')
+      if (!origin || allowedOrigins.includes(origin) || allowLocalNetwork) {
+        return callback(null, true)
+      }
+      return callback(new Error('Origin not allowed'))
+    },
+  }))
   app.use('/api', rateLimit({
     windowMs: 15 * 60 * 1000,
     max: 300,
     standardHeaders: true,
     legacyHeaders: false,
     message: { message: 'Too many requests, please try again later.' },
-  }))
-
-  const allowedOrigins = CORS_ORIGINS
-  app.use(cors({
-    origin: (origin, callback) => {
-      if (!origin || allowedOrigins.includes(origin) || /^https?:\/\/192\.168\.\d+\.\d+:\d+$/.test(origin)) {
-        return callback(null, true)
-      }
-      return callback(new Error('Origin not allowed'))
-    },
   }))
   app.use(express.json({ limit: '100kb' }))
   app.use(express.urlencoded({ extended: true, limit: '100kb' }))
@@ -186,7 +189,8 @@ export function createApp() {
     const payload = verifyToken(token)
     if (payload.purpose === 'mfa_pending') return null
     const user = await store.findUserById?.(payload.sub)
-    return user ? { payload, user } : null
+    if (!user || ['Suspended', 'Disabled'].includes(user.status)) return null
+    return { payload, user }
   }
 
   const hasCurrentRole = async (token, roles) => {
@@ -212,17 +216,9 @@ export function createApp() {
   const mfaChallenges = new Map()
 
   const ensureSeededAccounts = async () => {
-    if (process.env.DATABASE_URL) {
-      await pgDb.initDatabase()
-      return
-    }
-
-    await seedDemoResident()
+    if (process.env.DATABASE_URL) return
+    if (!SHOULD_SKIP_SEED) await seedDemoResident()
   }
-
-  void ensureSeededAccounts().catch((error) => {
-    console.error('seed initialization failed', error)
-  })
 
   const sendDeliveryWebhook = async ({ event, recipient, token, expiresAt, user, title, message, metadata = {} }) => {
     const deliveryUrl = process.env.RESET_DELIVERY_URL || process.env.NOTIFICATION_WEBHOOK_URL
@@ -314,6 +310,85 @@ export function createApp() {
     } catch (error) {
       console.error('health check failed', error)
       res.status(503).json({ ok: false, message: 'Database unavailable.' })
+    }
+  })
+
+  app.get('/api/captain-photo', async (_req, res) => {
+    res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin')
+    res.setHeader('Cache-Control', 'no-store')
+    try {
+      const photoUrl = await getCaptainPhotoUrl()
+      if (!photoUrl) return res.status(404).end()
+      return res.redirect(302, photoUrl)
+    } catch (error) {
+      console.error('load captain photo failed', error)
+      return res.status(502).json({ message: 'Unable to load the captain photo.' })
+    }
+  })
+
+  app.post('/api/admin/captain-photo/upload-url', async (req, res) => {
+    const authHeader = req.headers.authorization || ''
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null
+    if (!token) return res.status(401).json({ message: 'Authentication required.' })
+
+    try {
+      if (!(await hasCurrentRole(token, ['admin']))) return res.status(403).json({ message: 'Admin access required.' })
+      if (!CAPTAIN_PHOTO_CONTENT_TYPES.includes(req.body?.contentType)) {
+        return res.status(400).json({ message: 'Choose a JPEG, PNG, or WebP image.' })
+      }
+      if (!isCaptainPhotoStorageConfigured()) return res.status(503).json({ message: 'Image storage is not configured.' })
+      const upload = await createCaptainPhotoUpload(req.body.contentType)
+      return res.json(upload)
+    } catch (error) {
+      console.error('create captain photo upload failed', error)
+      return res.status(502).json({ message: 'Unable to prepare the image upload.' })
+    }
+  })
+
+  app.post('/api/admin/captain-photo', async (req, res) => {
+    const authHeader = req.headers.authorization || ''
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null
+    if (!token) return res.status(401).json({ message: 'Authentication required.' })
+
+    try {
+      const actor = await getCurrentActor(token)
+      if (!actor || actor.user.role !== 'admin' || ['Suspended', 'Disabled'].includes(actor.user.status)) {
+        return res.status(403).json({ message: 'Admin access required.' })
+      }
+      if (!isCaptainPhotoStorageConfigured()) return res.status(503).json({ message: 'Image storage is not configured.' })
+      if (req.body?.key !== CAPTAIN_PHOTO_KEY) return res.status(400).json({ message: 'Invalid image upload.' })
+
+      await finalizeCaptainPhotoUpload(req.body.key)
+      await writeAudit(actor.user, 'captain-photo.updated', 'image', CAPTAIN_PHOTO_KEY)
+      return res.json({ ok: true })
+    } catch (error) {
+      if (error.message?.startsWith('Invalid captain photo upload')
+        || error.message?.startsWith('Upload must be')
+        || error.message?.startsWith('Uploaded file is not')) {
+        return res.status(400).json({ message: error.message })
+      }
+      console.error('verify captain photo upload failed', error)
+      return res.status(502).json({ message: 'Unable to verify the uploaded image.' })
+    }
+  })
+
+  app.delete('/api/admin/captain-photo', async (req, res) => {
+    const authHeader = req.headers.authorization || ''
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null
+    if (!token) return res.status(401).json({ message: 'Authentication required.' })
+
+    try {
+      const actor = await getCurrentActor(token)
+      if (!actor || actor.user.role !== 'admin' || ['Suspended', 'Disabled'].includes(actor.user.status)) {
+        return res.status(403).json({ message: 'Admin access required.' })
+      }
+      if (!isCaptainPhotoStorageConfigured()) return res.status(503).json({ message: 'Image storage is not configured.' })
+      await deleteCaptainPhoto(CAPTAIN_PHOTO_KEY)
+      await writeAudit(actor.user, 'captain-photo.deleted', 'image', CAPTAIN_PHOTO_KEY)
+      return res.json({ ok: true })
+    } catch (error) {
+      console.error('delete captain photo failed', error)
+      return res.status(502).json({ message: 'Unable to remove the captain photo.' })
     }
   })
 
@@ -428,6 +503,12 @@ export function createApp() {
 
       const normalizedRole = String(user.role || '').toLowerCase() || 'resident'
       const normalizedStatus = String(user.status || '').trim()
+      if (['Suspended', 'Disabled'].includes(normalizedStatus)) {
+        await writeAudit({ role: 'anonymous' }, 'auth.login.rejected_inactive_account', 'user', user.id, {
+          status: normalizedStatus,
+        })
+        return res.status(403).json({ message: 'Your account is disabled. Please contact the barangay office for assistance.' })
+      }
       const isApprovedUser = ['admin', 'staff'].includes(normalizedRole) || ['Administrator', 'On Duty', 'Active Resident'].includes(normalizedStatus)
 
       if (normalizedRole === 'resident' && !isApprovedUser) {
@@ -786,6 +867,80 @@ export function createApp() {
     }
   })
 
+  app.get('/api/quality-assessment', async (req, res) => {
+    const authHeader = req.headers.authorization || ''
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null
+    if (!token) return res.status(401).json({ message: 'Authentication required.' })
+
+    try {
+      const actor = await getCurrentActor(token)
+      if (!actor || !['resident', 'staff', 'admin'].includes(actor.user.role) || ['Suspended', 'Disabled'].includes(actor.user.status)) {
+        return res.status(403).json({ message: 'Access denied for this role.' })
+      }
+      const storedAssessment = await store.getQualityAssessment(actor.user.id)
+      const assessment = createEmptyQualityAssessment()
+      if (storedAssessment) {
+        assessment.scores = parseQualityScores(storedAssessment.scores)
+        assessment.updatedAt = storedAssessment.updatedAt
+          ? new Date(storedAssessment.updatedAt).toISOString()
+          : null
+      }
+      return res.json({ assessment: { scores: assessment.scores, updatedAt: assessment.updatedAt } })
+    } catch (error) {
+      console.error('load quality assessment failed', error)
+      return res.status(500).json({ message: 'Unable to load the quality assessment.' })
+    }
+  })
+
+  app.put('/api/quality-assessment', async (req, res) => {
+    const authHeader = req.headers.authorization || ''
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null
+    if (!token) return res.status(401).json({ message: 'Authentication required.' })
+
+    try {
+      const actor = await getCurrentActor(token)
+      if (!actor || !['resident', 'staff', 'admin'].includes(actor.user.role) || ['Suspended', 'Disabled'].includes(actor.user.status)) {
+        return res.status(403).json({ message: 'Access denied for this role.' })
+      }
+
+      let scores
+      try {
+        scores = parseQualityScores(req.body?.scores)
+      } catch (error) {
+        return res.status(400).json({ message: error.message })
+      }
+      const updatedAt = new Date().toISOString()
+      await store.saveQualityAssessment({
+        userId: actor.user.id,
+        role: actor.user.role,
+        scores,
+        updatedAt,
+      })
+      return res.json({ assessment: { scores, updatedAt } })
+    } catch (error) {
+      console.error('save quality assessment failed', error)
+      return res.status(500).json({ message: 'Unable to save the quality assessment.' })
+    }
+  })
+
+  app.get('/api/admin/quality-assessments', async (req, res) => {
+    const authHeader = req.headers.authorization || ''
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null
+    if (!token) return res.status(401).json({ message: 'Authentication required.' })
+
+    try {
+      const actor = await getCurrentActor(token)
+      if (!actor || actor.user.role !== 'admin' || ['Suspended', 'Disabled'].includes(actor.user.status)) {
+        return res.status(403).json({ message: 'Admin access required.' })
+      }
+      const responses = await store.listQualityAssessments()
+      return res.json({ summary: summarizeQualityResponses(responses) })
+    } catch (error) {
+      console.error('load quality assessment summary failed', error)
+      return res.status(500).json({ message: 'Unable to load quality assessment results.' })
+    }
+  })
+
   app.get('/api/dashboard', async (req, res) => {
     const authHeader = req.headers.authorization || ''
     const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null
@@ -795,30 +950,30 @@ export function createApp() {
     }
 
     try {
-      const payload = verifyToken(token)
-      const user = await store.findUserById(payload.sub)
-      if (!user) {
-        return res.status(401).json({ message: 'User not found.' })
-      }
+      const actor = await getCurrentActor(token)
+      if (!actor) return res.status(403).json({ message: 'Account access is disabled or authentication is incomplete.' })
+      const { user } = actor
 
       const requests = user.role === 'resident'
-        ? await store.listRequestsForUser(payload.sub)
+        ? await store.listRequestsForUser(user.id)
         : await store.listAllRequests?.() || []
+      const storedAnnouncements = await store.listAnnouncements?.() || []
 
       return res.json({
         services: serviceCatalog,
-        announcements,
-        events: residentEvents,
+        announcements: storedAnnouncements,
+        events: [],
         payments: [],
         summary: {
           totalRequests: requests.length,
           pending: requests.filter((item) => ['Pending', 'In Review', 'Needs Information'].includes(item.status)).length,
           activeCases: requests.filter((item) => ['Pending', 'In Review', 'Needs Information'].includes(item.status)).length,
-          nextEvent: residentEvents[0],
+          nextEvent: null,
         },
         user: sanitizeUserRecord(user),
       })
-    } catch {
+    } catch (error) {
+      console.error('dashboard load error', error)
       return res.status(401).json({ message: 'Invalid or expired token.' })
     }
   })
@@ -830,18 +985,10 @@ export function createApp() {
   app.get('/api/announcements', async (_req, res) => {
     try {
       const storedAnnouncements = await store.listAnnouncements?.() || []
-
-      if (storedAnnouncements.length === 0) {
-        for (const [index, item] of announcements.entries()) {
-          await store.saveAnnouncement?.({ id: randomUUID(), ...item, createdAt: new Date(Date.now() - index * 1000).toISOString() })
-        }
-        return res.json({ announcements: await store.listAnnouncements?.() || announcements })
-      }
-
       return res.json({ announcements: storedAnnouncements })
     } catch (error) {
       console.error('failed to load announcements', error)
-      return res.json({ announcements })
+      return res.status(503).json({ message: 'Unable to load announcements.' })
     }
   })
 
@@ -916,7 +1063,7 @@ export function createApp() {
   })
 
   app.get('/api/events', (_req, res) => {
-    return res.json({ events: residentEvents })
+    return res.json({ events: [] })
   })
 
   app.get('/api/payments', async (req, res) => {
@@ -1007,6 +1154,85 @@ export function createApp() {
     } catch {
       return res.status(401).json({ message: 'Invalid or expired token.' })
     }
+  })
+
+  app.get('/api/staff/dashboard-requests', async (req, res) => {
+    const authHeader = req.headers.authorization || ''
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null
+
+    if (!token) {
+      return res.status(401).json({ message: 'Authentication required.' })
+    }
+
+    let payload
+    try {
+      payload = verifyToken(token)
+    } catch {
+      return res.status(401).json({ message: 'Invalid or expired token.' })
+    }
+    if (payload.purpose === 'mfa_pending') {
+      return res.status(403).json({ message: 'Complete multi-factor authentication first.' })
+    }
+
+    let actor
+    try {
+      actor = await store.findUserById?.(payload.sub)
+    } catch (error) {
+      console.error('staff dashboard authorization lookup error', error)
+      return res.status(500).json({ message: 'Unable to verify staff access.' })
+    }
+    if (!actor || !['staff', 'admin'].includes(actor.role) || ['Suspended', 'Disabled'].includes(actor.status)) {
+      return res.status(403).json({ message: 'Staff access required.' })
+    }
+
+    const { search = '', status = 'active', type = '', zone = '', from = '', to = '', sort = 'date', direction = 'desc' } = req.query
+    const page = Number(req.query.page || 1)
+    const pageSize = Number(req.query.pageSize || 10)
+    const validDate = (value) => /^\d{4}-\d{2}-\d{2}$/.test(value)
+      && Number.isFinite(Date.parse(`${value}T00:00:00Z`))
+      && new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) === value
+
+    if (String(search).length > 120 || String(type).length > 100) {
+      return res.status(400).json({ message: 'Search text or document type is too long.' })
+    }
+    if (zone && !['1', '2', '3', '4', '5', '6', '7'].includes(String(zone))) {
+      return res.status(400).json({ message: 'Invalid request zone filter.' })
+    }
+    if (!['active', 'all', 'Pending', 'In Review', 'Needs Information', 'Approved', 'Rejected'].includes(String(status))) {
+      return res.status(400).json({ message: 'Invalid request status filter.' })
+    }
+    if (sort !== 'date' && sort !== 'status') {
+      return res.status(400).json({ message: 'Invalid request sort field.' })
+    }
+    if (direction !== 'asc' && direction !== 'desc') {
+      return res.status(400).json({ message: 'Invalid sort direction.' })
+    }
+    if ((from && !validDate(String(from))) || (to && !validDate(String(to))) || (from && to && from > to)) {
+      return res.status(400).json({ message: 'Invalid request date range.' })
+    }
+    if (!Number.isInteger(page) || page < 1 || page > 100000 || !Number.isInteger(pageSize) || pageSize < 1 || pageSize > 50) {
+      return res.status(400).json({ message: 'Invalid pagination values.' })
+    }
+
+    let result
+    try {
+      result = await store.listStaffRequestDashboard({
+        search: String(search).trim(),
+        status: status === 'all' ? '' : String(status),
+        type: String(type),
+        zone: String(zone),
+        from: String(from),
+        to: String(to),
+        sort,
+        direction,
+        page,
+        pageSize,
+      })
+    } catch (error) {
+      console.error('staff dashboard requests error', error)
+      return res.status(500).json({ message: 'Unable to load staff request dashboard.' })
+    }
+    return res.json(result)
   })
 
   app.get('/api/admin/users', async (req, res) => {
@@ -1298,23 +1524,15 @@ export function createApp() {
         return res.status(403).json({ message: 'Staff access required.' })
       }
 
-      const archivesDir = path.join(process.cwd(), 'server', 'data', 'archives')
-      try {
-        const files = await fs.promises.readdir(archivesDir)
-        const actor = await getCurrentActor(token)
-        const visibleFiles = actor?.user.role === 'admin' ? files : files.filter((file) => file.startsWith('queue-approvals-'))
-        const list = await Promise.all(visibleFiles.map(async (file) => {
-          const stat = await fs.promises.stat(path.join(archivesDir, file))
-          return { name: file, size: stat.size, mtime: stat.mtime.toISOString() }
-        }))
-        list.sort((a, b) => (b.mtime || '').localeCompare(a.mtime || ''))
-        return res.json({ archives: list })
-      } catch (e) {
-        return res.json({ archives: [] })
-      }
+      const actor = await getCurrentActor(token)
+      const archives = await store.listArchives?.() || []
+      const visibleArchives = actor?.user.role === 'admin'
+        ? archives
+        : archives.filter((archive) => archive.name.startsWith('queue-approvals-'))
+      return res.json({ archives: visibleArchives })
     } catch (e) {
       console.error('list staff archives error', e)
-      return res.status(401).json({ message: 'Invalid or expired token.' })
+      return res.status(500).json({ message: 'Unable to load staff archives.' })
     }
   })
 
@@ -1337,23 +1555,11 @@ export function createApp() {
         return res.status(403).json({ message: 'This archive is not available to staff.' })
       }
 
-      const archivesDir = path.join(process.cwd(), 'server', 'data', 'archives')
-      const filePath = path.join(archivesDir, name)
-      try {
-        const stat = await fs.promises.stat(filePath)
-        if (!stat.isFile()) return res.status(404).json({ message: 'File not found.' })
-      } catch (e) {
-        return res.status(404).json({ message: 'File not found.' })
-      }
-
+      const archive = await store.getArchive?.(name)
+      if (!archive) return res.status(404).json({ message: 'File not found.' })
       res.setHeader('Content-Type', 'application/json')
       res.setHeader('Content-Disposition', `attachment; filename="${name}"`)
-      const stream = fs.createReadStream(filePath)
-      stream.pipe(res)
-      stream.on('error', (err) => {
-        console.error('staff archive-file stream error', err)
-        try { res.status(500).end() } catch (err2) {}
-      })
+      return res.send(JSON.stringify(archive, null, 2))
     } catch (e) {
       console.error('staff archive-file error', e)
       return res.status(401).json({ message: 'Invalid or expired token.' })
@@ -1376,15 +1582,8 @@ export function createApp() {
         return res.status(400).json({ message: 'Invalid file name.' })
       }
 
-      const archivesDir = path.join(process.cwd(), 'server', 'data', 'archives')
-      const filePath = path.join(archivesDir, name)
-      try {
-        await fs.promises.access(filePath)
-      } catch (e) {
-        return res.status(404).json({ message: 'File not found.' })
-      }
-
-      await fs.promises.rm(filePath, { force: true })
+      const deleted = await store.deleteArchive?.(name)
+      if (!deleted) return res.status(404).json({ message: 'File not found.' })
       return res.json({ ok: true, deleted: name })
     } catch (e) {
       console.error('delete staff archive error', e)
@@ -1424,9 +1623,32 @@ export function createApp() {
       const nextZone = req.body?.zone === undefined ? (existingUser.zone ?? null) : Number(req.body.zone)
       const nextPosition = req.body?.position === undefined ? (existingUser.position ?? null) : sanitizeText(req.body.position)
       const nextAvailability = req.body?.availability === undefined ? (existingUser.availability ?? 'Available') : sanitizeText(req.body.availability)
-      const nextAddress = sanitizeText(req.body?.address || existingUser.address || '')
-      const nextHouseholdId = sanitizeText(req.body?.householdId || existingUser.householdId || existingUser.household_id || '') || null
+      const nextAddress = req.body?.address === undefined ? (existingUser.address || '') : sanitizeText(req.body.address)
+      const nextHouseholdId = req.body?.householdId === undefined
+        ? (existingUser.householdId || existingUser.household_id || null)
+        : sanitizeText(req.body.householdId) || null
       const nextFamilyMembers = req.body?.familyMembers === undefined ? (existingUser.familyMembers ?? existingUser.family_members ?? 4) : Number(req.body.familyMembers)
+      const storedHouseholdMembers = existingUser.householdMembers ?? existingUser.household_members
+      const currentHouseholdMembers = Array.isArray(storedHouseholdMembers) ? storedHouseholdMembers : []
+      const householdMembersInput = req.body?.householdMembers
+
+      if (householdMembersInput !== undefined && (!Array.isArray(householdMembersInput) || householdMembersInput.length > 100)) {
+        return res.status(400).json({ message: 'Household members must be a list of no more than 100 people.' })
+      }
+
+      const nextHouseholdMembers = householdMembersInput === undefined
+        ? currentHouseholdMembers
+        : householdMembersInput.map((member) => {
+          if (!member || typeof member !== 'object' || Array.isArray(member)) return null
+          const name = typeof member.name === 'string' ? sanitizeText(member.name) : ''
+          const relationship = typeof member.relationship === 'string' ? sanitizeText(member.relationship) : ''
+          if (!name || name.length > 100 || !relationship || relationship.length > 50) return null
+          return { name, relationship }
+        })
+
+      if (nextHouseholdMembers.some((member) => !member)) {
+        return res.status(400).json({ message: 'Each household member needs a name (up to 100 characters) and relationship (up to 50 characters).' })
+      }
 
       if (!nextFirstName || !nextLastName) {
         return res.status(400).json({ message: 'First name and last name are required.' })
@@ -1442,6 +1664,14 @@ export function createApp() {
 
       if (nextRole === 'resident' && (!Number.isInteger(nextZone) || nextZone < 1 || nextZone > 7)) {
         return res.status(400).json({ message: 'Resident zone must be a number from 1 to 7.' })
+      }
+
+      if (!Number.isInteger(nextFamilyMembers) || nextFamilyMembers < 1 || nextFamilyMembers > 100) {
+        return res.status(400).json({ message: 'Family members must be a whole number from 1 to 100.' })
+      }
+
+      if (nextHouseholdId && nextHouseholdId.length > 50) {
+        return res.status(400).json({ message: 'Household ID must not exceed 50 characters.' })
       }
 
       const duplicateEmail = nextEmail && await store.findUserByIdentifier(nextEmail)
@@ -1467,6 +1697,7 @@ export function createApp() {
         address: nextAddress,
         householdId: nextHouseholdId,
         familyMembers: nextFamilyMembers,
+        householdMembers: nextHouseholdMembers,
       })
 
       if (!updatedUser) {
@@ -1504,9 +1735,6 @@ export function createApp() {
       if (!(await hasCurrentRole(token, ['admin']))) return res.status(403).json({ message: 'Admin access required.' })
 
       const users = await store.listAllUsers?.() || []
-      const archivesDir = path.join(process.cwd(), 'server', 'data', 'archives')
-      await fs.promises.mkdir(archivesDir, { recursive: true })
-
       const zonedUsers = {}
       for (const user of users) {
         const zone = Number(user.zone ?? user.zone_number ?? 0)
@@ -1519,9 +1747,13 @@ export function createApp() {
       for (const [zoneKey, zoneUsers] of Object.entries(zonedUsers)) {
         const zone = Number(zoneKey)
         const filename = `zone-${zone}-users.json`
-        const filePath = path.join(archivesDir, filename)
-        await fs.promises.writeFile(filePath, JSON.stringify({ archivedAt: new Date().toISOString(), zone, total: zoneUsers.length, users: zoneUsers }, null, 2), 'utf8')
-        archiveList.push({ zone, filename, count: zoneUsers.length, filePath })
+        await store.createArchive?.(filename, 'zone-users', {
+          archivedAt: new Date().toISOString(),
+          zone,
+          total: zoneUsers.length,
+          users: zoneUsers,
+        })
+        archiveList.push({ zone, filename, count: zoneUsers.length })
       }
 
       return res.json({
@@ -1587,32 +1819,10 @@ export function createApp() {
         return res.status(403).json({ message: 'Admin access required.' })
       }
 
-      const db = await store.readDb?.()
-      const reports = db?.reports || [
-        {
-          id: 'RPT-001',
-          type: 'Emergency',
-          title: 'Fire Incident',
-          description: 'Minor house fire reported in Zone 3',
-          date: '2026-08-28 10:30 AM',
-          severity: 'High',
-          status: 'Resolved',
-          zone: 3,
-        },
-        {
-          id: 'RPT-002',
-          type: 'Health',
-          title: 'Medical Assistance Request',
-          description: 'Senior citizen assisted with first aid',
-          date: '2026-08-27 2:15 PM',
-          severity: 'Medium',
-          status: 'Completed',
-          zone: 1,
-        },
-      ]
-
+      const reports = await store.listReports?.() || []
       return res.json({ reports })
-    } catch {
+    } catch (error) {
+      console.error('failed to load reports', error)
       return res.status(401).json({ message: 'Invalid or expired token.' })
     }
   })
@@ -1652,12 +1862,7 @@ export function createApp() {
         date: new Date().toISOString(),
       }
 
-      const db = await store.readDb?.()
-      if (db) {
-        db.reports = db.reports || []
-        db.reports.push(report)
-        await store.writeDb?.(db)
-      }
+      await store.createReport?.(report)
 
       return res.status(201).json({ report })
     } catch {
@@ -1764,20 +1969,8 @@ export function createApp() {
       const payload = verifyToken(token)
       if (!(await hasCurrentRole(token, ['admin']))) return res.status(403).json({ message: 'Admin access required.' })
 
-      const archivesDir = path.join(process.cwd(), 'server', 'data', 'archives')
-      try {
-        const files = await fs.promises.readdir(archivesDir)
-        const list = await Promise.all(files.map(async (file) => {
-          const stat = await fs.promises.stat(path.join(archivesDir, file))
-          return { name: file, size: stat.size, mtime: stat.mtime.toISOString() }
-        }))
-        // newest first
-        list.sort((a, b) => (b.mtime || '').localeCompare(a.mtime || ''))
-        return res.json({ archives: list })
-      } catch (e) {
-        // if directory does not exist or no files, return empty list
-        return res.json({ archives: [] })
-      }
+      const archives = await store.listArchives?.() || []
+      return res.json({ archives })
     } catch (e) {
       console.error('list archives error', e)
       return res.status(401).json({ message: 'Invalid or expired token.' })
@@ -1799,23 +1992,11 @@ export function createApp() {
         return res.status(400).json({ message: 'Invalid file name.' })
       }
 
-      const archivesDir = path.join(process.cwd(), 'server', 'data', 'archives')
-      const filePath = path.join(archivesDir, name)
-      try {
-        const stat = await fs.promises.stat(filePath)
-        if (!stat.isFile()) return res.status(404).json({ message: 'File not found.' })
-      } catch (e) {
-        return res.status(404).json({ message: 'File not found.' })
-      }
-
+      const archive = await store.getArchive?.(name)
+      if (!archive) return res.status(404).json({ message: 'File not found.' })
       res.setHeader('Content-Type', 'application/json')
       res.setHeader('Content-Disposition', `attachment; filename="${name}"`)
-      const stream = fs.createReadStream(filePath)
-      stream.pipe(res)
-      stream.on('error', (err) => {
-        console.error('archive-file stream error', err)
-        try { res.status(500).end() } catch (e) {}
-      })
+      return res.send(JSON.stringify(archive, null, 2))
     } catch (e) {
       console.error('archive-file error', e)
       return res.status(401).json({ message: 'Invalid or expired token.' })
@@ -1837,15 +2018,8 @@ export function createApp() {
         return res.status(400).json({ message: 'Invalid file name.' })
       }
 
-      const archivesDir = path.join(process.cwd(), 'server', 'data', 'archives')
-      const filePath = path.join(archivesDir, name)
-      try {
-        await fs.promises.access(filePath)
-      } catch (e) {
-        return res.status(404).json({ message: 'File not found.' })
-      }
-
-      await fs.promises.rm(filePath, { force: true })
+      const deleted = await store.deleteArchive?.(name)
+      if (!deleted) return res.status(404).json({ message: 'File not found.' })
       return res.json({ ok: true, deleted: name })
     } catch (e) {
       console.error('delete-archive-file error', e)
@@ -1878,6 +2052,9 @@ export function createApp() {
       }
       if (status === 'Needs Information' && !note) {
         return res.status(400).json({ message: 'Add a note explaining what information is needed.' })
+      }
+      if (status === 'Rejected' && !note) {
+        return res.status(400).json({ message: 'Add a reason explaining why this request is rejected.' })
       }
 
       const existingRequest = (await store.listAllRequests?.() || []).find((request) => request.id === req.params.id)
@@ -1956,11 +2133,9 @@ export function createApp() {
     }
 
     try {
-      const payload = verifyToken(token)
-      const user = await store.findUserById(payload.sub)
-      if (!user) {
-        return res.status(401).json({ message: 'User not found.' })
-      }
+      const actor = await getCurrentActor(token)
+      if (!actor) return res.status(403).json({ message: 'Account access is disabled or authentication is incomplete.' })
+      const { user } = actor
       if (user.role === 'resident' && user.status !== 'Active Resident') {
         return res.status(403).json({ message: 'Your account is pending barangay verification. You can submit requests after an administrator approves your account.' })
       }
@@ -1983,7 +2158,7 @@ export function createApp() {
 
       const request = {
         id: randomUUID(),
-        userId: payload.sub,
+        userId: user.id,
         type,
         purpose,
         notes,
@@ -2131,20 +2306,21 @@ export function createApp() {
 }
 
 export async function startServer() {
+  try {
+    if (process.env.DATABASE_URL) {
+      await pgDb.initDatabase()
+    } else if (!SHOULD_SKIP_SEED) {
+      await seedDemoResident()
+    }
+  } catch (error) {
+    console.error('Database initialization failed; refusing to start without the configured storage.', error)
+    throw error
+  }
+
   const app = createApp()
   const server = app.listen(PORT, () => {
     console.log(`Barangay API running on http://localhost:${PORT}`)
   })
-
-  if (process.env.SKIP_SEED !== 'true') {
-    seedDemoResident().catch((error) => {
-      console.error('Database initialization or seed failed:', error)
-      if (store === pgDb) {
-        store = jsonDb
-        console.warn('Falling back to JSON storage until the database connection is restored.')
-      }
-    })
-  }
 
   return server
 }

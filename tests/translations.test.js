@@ -30,7 +30,8 @@ test('Filipino role dashboards have translated controls and accessible navigatio
   assert.equal(fil.quickAccessLabel, 'Mabilisang mga link')
   assert.equal(fil.staffNavigationLabel, 'Mga pahina ng kawani')
   assert.equal(fil.adminNavigationLabel, 'Mga pahina ng administrador')
-  assert.equal(fil.queue, 'Pila ng mga kahilingan')
+  assert.equal(fil.staffDashboardTitle, 'Dashboard ng Kawani')
+  assert.equal(translations.en.staffDashboardTitle, 'Staff Dashboard')
   assert.equal(fil.approvals, 'Mga pag-apruba')
   assert.equal(fil.needsReview, 'Kailangang suriin')
   assert.equal(fil.averageTurnaround, 'Karaniwang tagal ng pagproseso')
@@ -48,6 +49,63 @@ test('Filipino resident, staff, and admin dashboard copy is localized', () => {
   assert.equal(fil.staffNoteFor, 'Tala ng kawani para sa {service}')
   assert.equal(fil.residentManagement, 'Pamamahala sa Resident')
   assert.equal(fil.noEmergencyReports, 'Walang naitalang ulat sa emergency.')
+})
+
+test('system health and improvement labels are localized in both supported languages', () => {
+  for (const locale of [translations.en, translations.fil]) {
+    for (const key of [
+      'systemChecksSubtitle',
+      'refreshStatus',
+      'systemChecking',
+      'systemOperational',
+      'systemUnavailable',
+      'systemRateLimited',
+      'systemRateLimitRecommendation',
+      'dataStorage',
+      'postgresConnected',
+      'localJsonStorage',
+      'recommendedImprovements',
+      'systemStorageRecommendation',
+      'systemMonitoringRecommendation',
+    ]) {
+      assert.equal(typeof locale[key], 'string')
+      assert.ok(locale[key].length > 0)
+    }
+  }
+
+  assert.match(translations.en.systemRequestsRecommendation, /\{count\}/)
+  assert.match(translations.fil.systemRequestsRecommendation, /\{count\}/)
+})
+
+test('staff request dashboard labels are localized and distinguish approval from release', () => {
+  for (const locale of [translations.en, translations.fil]) {
+    for (const key of [
+      'staffDashboardTitle',
+      'staffDashboardSubtitle',
+      'pendingReviewMetric',
+      'inProcessingMetric',
+      'readyForReleaseMetric',
+      'releaseStageNotTracked',
+      'overdueRequestsMetric',
+      'deadlinesNotTracked',
+      'needsAttention',
+      'documentTypeFilter',
+      'fromDate',
+      'toDate',
+      'sortSubmissionDate',
+      'sortStatus',
+      'previousPage',
+      'nextPage',
+      'noReleaseOrDeadlineTracking',
+      'rejectionReasonPrompt',
+    ]) {
+      assert.equal(typeof locale[key], 'string')
+      assert.ok(locale[key].length > 0)
+    }
+  }
+
+  assert.notEqual(translations.en.approved, translations.en.completed)
+  assert.notEqual(translations.fil.approved, translations.fil.completed)
 })
 
 test('homepage header actions are localized', () => {
@@ -90,6 +148,8 @@ test('Mau answers supported topics in the selected language and handles other qu
     ['en', 'What is my request status?', 'mauStatusReply'],
     ['en', 'How do I verify my account?', 'mauVerificationReply'],
     ['en', 'Where can I read barangay announcements?', 'mauAnnouncementReply'],
+    ['en', 'When can I pick up my request?', 'mauTimelineReply'],
+    ['en', 'Can I pay online?', 'mauPaymentsReply'],
     ['en', 'I forgot my password', 'mauPasswordReply'],
     ['en', 'Hello', 'mauGreetingReply'],
     ['fil', 'Paano mag-submit ng request?', 'mauReply'],
@@ -97,6 +157,8 @@ test('Mau answers supported topics in the selected language and handles other qu
     ['fil', 'Paano beripikahin ang account?', 'mauVerificationReply'],
     ['fil', 'Paano mag-verify ng account?', 'mauVerificationReply'],
     ['fil', 'Saan mababasa ang mga anunsyo ng barangay?', 'mauAnnouncementReply'],
+    ['fil', 'Kailan ko makukuha ang kahilingan ko?', 'mauTimelineReply'],
+    ['fil', 'Paano magbayad online?', 'mauPaymentsReply'],
     ['fil', 'Paano ko malalaman ang kalagayan ng kahilingan ko?', 'mauStatusReply'],
     ['fil', 'Nakalimutan ko ang password ko', 'mauPasswordReply'],
     ['fil', 'Kamusta', 'mauGreetingReply'],
@@ -114,6 +176,28 @@ test('Mau answers supported topics in the selected language and handles other qu
     getMauReply('Paano magluto ng adobo?', 'fil', translations.fil),
     translations.fil.mauOutOfScope,
   )
+})
+
+test('Mau gives accurate workflow and payment limits to every signed-in role', () => {
+  const questions = {
+    en: ['When can I pick up my request?', 'Can I pay online?'],
+    fil: ['Kailan ko makukuha ang kahilingan ko?', 'Paano magbayad online?'],
+  }
+
+  for (const language of ['en', 'fil']) {
+    for (const role of ['resident', 'staff', 'admin']) {
+      assert.equal(
+        getMauReply(questions[language][0], language, translations[language], role),
+        translations[language].mauTimelineReply,
+        `${language} ${role} workflow guidance`,
+      )
+      assert.equal(
+        getMauReply(questions[language][1], language, translations[language], role),
+        translations[language].mauPaymentsReply,
+        `${language} ${role} payment guidance`,
+      )
+    }
+  }
 })
 
 test('Mau tailors homepage and authenticated guidance to residency and user role', () => {
@@ -190,6 +274,14 @@ test('Mau tailors homepage and authenticated guidance to residency and user role
   assert.equal(
     getMauReply('Paano mag-sign in?', 'fil', translations.fil, 'resident', false, true, 'confirmed'),
     translations.fil.mauLoginReply,
+  )
+  assert.equal(
+    getMauReply('how to login as an admin', 'en', translations.en, 'resident', false, true, 'asked'),
+    translations.en.mauPrivilegedLoginReply,
+  )
+  assert.equal(
+    getMauReply('Paano mag-sign in bilang administrador?', 'fil', translations.fil, 'resident', false, true, 'asked'),
+    translations.fil.mauPrivilegedLoginReply,
   )
   assert.equal(
     getMauReply('How do I review requests?', 'en', translations.en, 'staff', true),
