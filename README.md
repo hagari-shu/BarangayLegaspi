@@ -31,7 +31,7 @@ The official captain photo is resized in the browser and uploaded directly from 
 
 Payment records remain empty until a real billing/payment source is integrated. The previous API's hard-coded invoice examples were demonstration data, not resident charges; neither API should create or display them as real payments.
 
-Keep the Vercel `VITE_API_BASE` pointed at the existing Node API until authenticated resident, staff, and administrator workflows have been verified against Laravel. The public Laravel health and read endpoints are live, but a healthy database connection alone is not a cutover sign-off.
+Keep the Vercel `VITE_API_BASE` pointed at the existing Node API until authenticated resident, staff, and administrator workflows have been verified against Laravel. Until that cutover, Laravel's public announcement and event reads use `PUBLIC_CONTENT_API_BASE` to read from the Node API, and Laravel returns `502` rather than a misleading empty collection if the source is unavailable. Announcement writes on Laravel return `409` during this transition so content is not silently written to a database the active portal does not read. Do not cut over until the resident, staff, administrator, and content-management workflows have been migrated and verified together.
 
 ### Coordinated MFA/JWT key rotation
 

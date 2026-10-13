@@ -26,3 +26,5 @@ services:
         sync: false
       - key: CORS_ORIGINS
         sync: false
+      - key: PUBLIC_CONTENT_API_BASE
+        value: https://barangaylegaspi.onrender.com/api

@@ -399,18 +399,28 @@ class ApiController extends Controller
         $requests = $actor->role === 'resident'
             ? $this->requestsForUser($actor->id)
             : $this->allRequests();
-        $announcements = $this->announcementList();
+        try {
+            $announcements = $this->canonicalPublicCollection('announcements');
+            $events = $this->canonicalPublicCollection('events');
+        } catch (Throwable $error) {
+            Log::error('Canonical public content service request failed', [
+                'collection' => 'dashboard',
+                'exception' => $error::class,
+            ]);
+
+            return response()->json(['message' => 'Public content is temporarily unavailable.'], 502);
+        }
 
         return response()->json([
             'services' => self::SERVICES,
             'announcements' => $announcements,
-            'events' => [],
+            'events' => $events,
             'payments' => $this->paymentList(),
             'summary' => [
                 'totalRequests' => count($requests),
                 'pending' => count(array_filter($requests, fn ($item) => $item['status'] !== 'Approved')),
                 'activeCases' => count(array_filter($requests, fn ($item) => $item['status'] === 'Pending')),
-                'nextEvent' => null,
+                'nextEvent' => $events[0] ?? null,
             ],
             'user' => $this->publicUser($actor),
         ]);
@@ -423,52 +433,26 @@ class ApiController extends Controller
 
     public function events(): JsonResponse
     {
-        return response()->json(['events' => []]);
+        return $this->publicContentResponse('events');
     }
 
     public function announcements(): JsonResponse
     {
-        return response()->json(['announcements' => $this->announcementList()]);
+        return $this->publicContentResponse('announcements');
     }
 
-    public function createAnnouncement(Request $request): JsonResponse
+    public function createAnnouncement(): JsonResponse
     {
-        $title = $this->clean($request->input('title'));
-        $content = $this->clean($request->input('content'));
-        if (!$title || !$content) {
-            return response()->json(['message' => 'Title and message are required.'], 400);
-        }
-        $channels = collect($request->input('socialChannels', []))
-            ->filter(fn ($channel) => is_string($channel) && in_array($channel, ['facebook', 'instagram', 'x', 'messenger'], true))
-            ->unique()
-            ->values()
-            ->all();
-        $id = (string) Str::uuid();
-        $createdAt = now();
-        DB::table('announcements')->insert([
-            'id' => $id,
-            'tag' => $this->clean($request->input('tag', 'green')) ?: 'green',
-            'title' => $title,
-            'content' => $content,
-            'date' => $this->clean($request->input('date')) ?: now()->format('n/j/Y'),
-            'social_channels' => json_encode($channels),
-            'created_at' => $createdAt,
-        ]);
-        $announcement = DB::table('announcements')->where('id', $id)->first();
-        $this->writeAudit($request->attributes->get('actor'), 'announcement.created', 'announcement', $id);
-
-        return response()->json(['announcement' => $this->announcementData($announcement)], 201);
+        return response()->json([
+            'message' => 'Announcements are managed by the active portal API until the Laravel cutover is complete.',
+        ], 409);
     }
 
-    public function deleteAnnouncement(Request $request, string $id): JsonResponse
+    public function deleteAnnouncement(): JsonResponse
     {
-        $deleted = DB::table('announcements')->where('id', $id)->delete();
-        if (!$deleted) {
-            return response()->json(['message' => 'Announcement not found.'], 404);
-        }
-        $this->writeAudit($request->attributes->get('actor'), 'announcement.deleted', 'announcement', $id);
-
-        return response()->json(['success' => true, 'removedId' => $id]);
+        return response()->json([
+            'message' => 'Announcements are managed by the active portal API until the Laravel cutover is complete.',
+        ], 409);
     }
 
     public function payments(Request $request): JsonResponse
@@ -1522,28 +1506,41 @@ class ApiController extends Controller
             ->all();
     }
 
-    private function announcementData(?object $row): ?array
+    private function publicContentResponse(string $collection): JsonResponse
     {
-        if (!$row) {
-            return null;
-        }
+        try {
+            return response()->json([
+                $collection => $this->canonicalPublicCollection($collection),
+            ]);
+        } catch (Throwable $error) {
+            Log::error('Canonical public content service request failed', [
+                'collection' => $collection,
+                'exception' => $error::class,
+            ]);
 
-        return [
-            'id' => $row->id,
-            'tag' => $row->tag,
-            'title' => $row->title,
-            'content' => $row->content,
-            'date' => $row->date,
-            'socialChannels' => ApiIdentity::decodeJson($row->social_channels ?? $row->socialChannels ?? []),
-            'createdAt' => $row->created_at ?? $row->createdAt ?? null,
-        ];
+            return response()->json(['message' => 'Public content is temporarily unavailable.'], 502);
+        }
     }
 
-    private function announcementList(): array
+    private function canonicalPublicCollection(string $collection): array
     {
-        return DB::table('announcements')->orderByDesc('created_at')->get()
-            ->map(fn ($row) => $this->announcementData($row))
-            ->all();
+        $apiBase = rtrim((string) config('services.public_content.api_base'), '/');
+        if ($apiBase === '') {
+            throw new \RuntimeException('PUBLIC_CONTENT_API_BASE is not configured.');
+        }
+
+        $response = Http::acceptJson()
+            ->connectTimeout(3)
+            ->timeout(8)
+            ->get("{$apiBase}/{$collection}")
+            ->throw();
+        $records = $response->json($collection);
+
+        if (!is_array($records)) {
+            throw new \UnexpectedValueException("Canonical {$collection} response has an invalid shape.");
+        }
+
+        return $records;
     }
 
     private function paymentList(): array

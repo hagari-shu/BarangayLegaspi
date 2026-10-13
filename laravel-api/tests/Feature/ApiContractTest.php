@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Tests\TestCase;
 
@@ -50,13 +51,38 @@ class ApiContractTest extends TestCase
 
     public function test_public_event_and_announcement_reads_do_not_seed_examples(): void
     {
+        config(['services.public_content.api_base' => 'https://barangaylegaspi.onrender.com/api']);
+        Http::fake([
+            'https://barangaylegaspi.onrender.com/api/events' => Http::response([
+                'events' => [['title' => 'Community meeting', 'date' => '2026-10-18']],
+            ]),
+            'https://barangaylegaspi.onrender.com/api/announcements' => Http::response([
+                'announcements' => [['id' => 'notice-1', 'title' => 'Office hours']],
+            ]),
+        ]);
+
         $this->getJson('/api/events')
             ->assertOk()
-            ->assertExactJson(['events' => []]);
+            ->assertExactJson(['events' => [['title' => 'Community meeting', 'date' => '2026-10-18']]]);
 
         $this->getJson('/api/announcements')
             ->assertOk()
-            ->assertExactJson(['announcements' => []]);
+            ->assertExactJson(['announcements' => [['id' => 'notice-1', 'title' => 'Office hours']]]);
+
+        Http::assertSent(fn ($request) => $request->url() === 'https://barangaylegaspi.onrender.com/api/events');
+        Http::assertSent(fn ($request) => $request->url() === 'https://barangaylegaspi.onrender.com/api/announcements');
+    }
+
+    public function test_public_content_gateway_returns_502_instead_of_an_empty_success_when_source_is_unavailable(): void
+    {
+        config(['services.public_content.api_base' => 'https://barangaylegaspi.onrender.com/api']);
+        Http::fake([
+            'https://barangaylegaspi.onrender.com/api/announcements' => Http::response(['message' => 'unavailable'], 503),
+        ]);
+
+        $this->getJson('/api/announcements')
+            ->assertStatus(502)
+            ->assertExactJson(['message' => 'Public content is temporarily unavailable.']);
     }
 
     public function test_resident_registration_preserves_the_frontend_response_contract(): void
@@ -108,6 +134,12 @@ class ApiContractTest extends TestCase
             'password' => 'Admin!2026Pass',
         ])->assertOk()->assertJsonStructure(['token', 'user']);
 
+        config(['services.public_content.api_base' => 'https://barangaylegaspi.onrender.com/api']);
+        Http::fake([
+            'https://barangaylegaspi.onrender.com/api/announcements' => Http::response(['announcements' => []]),
+            'https://barangaylegaspi.onrender.com/api/events' => Http::response(['events' => []]),
+        ]);
+
         $this->withToken($login->json('token'))
             ->getJson('/api/dashboard')
             ->assertOk();
@@ -137,8 +169,14 @@ class ApiContractTest extends TestCase
                 'content' => 'Scheduled public meeting',
                 'socialChannels' => ['facebook', 'instagram', 'invalid'],
             ])
-            ->assertCreated()
-            ->assertJsonPath('announcement.socialChannels', ['facebook', 'instagram']);
+            ->assertStatus(409)
+            ->assertJsonPath('message', 'Announcements are managed by the active portal API until the Laravel cutover is complete.');
+
+        $this->withToken($login->json('token'))
+            ->deleteJson('/api/announcements/00000000-0000-4000-8000-000000000099')
+            ->assertStatus(409);
+
+        $this->assertDatabaseCount('announcements', 0);
     }
 
     public function test_quality_ratings_are_saved_per_user_and_only_aggregates_are_admin_visible(): void

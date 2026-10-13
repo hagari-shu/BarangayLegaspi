@@ -80,3 +80,30 @@ jobs:
           check_collection services services
           check_collection announcements announcements
           check_collection events events
+
+      - name: Verify Laravel public content matches the active Node API
+        run: |
+          set -euo pipefail
+          node - <<'NODE'
+          const sources = {
+            node: "https://barangaylegaspi.onrender.com/api",
+            laravel: "https://brgy-legaspi-laravel.onrender.com/api",
+          };
+          async function collection(api, key) {
+            const response = await fetch(`${api}/${key}`, { signal: AbortSignal.timeout(25000) });
+            if (!response.ok) throw new Error(`${key} endpoint at ${api} returned HTTP ${response.status}`);
+            const payload = await response.json();
+            if (!Array.isArray(payload[key])) throw new Error(`${key} endpoint at ${api} returned an invalid collection`);
+            return payload[key];
+          }
+          for (const key of ["announcements", "events"]) {
+            const [canonical, mirrored] = await Promise.all([
+              collection(sources.node, key),
+              collection(sources.laravel, key),
+            ]);
+            if (JSON.stringify(canonical) !== JSON.stringify(mirrored)) {
+              throw new Error(`${key} differs between the active Node API and Laravel`);
+            }
+            console.log(`${key} consistent across both APIs; ${canonical.length} records`);
+          }
+          NODE
