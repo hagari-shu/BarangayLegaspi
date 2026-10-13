@@ -1118,6 +1118,95 @@ test('admin can archive residents by zone into separate files', async () => {
   }
 })
 
+test('approval archives default to a safe retention period and never overwrite earlier archives', async () => {
+  const { server, baseUrl } = await createTestServer()
+  const archiveNames = []
+
+  try {
+    const adminLoginResponse = await fetch(`${baseUrl}/api/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        identifier: 'admin@barangay.gov.ph',
+        password: 'AdminPass123',
+      }),
+    })
+    assert.equal(adminLoginResponse.status, 200)
+    const adminToken = (await adminLoginResponse.json()).token
+    const headers = {
+      'Content-Type': 'application/json',
+      Authorization: 'Bearer ' + adminToken,
+    }
+    const invalidTokenResponse = await fetch(`${baseUrl}/api/admin/archive-approvals`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer invalid-test-token' },
+    })
+    assert.equal(invalidTokenResponse.status, 401)
+
+    const firstApproval = {
+      id: randomUUID(),
+      requestId: randomUUID(),
+      approvedBy: 'admin',
+      approvedByRole: 'admin',
+      dateApproved: new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString(),
+      requestSnapshot: { type: 'Certificate', purpose: 'Archive regression test' },
+    }
+    await jsonDb.addApproval(firstApproval)
+
+    const safeDefaultResponse = await fetch(`${baseUrl}/api/admin/archive-approvals`, {
+      method: 'POST',
+      headers,
+    })
+    assert.equal(safeDefaultResponse.status, 200)
+    assert.deepEqual((await safeDefaultResponse.json()).archive, { count: 0, filename: null })
+    assert.equal((await jsonDb.listApprovals()).length, 1)
+
+    const invalidRetentionResponse = await fetch(`${baseUrl}/api/admin/archive-approvals`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ days: 1.5 }),
+    })
+    assert.equal(invalidRetentionResponse.status, 400)
+
+    const archiveFirstResponse = await fetch(`${baseUrl}/api/admin/archive-approvals`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ days: 0 }),
+    })
+    assert.equal(archiveFirstResponse.status, 200)
+    const firstArchive = (await archiveFirstResponse.json()).archive
+    assert.equal(firstArchive.count, 1)
+    archiveNames.push(firstArchive.filename.split(/[\\/]/).pop())
+
+    const secondApproval = {
+      ...firstApproval,
+      id: randomUUID(),
+      requestId: randomUUID(),
+    }
+    await jsonDb.addApproval(secondApproval)
+
+    const archiveSecondResponse = await fetch(`${baseUrl}/api/admin/archive-approvals`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ days: 0 }),
+    })
+    assert.equal(archiveSecondResponse.status, 200)
+    const secondArchive = (await archiveSecondResponse.json()).archive
+    assert.equal(secondArchive.count, 1)
+    archiveNames.push(secondArchive.filename.split(/[\\/]/).pop())
+    assert.notEqual(archiveNames[0], archiveNames[1])
+
+    assert.deepEqual(await jsonDb.getArchive(archiveNames[0]), [firstApproval])
+    assert.deepEqual(await jsonDb.getArchive(archiveNames[1]), [secondApproval])
+    assert.equal((await jsonDb.listApprovals()).length, 0)
+  } finally {
+    await Promise.all(archiveNames.map((name) => jsonDb.deleteArchive(name)))
+    await new Promise((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()))
+    })
+  }
+})
+
 test('reset password request sends a delivery webhook payload when configured', async () => {
   const originalDeliveryUrl = process.env.RESET_DELIVERY_URL
   const originalDeliveryToken = process.env.RESET_DELIVERY_TOKEN

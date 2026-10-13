@@ -1874,13 +1874,22 @@ export function createApp() {
     const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null
     if (!token) return res.status(401).json({ message: 'Authentication required.' })
     try {
-      const payload = verifyToken(token)
+      verifyToken(token)
+    } catch {
+      return res.status(401).json({ message: 'Invalid or expired token.' })
+    }
+    try {
       if (!(await hasCurrentRole(token, ['admin']))) return res.status(403).json({ message: 'Admin access required.' })
       const rawDays = req.body?.days
-      const parsedDays = rawDays === undefined || rawDays === null || rawDays === '' ? 7 : Number(rawDays)
-      const days = Number.isFinite(parsedDays) ? Math.max(0, parsedDays) : 7
-      const result = await store.archiveApprovalsOlderThan?.(days)
-      return res.json({ archive: result || null })
+      const days = rawDays === undefined || rawDays === null || rawDays === '' ? 30 : Number(rawDays)
+      if (!Number.isInteger(days) || days < 0) {
+        return res.status(400).json({ message: 'Retention days must be a non-negative whole number.' })
+      }
+      if (typeof store.archiveApprovalsOlderThan !== 'function') {
+        throw new Error('Approval archiving is not available for the configured storage backend.')
+      }
+      const result = await store.archiveApprovalsOlderThan(days)
+      return res.json({ archive: result })
     } catch (e) {
       console.error('archive-approvals error', e.message, e.stack)
       return res.status(500).json({ message: 'Failed to archive approvals.', error: e.message })
@@ -2049,7 +2058,7 @@ export function createApp() {
         }
         try {
           await store.addApproval?.(approval)
-          const archived = await store.archiveApprovalsOlderThan?.(7)
+          const archived = await store.archiveApprovalsOlderThan?.(30)
           // return archive info optionally
           return res.json({ request: updated, approval, archive: archived || null })
         } catch (err) {

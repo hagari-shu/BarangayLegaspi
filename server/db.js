@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
+import { randomUUID } from 'node:crypto'
 import { DB_PATH } from './config.js'
 
 const dbDir = path.dirname(DB_PATH)
@@ -346,7 +347,7 @@ export async function listAuditLogs(limit = 100) {
   return (db.auditLogs || []).slice(-Math.max(1, Math.min(Number(limit) || 100, 500))).reverse()
 }
 
-export async function archiveApprovalsOlderThan(days = 7) {
+export async function archiveApprovalsOlderThan(days = 30) {
   const db = await readDb()
   db.approvals = db.approvals || []
 
@@ -360,23 +361,18 @@ export async function archiveApprovalsOlderThan(days = 7) {
 
   if (old.length === 0) return { count: 0, filename: null }
 
-  const path = DB_PATH.replace('db.json', '')
-  const archiveDir = `${path}archives/`
-  try {
-    await fs.mkdir(archiveDir, { recursive: true })
-  } catch (err) {
-    // ignore
-  }
+  await fs.mkdir(archiveDirectory, { recursive: true })
 
   const from = new Date(Math.min(...old.map((o) => new Date(o.dateApproved).getTime()))).toISOString().slice(0,10)
   const to = new Date(Math.max(...old.map((o) => new Date(o.dateApproved).getTime()))).toISOString().slice(0,10)
-  const filename = `${archiveDir}approvals-${from}_to_${to}.json`
-  await fs.writeFile(filename, JSON.stringify(old, null, 2), 'utf8')
+  const filename = `approvals-${from}_to_${to}-${Date.now()}-${randomUUID().slice(0, 8)}.json`
+  const archivePath = path.join(archiveDirectory, filename)
+  await fs.writeFile(archivePath, JSON.stringify(old, null, 2), 'utf8')
 
   db.approvals = db.approvals.filter((a) => !old.find((o) => o.id === a.id))
   await writeDb(db)
 
-  return { filename, count: old.length }
+  return { filename: archivePath, count: old.length }
 }
 
 export async function archiveProcessedRequestsOlderThan(days = 1) {

@@ -565,7 +565,7 @@ export async function listAuditLogs(limit = 100) {
   }
 }
 
-export async function archiveApprovalsOlderThan(days = 7) {
+export async function archiveApprovalsOlderThan(days = 30) {
   const client = await pool.connect()
   try {
     await client.query('BEGIN')
@@ -586,7 +586,7 @@ export async function archiveApprovalsOlderThan(days = 7) {
     }
     const from = new Date(approvals[0].dateApproved).toISOString().slice(0, 10)
     const to = new Date(approvals[approvals.length - 1].dateApproved).toISOString().slice(0, 10)
-    const filename = `approvals-${from}_to_${to}.json`
+    const filename = `approvals-${from}_to_${to}-${Date.now()}-${randomUUID().slice(0, 8)}.json`
     await client.query(
       `INSERT INTO archives (id, name, category, contents, created_at)
        VALUES ($1, $2, 'approvals', $3, NOW())

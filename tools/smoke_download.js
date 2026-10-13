@@ -30,7 +30,7 @@ async function approveRequest(token, requestId) {
   return { ok: resp.ok, data: await resp.json() }
 }
 
-async function archiveApprovals(token, days = 0) {
+async function archiveApprovals(token, days = 30) {
   const resp = await fetch(`${API}/admin/archive-approvals`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
@@ -79,8 +79,9 @@ async function run() {
   if (!r.ok) { console.error('admin login failed', r.data); return }
   const adminToken = r.data.token
 
-  console.log('Archive approvals (days=0)')
-  r = await archiveApprovals(adminToken, 0)
+  console.log('Archive approvals older than the 30-day retention period')
+  r = await archiveApprovals(adminToken, 30)
+  if (!r.ok) { console.error('archive failed', r.data); return }
   console.log('archive response', r.data)
 
   console.log('List archives')

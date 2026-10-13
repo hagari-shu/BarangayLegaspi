@@ -167,7 +167,7 @@ const defaultSocialAccounts = [
 const getDisplayName = (user = {}) => {
   const firstName = user.firstName ?? user.first_name ?? ''
   const lastName = user.lastName ?? user.last_name ?? ''
-  return [firstName, lastName].filter(Boolean).join(' ') || 'Unknown user'
+  return [firstName, lastName].filter(Boolean).join(' ') || user.name || 'Unknown user'
 }
 
 const getUserRole = (user = {}) => {
@@ -2364,7 +2364,7 @@ function SettingsPage({ profile, onLogout, language, setLanguage }) {
   )
 }
 
-function StaffPage({ staffMembers = [], announcements = [], currentUser, userRole = 'staff', onProcessRequest, onLogout, onAddStaffMember, onAddAnnouncement, onDeleteAnnouncement, onDeleteStaffMember, language, setLanguage }) {
+function StaffPage({ staffMembers = [], announcements = [], currentUser, userRole = 'staff', onProcessRequest, onLogout, onAddStaffMember, onStaffMemberUpdated, onAddAnnouncement, onDeleteAnnouncement, onDeleteStaffMember, language, setLanguage }) {
   const t = translations[language] || translations.en
   const [activeTab, setActiveTab] = useState('queue')
   const [openRequestPanel, setOpenRequestPanel] = useState('queue')
@@ -3369,7 +3369,7 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
       )}
       {selectedUser && <UserDetailModal user={selectedUser} onClose={() => setSelectedUser(null)} allowEdit={userRole === 'admin'} onUserUpdated={(updated) => {
         setSelectedUser((prev) => ({ ...(prev || {}), ...updated }))
-        setUsers((prev) => prev.map((user) => user.id === updated.id ? { ...user, ...updated } : user))
+        onStaffMemberUpdated?.(updated)
       }} />}
       {confirmation && (
         <ConfirmationModal
@@ -3415,7 +3415,8 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
   const [archives, setArchives] = useState([])
   const [archiving, setArchiving] = useState(false)
   const [archiveResult, setArchiveResult] = useState(null)
-  const [retentionDays, setRetentionDays] = useState(0)
+  const [archiveError, setArchiveError] = useState('')
+  const [retentionDays, setRetentionDays] = useState('30')
   const [confirmation, setConfirmation] = useState(null)
   const [expandedZone, setExpandedZone] = useState(null)
   const [residentZoneSort, setResidentZoneSort] = useState(() => {
@@ -3609,7 +3610,7 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
     ].filter(Boolean).join(' ').toLowerCase()
     const matchesSearch = normalizedResidentSearch === '' || searchableText.includes(normalizedResidentSearch)
     
-    const matchesZone = selectedZone === 'all' || resident.zone === parseInt(selectedZone)
+    const matchesZone = selectedZone === 'all' || Number(resident.zone) === Number(selectedZone)
     
     return matchesSearch && matchesZone
   }).sort((a, b) => getSortName(a).localeCompare(getSortName(b)))
@@ -3664,6 +3665,34 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
     return left.localeCompare(right)
   })
 
+  const normalizedAccessSearch = accessSearch.trim().toLowerCase()
+  const accessSearchResults = normalizedAccessSearch
+    ? sortedUsers.filter((user) => {
+      const searchableText = [
+        getDisplayName(user),
+        user.name,
+        user.email,
+        user.mobile,
+        user.householdId || user.household_id,
+        user.role,
+        user.zone ?? user.zoneNumber,
+      ].filter(Boolean).join(' ').toLowerCase()
+      return searchableText.includes(normalizedAccessSearch)
+    })
+    : []
+
+  const handleOpenAccessUser = async (user) => {
+    try {
+      const response = await fetch(`${API_BASE}/admin/access/user/${user.id}`)
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(data.message || t.userDetailsLoadFailed)
+      setSelectedUser(data.user)
+    } catch (error) {
+      console.error('fetch user detail error', error)
+      alert(error.message || t.userDetailsLoadFailed)
+    }
+  }
+
   const accessUsersByZone = zoneNumbers.map((zone) => {
     const matchingUsers = sortedUsers.filter((user) => {
       const fullName = `${user.first_name || user.firstName || ''} ${user.last_name || user.lastName || ''}`.trim()
@@ -3680,24 +3709,24 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
     const fetchApprovals = async () => {
       try {
         const resp = await fetch(`${API_BASE}/admin/approvals`)
-        if (resp.ok) {
-          const data = await resp.json()
-          setApprovals(data.approvals || [])
-        }
+        if (!resp.ok) throw new Error(t.archiveRefreshFailed)
+        const data = await resp.json()
+        setApprovals(Array.isArray(data.approvals) ? data.approvals : [])
       } catch (err) {
         console.error('fetch approvals error', err)
+        setArchiveError(t.archiveRefreshFailed)
       }
     }
 
     const fetchArchives = async () => {
       try {
         const r = await fetch(`${API_BASE}/admin/archives`)
-        if (r.ok) {
-          const d = await r.json()
-          setArchives(d.archives || [])
-        }
+        if (!r.ok) throw new Error(t.archiveRefreshFailed)
+        const d = await r.json()
+        setArchives(Array.isArray(d.archives) ? d.archives : [])
       } catch (err) {
         console.error('fetch archives error', err)
+        setArchiveError(t.archiveRefreshFailed)
       }
     }
 
@@ -3730,21 +3759,36 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
   }, [activeTab])
 
   const handleArchiveNow = async () => {
-    const numericDays = Number(retentionDays)
-    const daysToArchive = Number.isFinite(numericDays) ? Math.max(0, numericDays) : 7
+    const daysToArchive = retentionDays === '' ? 30 : Number(retentionDays)
+    if (!Number.isInteger(daysToArchive) || daysToArchive < 0) {
+      throw new Error(t.archiveInvalidRetention)
+    }
+
     setArchiving(true)
     setArchiveResult(null)
+    setArchiveError('')
     try {
       const resp = await fetch(`${API_BASE}/admin/archive-approvals`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ days: daysToArchive }) })
-      const data = await resp.json()
+      const data = await resp.json().catch(() => ({}))
+      if (!resp.ok) throw new Error(data.message || t.archiveFailed)
       setArchiveResult(data.archive || null)
-      const r2 = await fetch(`${API_BASE}/admin/approvals`)
-      if (r2.ok) { setApprovals((await r2.json()).approvals || []) }
-      const r3 = await fetch(`${API_BASE}/admin/archives`)
-      if (r3.ok) { setArchives((await r3.json()).archives || []) }
-    } catch (err) {
-      console.error('archive now error', err)
-      alert('Archive failed')
+
+      try {
+        const [approvalsResponse, archivesResponse] = await Promise.all([
+          fetch(`${API_BASE}/admin/approvals`),
+          fetch(`${API_BASE}/admin/archives`),
+        ])
+        if (!approvalsResponse.ok || !archivesResponse.ok) throw new Error(t.archiveRefreshFailed)
+        const [approvalsData, archivesData] = await Promise.all([
+          approvalsResponse.json(),
+          archivesResponse.json(),
+        ])
+        setApprovals(approvalsData.approvals || [])
+        setArchives(archivesData.archives || [])
+      } catch (error) {
+        console.error('refresh after approval archive failed', error)
+        setArchiveError(t.archiveRefreshFailed)
+      }
     } finally {
       setArchiving(false)
     }
@@ -4239,15 +4283,54 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
 
                   <div className="search-and-filter">
                     <input
-                      type="text"
-                      placeholder="🔎 Search users by name..."
+                      id="admin-user-search"
+                      type="search"
+                      placeholder={t.searchUsersPlaceholder}
                       value={accessSearch}
-                      onChange={(e) => setAccessSearch(e.target.value)}
+                      onChange={(event) => setAccessSearch(event.target.value)}
                       className="search-input"
+                      aria-label={t.searchUsersLabel}
+                      aria-controls="admin-user-search-results"
                     />
-                    <button type="button" className="primary-btn small search-button" onClick={() => setSearchQuery(accessSearch)}>{t.search}</button>
                   </div>
 
+                  {normalizedAccessSearch ? (
+                    <section id="admin-user-search-results" className="panel-card user-search-results" aria-live="polite">
+                      <div className="panel-header">
+                        <h3>{t.userSearchResults}</h3>
+                        <span className="soft-label">{accessSearchResults.length} {t.usersFound}</span>
+                      </div>
+                      {accessSearchResults.length > 0 ? (
+                        <div className="request-table-wrap">
+                          <table className="request-table">
+                            <thead>
+                              <tr>
+                                <th>{t.name}</th>
+                                <th>{t.role}</th>
+                                <th>{t.zone}</th>
+                                <th>{t.status}</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {accessSearchResults.map((user) => {
+                                const zone = user.zone ?? user.zoneNumber
+                                return (
+                                  <tr key={user.id}>
+                                    <td><button type="button" className="link-button" onClick={() => handleOpenAccessUser(user)}>{getDisplayName(user)}</button></td>
+                                    <td><span className="zone-badge">{user.role || t.residentRole}</span></td>
+                                    <td>{Number(zone) > 0 ? `${t.zone} ${zone}` : t.notAvailable}</td>
+                                    <td>{user.status || t.notAvailable}</td>
+                                  </tr>
+                                )
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      ) : (
+                        <p className="empty-state">{t.noUserSearchResults}</p>
+                      )}
+                    </section>
+                  ) : (
                   <div className="zone-group-stack">
                     {accessUsersByZone.map((group) => {
                       const isExpanded = expandedZone === group.zone
@@ -4298,20 +4381,7 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
                                     {zoneUsers.map((user) => (
                                       <tr key={user.id}>
                                         <td>
-                                          <button className="link-button" onClick={async () => {
-                                            try {
-                                              const resp = await fetch(`${API_BASE}/admin/access/user/${user.id}`)
-                                              if (resp.ok) {
-                                                const data = await resp.json()
-                                                setSelectedUser(data.user)
-                                              } else {
-                                                alert('Failed to load user details')
-                                              }
-                                            } catch (err) {
-                                              console.error('fetch user detail error', err)
-                                              alert('Failed to load user details')
-                                            }
-                                          }}>{user.first_name || user.firstName} {user.last_name || user.lastName}</button>
+                                          <button type="button" className="link-button" onClick={() => handleOpenAccessUser(user)}>{getDisplayName(user)}</button>
                                         </td>
                                         <td><span className="zone-badge">{user.role || 'resident'}</span></td>
                                         <td style={{textAlign: 'right'}}>{user.createdAt || user.created_at ? new Date(user.createdAt || user.created_at).toLocaleString() : 'N/A'}</td>
@@ -4326,39 +4396,68 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
                       )
                     })}
                   </div>
+                  )}
 
                   <div className="approvals-history">
                     <div className="history-header">
                       <div>
-                        <h3>Approvals History</h3>
-                        <p>Recent approvals and records</p>
+                        <h3>{t.approvalsHistory}</h3>
+                        <p>{t.recentApprovalsAndRecords}</p>
                       </div>
                       <div className="history-actions">
-                        <label className="retention-control">
-                          <span>Retention</span>
+                        <label className="retention-control" htmlFor="approval-retention-days">
+                          <span>{t.retention}</span>
                           <div className="inline-field">
                             <input
+                              id="approval-retention-days"
                               type="number"
                               min="0"
+                              step="1"
                               value={retentionDays}
-                              onChange={(e) => setRetentionDays(Math.max(0, Number(e.target.value) || 0))}
-                              title="0 = archive all current approvals immediately; > 0 = archive approvals older than N days"
+                              onChange={(event) => setRetentionDays(event.target.value)}
+                              aria-describedby="approval-retention-hint"
                             />
-                            <small>days</small>
+                            <small>{t.days}</small>
                           </div>
                         </label>
-                        <button className="primary-btn small" type="button" onClick={handleArchiveNow} disabled={archiving}>
-                          {archiving ? 'Archiving…' : 'Archive Now'}
+                        <button className="primary-btn small" type="button" onClick={() => {
+                          const days = retentionDays === '' ? 30 : Number(retentionDays)
+                          if (!Number.isInteger(days) || days < 0) {
+                            setArchiveError(t.archiveInvalidRetention)
+                            return
+                          }
+                          setArchiveError('')
+                          setConfirmation({
+                            title: t.archiveConfirmTitle,
+                            message: days === 0 ? t.archiveAllConfirmMessage : t.archiveConfirmMessage.replace('{days}', String(days)),
+                            confirmLabel: t.archiveNow,
+                            onConfirm: handleArchiveNow,
+                          })
+                        }} disabled={archiving}>
+                          {archiving ? t.archiving : t.archiveNow}
                         </button>
-                        <button className="secondary-btn small" type="button" onClick={async () => { try { const r = await fetch(`${API_BASE}/admin/approvals`); if (r.ok) { const d = await r.json(); setApprovals(d.approvals || []) } } catch (e) { console.error(e) } }}>
+                        <button className="secondary-btn small" type="button" onClick={async () => {
+                          try {
+                            const response = await fetch(`${API_BASE}/admin/approvals`)
+                            if (!response.ok) throw new Error(t.archiveRefreshFailed)
+                            const data = await response.json()
+                            setApprovals(Array.isArray(data.approvals) ? data.approvals : [])
+                            setArchiveError('')
+                          } catch (error) {
+                            console.error('refresh approvals error', error)
+                            setArchiveError(t.archiveRefreshFailed)
+                          }
+                        }}>
                           Refresh
                         </button>
                       </div>
                     </div>
 
+                    <p id="approval-retention-hint" className="resident-search-feedback">{t.archiveRetentionHint}</p>
+                    {archiveError && <p className="modal-error" role="alert">{archiveError}</p>}
                     {archiveResult && (
                       <div className="status-banner">
-                        Archived {archiveResult.count} items — {archiveResult.filename ? archiveResult.filename.split('/').pop() : 'summary'}
+                        {t.archiveCompleted.replace('{count}', String(archiveResult.count || 0)).replace('{file}', archiveResult.filename ? archiveResult.filename.split(/[\\/]/).pop() : t.noArchiveFileCreated)}
                       </div>
                     )}
 
@@ -4473,7 +4572,18 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
               <article className="panel-card archive-card">
                 <div className="panel-subhead">
                   <h4>{t.archivedFiles}</h4>
-                  <button className="secondary-btn tiny" type="button" onClick={async () => { try { const r = await fetch(`${API_BASE}/admin/archives`); if (r.ok) { setArchives((await r.json()).archives || []) } } catch (e) { console.error(e) } }}>{t.refresh}</button>
+                  <button className="secondary-btn tiny" type="button" onClick={async () => {
+                    try {
+                      const response = await fetch(`${API_BASE}/admin/archives`)
+                      if (!response.ok) throw new Error(t.archiveRefreshFailed)
+                      const data = await response.json()
+                      setArchives(Array.isArray(data.archives) ? data.archives : [])
+                      setArchiveError('')
+                    } catch (error) {
+                      console.error('refresh archives error', error)
+                      setArchiveError(t.archiveRefreshFailed)
+                    }
+                  }}>{t.refresh}</button>
                 </div>
 
                 {archives && archives.length > 0 ? (
@@ -4999,6 +5109,15 @@ function App() {
     }
   }
 
+  const handleStaffMemberUpdated = (updated) => {
+    setUsers((current) => current.map((user) => user.id === updated.id ? { ...user, ...updated } : user))
+    setStaffMembers((current) => current.flatMap((member) => {
+      if (member.id !== updated.id) return [member]
+      const nextMember = { ...member, ...updated }
+      return nextMember.role === 'staff' ? [nextMember] : []
+    }))
+  }
+
   const handleDeleteStaffMember = async (staffId) => {
     try {
       const response = await fetch(`${API_BASE}/staff/members/${staffId}`, {
@@ -5086,7 +5205,7 @@ function App() {
         <Route path="/payments" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['resident']} userRole={userRole}><PaymentsPage payments={payments} onLogout={handleLogout} language={language} setLanguage={switchLanguage} /></ProtectedRoute>} />
         <Route path="/events" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['resident']} userRole={userRole}><EventsPage events={events} onLogout={handleLogout} language={language} setLanguage={switchLanguage} /></ProtectedRoute>} />
         <Route path="/settings" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['resident', 'staff', 'admin']} userRole={userRole}><SettingsPage profile={profile} onLogout={handleLogout} language={language} setLanguage={switchLanguage} /></ProtectedRoute>} />
-        <Route path="/staff" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['staff', 'admin']} userRole={userRole}><StaffPage staffMembers={staffMembers} announcements={announcementsData} currentUser={session?.user} userRole={userRole} onProcessRequest={handleRequestStatus} onLogout={handleLogout} onAddStaffMember={handleAddStaffMember} onAddAnnouncement={handleAddAnnouncement} onDeleteAnnouncement={handleDeleteAnnouncement} onDeleteStaffMember={handleDeleteStaffMember} language={language} setLanguage={switchLanguage} /></ProtectedRoute>} />
+        <Route path="/staff" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['staff', 'admin']} userRole={userRole}><StaffPage staffMembers={staffMembers} announcements={announcementsData} currentUser={session?.user} userRole={userRole} onProcessRequest={handleRequestStatus} onLogout={handleLogout} onAddStaffMember={handleAddStaffMember} onStaffMemberUpdated={handleStaffMemberUpdated} onAddAnnouncement={handleAddAnnouncement} onDeleteAnnouncement={handleDeleteAnnouncement} onDeleteStaffMember={handleDeleteStaffMember} language={language} setLanguage={switchLanguage} /></ProtectedRoute>} />
         <Route path="/admin" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['admin']} userRole={userRole}><AdminPage users={users} residents={residents} requests={requests} reports={reports} currentUser={session?.user} onLogout={handleLogout} language={language} setLanguage={switchLanguage} /></ProtectedRoute>} />
         <Route path="*" element={<Navigate to={userRole === 'staff' ? '/staff' : userRole === 'admin' ? '/admin' : '/dashboard'} replace />} />
       </Routes>

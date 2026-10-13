@@ -5,6 +5,12 @@
 - [Account approval policy](./ACCOUNT_APPROVAL_POLICY.md)
 - [Location policy](./LOCATION_POLICY.md)
 
+## Admin records and resident search
+
+In Admin → Access, user search updates as the administrator types and returns matching resident, staff, and administrator names across zones. The resident portal's search is intentionally limited to public dashboard content; it does not expose other residents' account details.
+
+Approval history stays active for 30 days by default and older approvals are archived automatically when a new approval is recorded. Administrators can also archive approvals manually: the default is 30 days, and every manual archive requires confirmation. Setting retention to `0` archives every approval currently in the active list, including recent ones. Archives remain downloadable from Archived Files until an administrator explicitly deletes them.
+
 ## Deployment
 
 Deploy the React/Vite frontend to Vercel and the Laravel API to Render:

@@ -339,3 +339,18 @@ test('staff account creation labels are available in both supported languages', 
     assert.ok(locale.mobileNumberLabel)
   }
 })
+
+test('approval archive and live user search labels are localized', () => {
+  for (const locale of [translations.en, translations.fil]) {
+    assert.ok(locale.searchUsersLabel)
+    assert.ok(locale.searchUsersPlaceholder)
+    assert.ok(locale.userSearchResults)
+    assert.ok(locale.usersFound)
+    assert.ok(locale.noUserSearchResults)
+    assert.ok(locale.archiveConfirmTitle)
+    assert.ok(locale.archiveAllConfirmMessage)
+    assert.ok(locale.archiveRetentionHint)
+    assert.ok(locale.archiveInvalidRetention)
+    assert.ok(locale.archiveRefreshFailed)
+  }
+})
