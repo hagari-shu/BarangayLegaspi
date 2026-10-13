@@ -8,9 +8,34 @@ import { hashPassword } from '../server/auth.js'
 import * as jsonDb from '../server/db.js'
 import { DB_PATH } from '../server/config.js'
 import { isCaptainPhotoStorageConfigured } from '../server/captain-photo-storage.js'
-import { randomUUID } from 'node:crypto'
+import { createHmac, randomUUID } from 'node:crypto'
+import { createTotpSecret, encryptTotpSecret } from '../server/mfa.js'
 
 const testDbPath = DB_PATH
+
+const createTotpCode = (secret, timestamp = Date.now()) => {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'
+  let buffer = 0
+  let bits = 0
+  const bytes = []
+  for (const character of secret) {
+    buffer = ((buffer << 5) | alphabet.indexOf(character)) & 0xffff
+    bits += 5
+    if (bits >= 8) {
+      bits -= 8
+      bytes.push((buffer >>> bits) & 0xff)
+    }
+  }
+  const counter = Buffer.alloc(8)
+  counter.writeBigUInt64BE(BigInt(Math.floor(timestamp / 30_000)))
+  const digest = createHmac('sha1', Buffer.from(bytes)).update(counter).digest()
+  const offset = digest[digest.length - 1] & 0x0f
+  const binary = ((digest[offset] & 0x7f) << 24)
+    | ((digest[offset + 1] & 0xff) << 16)
+    | ((digest[offset + 2] & 0xff) << 8)
+    | (digest[offset + 3] & 0xff)
+  return String(binary % 1_000_000).padStart(6, '0')
+}
 
 beforeEach(async () => {
   await fs.mkdir(path.dirname(testDbPath), { recursive: true })
@@ -914,6 +939,56 @@ test('login fails closed when MFA is enabled but the encrypted secret is missing
     assert.equal(response.status, 503)
     assert.equal(data.code, 'mfa_unavailable')
     assert.equal(data.token, undefined)
+  } finally {
+    await new Promise((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()))
+    })
+  }
+})
+
+test('MFA login requires a valid one-time authenticator code', async () => {
+  const { server, baseUrl } = await createTestServer()
+  const secret = createTotpSecret()
+
+  try {
+    const admin = await jsonDb.findUserByIdentifier('admin@barangay.gov.ph')
+    await jsonDb.updateUser(admin.id, {
+      mfaEnabled: true,
+      mfaSecret: encryptTotpSecret(secret),
+      mfaLastStep: 0,
+    })
+
+    const loginResponse = await fetch(`${baseUrl}/api/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ identifier: 'admin@barangay.gov.ph', password: 'AdminPass123' }),
+    })
+    const loginData = await loginResponse.json()
+    assert.equal(loginResponse.status, 200)
+    assert.equal(loginData.requiresMfa, true)
+    assert.equal(loginData.token, undefined)
+
+    const verifyResponse = await fetch(`${baseUrl}/api/login/mfa`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        challengeToken: loginData.challengeToken,
+        code: createTotpCode(secret),
+      }),
+    })
+    const verifyData = await verifyResponse.json()
+    assert.equal(verifyResponse.status, 200)
+    assert.ok(verifyData.token)
+
+    const replayResponse = await fetch(`${baseUrl}/api/login/mfa`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        challengeToken: loginData.challengeToken,
+        code: createTotpCode(secret),
+      }),
+    })
+    assert.equal(replayResponse.status, 401)
   } finally {
     await new Promise((resolve, reject) => {
       server.close((error) => (error ? reject(error) : resolve()))
