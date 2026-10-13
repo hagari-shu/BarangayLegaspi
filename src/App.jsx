@@ -4167,7 +4167,7 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
                           </div>
                           <div className="input-block">
                             <label htmlFor="admin-staff-mobile">{t.mobile}</label>
-                            <input id="admin-staff-mobile" inputMode="tel" value={staffForm.mobile} onChange={(event) => setStaffForm((current) => ({ ...current, mobile: event.target.value }))} placeholder="09XXXXXXXXX" required />
+                            <input id="admin-staff-mobile" type="tel" inputMode="tel" value={staffForm.mobile} onChange={(event) => setStaffForm((current) => ({ ...current, mobile: event.target.value }))} placeholder="09XXXXXXXXX" required />
                           </div>
                           <PasswordField id="admin-staff-initial-password" label={t.staffInitialPassword} value={staffForm.password} onChange={(event) => setStaffForm((current) => ({ ...current, password: event.target.value }))} placeholder={t.staffPasswordPlaceholder} helpText={`${passwordRequirements}.`} />
                         </div>
