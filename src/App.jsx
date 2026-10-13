@@ -694,11 +694,15 @@ function LoginPage({ onLogin, language, setLanguage }) {
       if (!response.ok) throw new Error(data.message || 'Unable to reset password.')
 
       if (!resetRequested) {
+        if (data.deliveryStatus !== 'queued' && !data.resetToken) {
+          alert(t.resetRequestGeneric)
+          return
+        }
         setResetRequested(true)
         if (data.resetToken) {
           setResetForm((current) => ({ ...current, token: data.resetToken }))
         }
-        alert(data.message || 'Reset instructions have been sent.')
+        alert(data.message || t.resetRequestGeneric)
       } else {
         alert(data.message)
         setShowReset(false)

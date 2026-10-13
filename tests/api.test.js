@@ -705,7 +705,7 @@ test('captain photo upload links require an administrator and bounded object sto
     assert.equal((await fetch(endpoint, { method: 'POST' })).status, 401)
     if (!isCaptainPhotoStorageConfigured()) {
       const photoResponse = await fetch(`${baseUrl}/api/captain-photo`)
-      assert.equal(photoResponse.status, 404)
+      assert.equal(photoResponse.status, 204)
       assert.equal(photoResponse.headers.get('cross-origin-resource-policy'), 'cross-origin')
     }
 
@@ -897,6 +897,30 @@ test('password reset uses a one-time token', async () => {
   }
 })
 
+test('login fails closed when MFA is enabled but the encrypted secret is missing', async () => {
+  const { server, baseUrl } = await createTestServer()
+
+  try {
+    const admin = await jsonDb.findUserByIdentifier('admin@barangay.gov.ph')
+    await jsonDb.updateUser(admin.id, { mfaEnabled: true, mfaSecret: '' })
+
+    const response = await fetch(`${baseUrl}/api/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ identifier: 'admin@barangay.gov.ph', password: 'AdminPass123' }),
+    })
+    const data = await response.json()
+
+    assert.equal(response.status, 503)
+    assert.equal(data.code, 'mfa_unavailable')
+    assert.equal(data.token, undefined)
+  } finally {
+    await new Promise((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()))
+    })
+  }
+})
+
 test('authenticated users can change passwords with the current password', async () => {
   const { server, baseUrl } = await createTestServer()
   const currentPassword = 'CurrentPass123!'
@@ -1017,6 +1041,8 @@ test('admin can archive residents by zone into separate files', async () => {
 
 test('reset password request sends a delivery webhook payload when configured', async () => {
   const originalDeliveryUrl = process.env.RESET_DELIVERY_URL
+  const originalDeliveryToken = process.env.RESET_DELIVERY_TOKEN
+  const deliveryToken = 'test-only-reset-delivery-token'
   const deliveryRequests = []
   const deliveryServer = await new Promise((resolve) => {
     const server = createServer((request, response) => {
@@ -1026,6 +1052,7 @@ test('reset password request sends a delivery webhook payload when configured', 
         deliveryRequests.push({
           method: request.method,
           path: request.url,
+          authorization: request.headers.authorization,
           body: JSON.parse(body || '{}'),
         })
         response.writeHead(200, { 'Content-Type': 'application/json' })
@@ -1036,6 +1063,7 @@ test('reset password request sends a delivery webhook payload when configured', 
   })
 
   process.env.RESET_DELIVERY_URL = `http://127.0.0.1:${deliveryServer.address().port}`
+  process.env.RESET_DELIVERY_TOKEN = deliveryToken
   let appServer
 
   try {
@@ -1072,9 +1100,12 @@ test('reset password request sends a delivery webhook payload when configured', 
     assert.ok(passwordResetRequest)
     assert.equal(passwordResetRequest.body.email, email)
     assert.equal(passwordResetRequest.body.event, 'password_reset')
+    assert.equal(passwordResetRequest.authorization, `Bearer ${deliveryToken}`)
   } finally {
     if (originalDeliveryUrl === undefined) delete process.env.RESET_DELIVERY_URL
     else process.env.RESET_DELIVERY_URL = originalDeliveryUrl
+    if (originalDeliveryToken === undefined) delete process.env.RESET_DELIVERY_TOKEN
+    else process.env.RESET_DELIVERY_TOKEN = originalDeliveryToken
     if (appServer) {
       await new Promise((resolve, reject) => {
         appServer.close((error) => (error ? reject(error) : resolve()))

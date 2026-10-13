@@ -13,7 +13,7 @@ Deploy the React/Vite frontend to Vercel and the Laravel API to Render:
 2. Set `VITE_API_BASE` in Vercel to the public API URL ending in `/api` (for example, `https://brgy-legaspi-laravel.onrender.com/api`).
 3. Deploy the API using the repository's `render.yaml` (configured for Render's Free web-service plan and linked to the existing Singapore PostgreSQL database). Provide Laravel `APP_KEY`, `JWT_SECRET`, `MFA_ENCRYPTION_KEY`, and the exact frontend URL in `CORS_ORIGINS`. Use random keys of at least 32 characters. Existing installations must coordinate JWT rotation because it invalidates existing sessions; the MFA key-rotation procedure below preserves enrolled authenticators.
 4. For a new database without an administrator, set `ADMIN_EMAIL`, `ADMIN_MOBILE`, and a strong `ADMIN_PASSWORD` in the Render service environment before the first API login. Change that password after signing in.
-5. Set `RESET_DELIVERY_URL` to an authenticated HTTPS notification service before enabling password recovery.
+5. Set `RESET_DELIVERY_URL` and `RESET_DELIVERY_TOKEN` on the Node API to an authenticated HTTPS notification service before enabling password recovery. The service must accept a bearer token and the `password_reset` JSON payload; requests time out after 10 seconds.
 
 The API migration preserves the `/api` routes and PostgreSQL data model. Laravel runs the schema migration on container startup. Back up the database before the first Laravel deployment and review the migration against a staging copy first. Keep database credentials, application keys, and webhook secrets in deployment environment variables, never in source control.
 

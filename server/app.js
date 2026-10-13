@@ -220,6 +220,9 @@ export function createApp() {
     if (!deliveryUrl) {
       return { queued: false, deliveryStatus: 'disabled', event }
     }
+    if (process.env.NODE_ENV === 'production' && (!deliveryUrl.startsWith('https://') || !process.env.RESET_DELIVERY_TOKEN)) {
+      throw new Error('Production reset delivery requires an HTTPS URL and RESET_DELIVERY_TOKEN.')
+    }
 
     const payload = {
       event,
@@ -237,8 +240,12 @@ export function createApp() {
 
     const response = await fetch(deliveryUrl, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        ...(process.env.RESET_DELIVERY_TOKEN ? { Authorization: `Bearer ${process.env.RESET_DELIVERY_TOKEN}` } : {}),
+      },
       body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(10_000),
     })
 
     if (!response.ok) {
@@ -313,7 +320,7 @@ export function createApp() {
     res.setHeader('Cache-Control', 'no-store')
     try {
       const photoUrl = await getCaptainPhotoUrl()
-      if (!photoUrl) return res.status(404).end()
+      if (!photoUrl) return res.status(204).end()
       return res.redirect(302, photoUrl)
     } catch (error) {
       console.error('load captain photo failed', error)
@@ -522,7 +529,18 @@ export function createApp() {
 
       const safeUser = sanitizeUserRecord({ ...user, role: normalizedRole })
 
-      if (safeUser.mfaEnabled && user.mfaSecret) {
+      const mfaEnabled = Boolean(user.mfaEnabled ?? user.mfa_enabled)
+      const mfaSecret = user.mfaSecret || user.mfa_secret
+      if (mfaEnabled && !mfaSecret) {
+        await writeAudit({ role: 'anonymous' }, 'auth.login.mfa_unavailable', 'user', user.id)
+        console.error('MFA is enabled but the authenticator secret is missing for account', user.id)
+        return res.status(503).json({
+          code: 'mfa_unavailable',
+          message: 'Authenticator verification is temporarily unavailable. Please contact the barangay office.',
+        })
+      }
+
+      if (mfaEnabled) {
         if (mfaChallenges.size > 10000) {
           for (const [key, challenge] of mfaChallenges) {
             if (challenge.expiresAt <= Date.now()) mfaChallenges.delete(key)
@@ -565,11 +583,13 @@ export function createApp() {
       }
 
       const user = await store.findUserById?.(challenge.userId)
-      if (!user || !user.mfaEnabled || !user.mfaSecret || ['Suspended', 'Disabled'].includes(user.status)) {
+      const mfaEnabled = Boolean(user?.mfaEnabled ?? user?.mfa_enabled)
+      const mfaSecret = user?.mfaSecret || user?.mfa_secret
+      if (!user || !mfaEnabled || !mfaSecret || ['Suspended', 'Disabled'].includes(user.status)) {
         return res.status(401).json({ message: 'MFA challenge is no longer valid.' })
       }
 
-      const secret = decryptTotpSecret(user.mfaSecret)
+      const secret = decryptTotpSecret(mfaSecret)
       const matchedStep = verifyTotp(secret, code)
       const lastStep = Number(user.mfaLastStep || user.mfa_last_step || 0)
       if (matchedStep === null || matchedStep <= lastStep) {
