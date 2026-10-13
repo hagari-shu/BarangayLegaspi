@@ -3396,6 +3396,17 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
   const [accessSearch, setAccessSearch] = useState('')
   const [adminForm, setAdminForm] = useState({ firstName: '', lastName: '', email: '', mobile: '', password: '' })
   const [showAdminForm, setShowAdminForm] = useState(false)
+  const [staffForm, setStaffForm] = useState({
+    firstName: '',
+    lastName: '',
+    position: 'Staff',
+    availability: 'Available',
+    email: '',
+    mobile: '',
+    password: '',
+  })
+  const [showStaffForm, setShowStaffForm] = useState(false)
+  const [creatingStaff, setCreatingStaff] = useState(false)
   const [selectedZone, setSelectedZone] = useState('all')
   const [selectedUser, setSelectedUser] = useState(null)
   const [selectedReport, setSelectedReport] = useState(null)
@@ -3530,6 +3541,45 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
       alert('Administrator account created. Share the initial password securely and ask them to change it after signing in.')
     } catch (error) {
       alert(error.message || 'Unable to create administrator.')
+    }
+  }
+
+  const handleCreateStaff = async (event) => {
+    event.preventDefault()
+    if (!isValidPassword(staffForm.password)) {
+      alert(`${t.staffInitialPassword} must have ${passwordRequirements}.`)
+      return
+    }
+
+    setCreatingStaff(true)
+    try {
+      const response = await fetch(`${API_BASE}/staff/members`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...staffForm,
+          status: 'On Duty',
+        }),
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(data.message || t.staffCreateFailed)
+
+      setManagedUsers((current) => [data.staffMember, ...current])
+      setStaffForm({
+        firstName: '',
+        lastName: '',
+        position: 'Staff',
+        availability: 'Available',
+        email: '',
+        mobile: '',
+        password: '',
+      })
+      setShowStaffForm(false)
+      alert(t.staffCreatedNotice)
+    } catch (error) {
+      alert(error.message || t.staffCreateFailed)
+    } finally {
+      setCreatingStaff(false)
     }
   }
 
@@ -4071,8 +4121,63 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
                   <div className="panel-header">
                     <h2>User Access Management</h2>
                     <span className="soft-label">{managedUsers.length} total users</span>
-                    <button type="button" className="primary-btn small" onClick={() => setShowAdminForm(true)}>Create Administrator</button>
+                    <div className="editor-actions">
+                      <button type="button" className="secondary-btn small" onClick={() => setShowStaffForm(true)}>{t.addStaffMember}</button>
+                      <button type="button" className="primary-btn small" onClick={() => setShowAdminForm(true)}>Create Administrator</button>
+                    </div>
                   </div>
+
+                  {showStaffForm && (
+                    <WorkflowModal title={t.addStaffMember} onClose={() => setShowStaffForm(false)} wide>
+                      <form className="editor-panel workflow-modal-form" onSubmit={handleCreateStaff}>
+                        <div className="panel-header left-align">
+                          <h3>{t.createStaffAccount}</h3>
+                          <span className="soft-label">{t.staffRole}</span>
+                        </div>
+                        <div className="editor-grid">
+                          <div className="input-block">
+                            <label htmlFor="admin-staff-first-name">{t.firstName}</label>
+                            <input id="admin-staff-first-name" value={staffForm.firstName} onChange={(event) => setStaffForm((current) => ({ ...current, firstName: event.target.value }))} required />
+                          </div>
+                          <div className="input-block">
+                            <label htmlFor="admin-staff-last-name">{t.lastName}</label>
+                            <input id="admin-staff-last-name" value={staffForm.lastName} onChange={(event) => setStaffForm((current) => ({ ...current, lastName: event.target.value }))} required />
+                          </div>
+                          <div className="input-block">
+                            <label htmlFor="admin-staff-position">{t.positionLabel}</label>
+                            <select id="admin-staff-position" value={staffForm.position} onChange={(event) => setStaffForm((current) => ({ ...current, position: event.target.value }))}>
+                              <option value="Staff">{t.staffRole}</option>
+                              <option value="Secretary">{t.secretaryRole}</option>
+                              <option value="Barangay Captain">{t.barangayCaptainRole}</option>
+                              <option value="Treasurer">{t.treasurerRole}</option>
+                              <option value="Utility Worker">{t.utilityWorkerRole}</option>
+                            </select>
+                          </div>
+                          <div className="input-block">
+                            <label htmlFor="admin-staff-availability">{t.availabilityLabel}</label>
+                            <select id="admin-staff-availability" value={staffForm.availability} onChange={(event) => setStaffForm((current) => ({ ...current, availability: event.target.value }))}>
+                              <option value="Available">{t.availableLabel}</option>
+                              <option value="Busy">{t.busyStatus}</option>
+                              <option value="On Duty">{t.onDutyStatus}</option>
+                            </select>
+                          </div>
+                          <div className="input-block">
+                            <label htmlFor="admin-staff-email">{t.email}</label>
+                            <input id="admin-staff-email" type="email" value={staffForm.email} onChange={(event) => setStaffForm((current) => ({ ...current, email: event.target.value }))} required />
+                          </div>
+                          <div className="input-block">
+                            <label htmlFor="admin-staff-mobile">{t.mobile}</label>
+                            <input id="admin-staff-mobile" inputMode="tel" value={staffForm.mobile} onChange={(event) => setStaffForm((current) => ({ ...current, mobile: event.target.value }))} placeholder="09XXXXXXXXX" required />
+                          </div>
+                          <PasswordField id="admin-staff-initial-password" label={t.staffInitialPassword} value={staffForm.password} onChange={(event) => setStaffForm((current) => ({ ...current, password: event.target.value }))} placeholder={t.staffPasswordPlaceholder} helpText={`${passwordRequirements}.`} />
+                        </div>
+                        <div className="editor-actions">
+                          <button type="button" className="secondary-btn small" onClick={() => setShowStaffForm(false)} disabled={creatingStaff}>{t.cancel}</button>
+                          <button type="submit" className="primary-btn small" disabled={creatingStaff}>{creatingStaff ? t.working : t.createStaffAccount}</button>
+                        </div>
+                      </form>
+                    </WorkflowModal>
+                  )}
 
                   {showAdminForm && (
                     <WorkflowModal title="Create Administrator" onClose={() => setShowAdminForm(false)} wide>
@@ -4096,6 +4201,41 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
                       </form>
                     </WorkflowModal>
                   )}
+
+                  <section className="panel-card staff-access-roster" aria-labelledby="staff-access-heading">
+                    <div className="panel-header">
+                      <h3 id="staff-access-heading">{t.staffAccounts}</h3>
+                      <span className="soft-label">{staffCount} {t.staffMembersAvailable}</span>
+                    </div>
+                    {staffCount > 0 ? (
+                      <div className="request-table-wrap">
+                        <table className="request-table">
+                          <thead>
+                            <tr>
+                              <th>{t.name}</th>
+                              <th>{t.positionLabel}</th>
+                              <th>{t.email}</th>
+                              <th>{t.mobile}</th>
+                              <th>{t.status}</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {sortedUsers.filter((user) => user.role === 'staff').map((user) => (
+                              <tr key={user.id}>
+                                <td>{getDisplayName(user)}</td>
+                                <td>{getStaffPositionLabel(user.position || t.staffRole, t)}</td>
+                                <td>{user.email}</td>
+                                <td>{user.mobile}</td>
+                                <td>{user.status || t.onDutyStatus}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    ) : (
+                      <p className="empty-state">{t.noStaffAccounts}</p>
+                    )}
+                  </section>
 
                   <div className="search-and-filter">
                     <input
@@ -4836,6 +4976,7 @@ function App() {
           availability: member.availability,
           email: member.email,
           mobile: member.mobile,
+          password: member.password,
           status: member.status || 'On Duty',
         }),
       })

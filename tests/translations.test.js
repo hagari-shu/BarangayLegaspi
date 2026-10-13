@@ -327,3 +327,14 @@ test('captain photo controls and profile details have localized labels', () => {
     assert.ok(locale.captainPhotoTooLarge)
   }
 })
+
+test('staff account creation labels are available in both supported languages', () => {
+  for (const locale of [translations.en, translations.fil]) {
+    assert.ok(locale.createStaffAccount)
+    assert.ok(locale.staffAccounts)
+    assert.ok(locale.noStaffAccounts)
+    assert.ok(locale.staffInitialPassword)
+    assert.ok(locale.staffCreatedNotice)
+    assert.ok(locale.staffCreateFailed)
+  }
+})

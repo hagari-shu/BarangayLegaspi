@@ -671,6 +671,10 @@ test('admin-assigned staff positions persist in login profiles and the staff dir
     })
     assert.equal(createResponse.status, 201)
     const { staffMember } = await createResponse.json()
+    assert.equal(staffMember.role, 'staff')
+    assert.equal(staffMember.status, 'On Duty')
+    assert.equal(staffMember.password, undefined)
+    assert.equal(staffMember.passwordHash, undefined)
     assert.equal(staffMember.position, 'Secretary')
 
     const staffLogin = await fetch(`${baseUrl}/api/login`, {
