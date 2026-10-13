@@ -352,6 +352,21 @@ export async function listAllRequests() {
   return result.rows.map(normalizeRequest)
 }
 
+export async function listRequestsForStaffReports() {
+  const result = await query(
+    `SELECT id, type, status, created_at, status_history
+     FROM requests
+     ORDER BY created_at DESC`
+  )
+  return result.rows.map((request) => ({
+    id: request.id,
+    type: request.type,
+    status: request.status,
+    date: request.created_at,
+    statusHistory: request.status_history || [],
+  }))
+}
+
 export async function listReports() {
   const result = await query(
     `SELECT id, type, title, description, severity, zone, status, report_date AS date

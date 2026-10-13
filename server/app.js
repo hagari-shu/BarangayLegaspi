@@ -5,6 +5,7 @@ import rateLimit from 'express-rate-limit'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { comparePassword, hashPassword, signToken, verifyToken } from './auth.js'
 import { createTotpSecret, createTotpUri, decryptTotpSecret, encryptTotpSecret, verifyTotp } from './mfa.js'
+import { createRequestReportCsv, filterStaffReportRequests, getStaffRequestReport, isValidReportDate } from './request-reporting.js'
 import * as jsonDb from './db.js'
 import * as pgDb from './db-postgres.js'
 import {
@@ -1244,6 +1245,93 @@ export function createApp() {
     } catch {
       return res.status(401).json({ message: 'Invalid or expired token.' })
     }
+  })
+
+  const getStaffReportFilters = (req, res) => {
+    const from = String(req.query.from || '')
+    const to = String(req.query.to || '')
+    const type = String(req.query.type || '')
+    const status = String(req.query.status || '')
+    const allowedStatuses = ['Pending', 'In Review', 'Needs Information', 'Approved', 'Rejected']
+
+    if ((from && !isValidReportDate(from)) || (to && !isValidReportDate(to)) || (from && to && from > to)) {
+      res.status(400).json({ message: 'Invalid report date range.' })
+      return null
+    }
+    if (type.length > 100 || (status && !allowedStatuses.includes(status))) {
+      res.status(400).json({ message: 'Invalid report filter.' })
+      return null
+    }
+    return { from, to, type, status }
+  }
+
+  const withStaffReportAccess = async (req, res, callback) => {
+    const authHeader = req.headers.authorization || ''
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null
+    if (!token) {
+      res.status(401).json({ message: 'Authentication required.' })
+      return
+    }
+
+    let payload
+    try {
+      payload = verifyToken(token)
+    } catch {
+      res.status(401).json({ message: 'Invalid or expired token.' })
+      return
+    }
+    if (payload.purpose === 'mfa_pending') {
+      res.status(403).json({ message: 'Complete multi-factor authentication first.' })
+      return
+    }
+
+    let actor
+    try {
+      actor = await store.findUserById?.(payload.sub)
+    } catch (error) {
+      console.error('staff report authorization lookup error', error)
+      res.status(500).json({ message: 'Unable to verify staff access.' })
+      return
+    }
+    if (!actor || !['staff', 'admin'].includes(actor.role) || ['Suspended', 'Disabled'].includes(actor.status)) {
+      res.status(403).json({ message: 'Staff access required.' })
+      return
+    }
+
+    const filters = getStaffReportFilters(req, res)
+    if (filters) await callback(filters)
+  }
+
+  app.get('/api/staff/reports', async (req, res) => {
+    await withStaffReportAccess(req, res, async (filters) => {
+      try {
+        const requests = await store.listRequestsForStaffReports?.()
+        if (!Array.isArray(requests)) throw new Error('Request storage is unavailable.')
+        return res.json(getStaffRequestReport(requests, filters))
+      } catch (error) {
+        console.error('staff reports query failed', error)
+        return res.status(500).json({ message: 'Unable to load service reports.' })
+      }
+    })
+  })
+
+  app.get('/api/staff/reports/export.csv', async (req, res) => {
+    await withStaffReportAccess(req, res, async (filters) => {
+      try {
+        const requests = await store.listRequestsForStaffReports?.()
+        if (!Array.isArray(requests)) throw new Error('Request storage is unavailable.')
+        const csv = createRequestReportCsv(filterStaffReportRequests(requests, filters))
+        const range = filters.from && filters.to
+          ? `${filters.from}-to-${filters.to}`
+          : filters.from || filters.to || 'all-time'
+        res.setHeader('Content-Type', 'text/csv; charset=utf-8')
+        res.setHeader('Content-Disposition', `attachment; filename="service-requests-${range}.csv"`)
+        return res.send(`\uFEFF${csv}`)
+      } catch (error) {
+        console.error('staff reports CSV export failed', error)
+        return res.status(500).json({ message: 'Unable to export service reports.' })
+      }
+    })
   })
 
   app.get('/api/staff/members', async (req, res) => {

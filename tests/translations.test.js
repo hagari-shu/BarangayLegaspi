@@ -151,6 +151,53 @@ test('resident request status messages distinguish approval from document releas
   assert.match(translations.fil.requestStatusApprovedMessage, /Hindi sinusubaybayan/i)
 })
 
+test('service report controls are localized in both supported languages', () => {
+  for (const locale of [translations.en, translations.fil]) {
+    for (const key of [
+      'reportPeriod',
+      'reportToday',
+      'reportLast7Days',
+      'reportLast30Days',
+      'reportThisMonth',
+      'reportPreviousMonth',
+      'reportCustomRange',
+      'reportAllTime',
+      'reportStartDate',
+      'reportEndDate',
+      'reportRequestType',
+      'reportCurrentStatus',
+      'reportFilterBasis',
+      'reportClearFilters',
+      'reportExportCsv',
+      'reportPrint',
+      'reportActivity',
+      'reportEfficiency',
+      'reportTypeBreakdown',
+      'reportRecentDecisions',
+    ]) {
+      assert.equal(typeof locale[key], 'string')
+      assert.ok(locale[key].length > 0)
+    }
+  }
+})
+
+test('resident announcement details controls are localized in both supported languages', () => {
+  for (const locale of [translations.en, translations.fil]) {
+    for (const key of [
+      'noCurrentAnnouncements',
+      'openAnnouncementDetails',
+      'currentAnnouncement',
+      'closeAnnouncementDetails',
+      'announcementDate',
+      'announcementDateUnavailable',
+      'announcementDetailsUnavailable',
+    ]) {
+      assert.equal(typeof locale[key], 'string')
+      assert.ok(locale[key].length > 0)
+    }
+  }
+})
+
 test('homepage header actions are localized', () => {
   assert.equal(translations.en.landingHeaderSignIn, 'Sign in')
   assert.equal(translations.fil.landingHeaderSignIn, 'Mag-sign in')

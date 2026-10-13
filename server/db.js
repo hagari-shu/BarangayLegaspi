@@ -124,6 +124,17 @@ export async function listAllRequests() {
   }))
 }
 
+export async function listRequestsForStaffReports() {
+  const db = await readDb()
+  return db.requests.map((request) => ({
+    id: request.id,
+    type: request.type,
+    status: request.status,
+    date: request.date || request.createdAt || request.created_at,
+    statusHistory: request.statusHistory || request.status_history || [],
+  }))
+}
+
 export async function listReports() {
   const db = await readDb()
   return db.reports || []

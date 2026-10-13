@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import { Routes, Route, Navigate, Link, useNavigate, useLocation } from 'react-router-dom'
 import barangaySeal from './assets/barangay-seal-new.png'
@@ -183,12 +183,29 @@ const formatDateValue = (value) => {
   return parsed.toLocaleString()
 }
 
-function WorkflowModal({ title, onClose, children, wide = false, disableClose = false }) {
+function WorkflowModal({ title, onClose, children, wide = false, disableClose = false, closeLabel = 'Close dialog', closeButtonRef, trapFocus = false }) {
   const titleId = 'workflow-modal-title'
+  const modalRef = useRef(null)
   useEffect(() => {
     const previousOverflow = document.body.style.overflow
     const handleKeyDown = (event) => {
       if (event.key === 'Escape' && !disableClose) onClose()
+      if (event.key === 'Tab' && trapFocus) {
+        const focusableElements = modalRef.current?.querySelectorAll(
+          'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        )
+        if (!focusableElements?.length) return
+
+        const firstElement = focusableElements[0]
+        const lastElement = focusableElements[focusableElements.length - 1]
+        if (event.shiftKey && (document.activeElement === firstElement || !modalRef.current.contains(document.activeElement))) {
+          event.preventDefault()
+          lastElement.focus()
+        } else if (!event.shiftKey && (document.activeElement === lastElement || !modalRef.current.contains(document.activeElement))) {
+          event.preventDefault()
+          firstElement.focus()
+        }
+      }
     }
 
     document.body.style.overflow = 'hidden'
@@ -197,19 +214,20 @@ function WorkflowModal({ title, onClose, children, wide = false, disableClose = 
       document.body.style.overflow = previousOverflow
       document.removeEventListener('keydown', handleKeyDown)
     }
-  }, [disableClose, onClose])
+  }, [disableClose, onClose, trapFocus])
 
   return (
     <div className="modal-overlay" onMouseDown={(event) => {
       if (!disableClose && event.target === event.currentTarget) onClose()
     }}>
       <section
+        ref={modalRef}
         className={`modal-content workflow-modal${wide ? ' workflow-modal-wide' : ''}`}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
       >
-        <button type="button" className="modal-close" aria-label="Close dialog" onClick={onClose} disabled={disableClose}>×</button>
+        <button type="button" ref={closeButtonRef} className="modal-close" aria-label={closeLabel} onClick={onClose} disabled={disableClose}>×</button>
         <div className="modal-header workflow-modal-header"><h2 id={titleId}>{title}</h2></div>
         <div className="workflow-modal-body">{children}</div>
       </section>
@@ -1202,6 +1220,10 @@ function RegisterPage({ language, setLanguage }) {
 function DashboardPage({ profile, requests, services, announcements, events, payments, onLogout, onProfileUpdated, language, setLanguage }) {
   const t = translations[language] || translations.en
   const [searchQuery, setSearchQuery] = useState('')
+  const [selectedAnnouncement, setSelectedAnnouncement] = useState(null)
+  const announcementTriggerRef = useRef(null)
+  const announcementDetailsCloseRef = useRef(null)
+  const closeAnnouncementDetails = useCallback(() => setSelectedAnnouncement(null), [])
   const [editingProfile, setEditingProfile] = useState(false)
   const [showOnboarding, setShowOnboarding] = useState(() => {
     try {
@@ -1227,6 +1249,14 @@ function DashboardPage({ profile, requests, services, announcements, events, pay
   useEffect(() => {
     setProfileForm(profile)
   }, [profile])
+
+  useEffect(() => {
+    if (selectedAnnouncement) {
+      announcementDetailsCloseRef.current?.focus()
+    } else {
+      announcementTriggerRef.current?.focus()
+    }
+  }, [selectedAnnouncement])
 
   const handleProfileFieldChange = (field, value) => {
     setProfileForm((current) => ({ ...current, [field]: value }))
@@ -1490,13 +1520,28 @@ function DashboardPage({ profile, requests, services, announcements, events, pay
                 </div>
                 <ul className="notice-list">
                   {filteredAnnouncements.length > 0 ? filteredAnnouncements.map((announcement) => (
-                    <li key={`${announcement.title}-${announcement.date}`}>
+                    <li
+                      key={announcement.id || `${announcement.title}-${announcement.date}`}
+                      className={selectedAnnouncement === announcement ? 'announcement-current' : ''}
+                    >
                       <span className={`dot ${announcement.tag || 'green'}`} aria-hidden="true" />
-                      <div>
+                      <button
+                        type="button"
+                        className="resident-announcement-trigger"
+                        aria-label={t.openAnnouncementDetails.replace('{title}', announcement.title || t.announcements)}
+                        aria-pressed={selectedAnnouncement === announcement}
+                        onClick={(event) => {
+                          announcementTriggerRef.current = event.currentTarget
+                          setSelectedAnnouncement(announcement)
+                        }}
+                      >
                         <strong>{announcement.title}</strong>
                         <small>{announcement.date}</small>
                         <p>{announcement.content}</p>
-                      </div>
+                        {selectedAnnouncement === announcement && (
+                          <span className="announcement-current-label">{t.currentAnnouncement}</span>
+                        )}
+                      </button>
                     </li>
                   )) : <li><div className="empty-state">{t.noCurrentAnnouncements}</div></li>}
                 </ul>
@@ -1600,6 +1645,25 @@ function DashboardPage({ profile, requests, services, announcements, events, pay
           </div>
         </section>
       </main>
+      {selectedAnnouncement && (
+        <WorkflowModal
+          title={selectedAnnouncement.title || t.announcements}
+          closeLabel={t.closeAnnouncementDetails}
+          closeButtonRef={announcementDetailsCloseRef}
+          trapFocus
+          onClose={closeAnnouncementDetails}
+        >
+          <div className="announcement-details">
+            <span className="announcement-current-label">{t.currentAnnouncement}</span>
+            <p className="announcement-details-date">
+              <strong>{t.announcementDate}:</strong> {selectedAnnouncement.date || t.announcementDateUnavailable}
+            </p>
+            <p className="announcement-details-content">
+              {selectedAnnouncement.content || t.announcementDetailsUnavailable}
+            </p>
+          </div>
+        </WorkflowModal>
+      )}
       {notificationsOpen && (
         <div className="notification-popover" role="dialog" aria-label="Notification center">
           <div className="notification-popover-header">
@@ -2395,6 +2459,17 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
   const [dashboardError, setDashboardError] = useState('')
   const [dashboardUpdatedAt, setDashboardUpdatedAt] = useState(null)
   const [dashboardRefreshKey, setDashboardRefreshKey] = useState(0)
+  const [reportRefreshKey, setReportRefreshKey] = useState(0)
+  const [reportPeriod, setReportPeriod] = useState('last30')
+  const [reportRange, setReportRange] = useState(() => getReportDateRange('last30'))
+  const [reportType, setReportType] = useState('')
+  const [reportStatus, setReportStatus] = useState('')
+  const [reportData, setReportData] = useState(null)
+  const [reportLoading, setReportLoading] = useState(false)
+  const [reportError, setReportError] = useState('')
+  const [reportExporting, setReportExporting] = useState(false)
+  const [reportExportError, setReportExportError] = useState('')
+  const [reportValidationError, setReportValidationError] = useState('')
   const [todayDate] = useState(() => new Date())
   const [requestStatusDrafts, setRequestStatusDrafts] = useState({})
   const [requestStatusNotes, setRequestStatusNotes] = useState({})
@@ -2481,6 +2556,43 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
     }
   }, [debouncedQueueSearch, effectiveQueueStatus, queueZone, queueType, queueFrom, queueTo, queueSort, queueDirection, queuePage, queuePageSize, dashboardRefreshKey, t.requestDashboardUnavailable])
 
+  useEffect(() => {
+    if (activeTab !== 'reports' || reportValidationError) return undefined
+
+    let active = true
+    const controller = new AbortController()
+    const loadReport = async () => {
+      setReportLoading(true)
+      setReportError('')
+      const params = new URLSearchParams({
+        from: reportRange.from,
+        to: reportRange.to,
+        type: reportType,
+        status: reportStatus,
+      })
+      try {
+        const response = await fetch(`${API_BASE}/staff/reports?${params}`, { signal: controller.signal })
+        const data = await response.json().catch(() => ({}))
+        if (!response.ok) throw new Error(data.message || t.reportError)
+        if (active) setReportData(data)
+      } catch (error) {
+        if (error.name === 'AbortError') return
+        console.error('load staff reports error', error)
+        if (active) {
+          setReportData(null)
+          setReportError(error.message || t.reportError)
+        }
+      } finally {
+        if (active) setReportLoading(false)
+      }
+    }
+    loadReport()
+    return () => {
+      active = false
+      controller.abort()
+    }
+  }, [activeTab, reportRange, reportType, reportStatus, reportValidationError, reportRefreshKey, t.reportError])
+
   const pendingCount = Number(dashboardSummary.pending) || 0
   const inReviewCount = Number(dashboardSummary.inReview) || 0
   const needsInformationCount = Number(dashboardSummary.needsInformation) || 0
@@ -2494,6 +2606,91 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
     setQueueStatus(status)
     setQueuePage(1)
     setOpenRequestPanel('queue')
+  }
+
+  const handleReportPeriodChange = (period) => {
+    setReportPeriod(period)
+    setReportValidationError('')
+    if (period !== 'custom') setReportRange(getReportDateRange(period))
+  }
+
+  const handleReportDateChange = (field, value) => {
+    const nextRange = { ...reportRange, [field]: value }
+    setReportPeriod('custom')
+    setReportRange(nextRange)
+    setReportValidationError(nextRange.from && nextRange.to && nextRange.from > nextRange.to
+      ? t.reportCustomDateError
+      : '')
+  }
+
+  const clearReportFilters = () => {
+    setReportPeriod('all')
+    setReportRange({ from: '', to: '' })
+    setReportType('')
+    setReportStatus('')
+    setReportValidationError('')
+    setReportExportError('')
+  }
+
+  const setQueueFilterFromReport = (status) => {
+    setQueueStatus(status)
+    setQueueType(reportType || 'all')
+    setQueueFrom(reportRange.from)
+    setQueueTo(reportRange.to)
+    setQueuePage(1)
+    setOpenRequestPanel('queue')
+    setActiveTab('queue')
+  }
+
+  const exportReportCsv = async () => {
+    setReportExporting(true)
+    setReportExportError('')
+    const params = new URLSearchParams({
+      from: reportRange.from,
+      to: reportRange.to,
+      type: reportType,
+      status: reportStatus,
+    })
+    try {
+      const response = await fetch(`${API_BASE}/staff/reports/export.csv?${params}`)
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}))
+        throw new Error(data.message || t.reportError)
+      }
+      const blob = await response.blob()
+      const downloadUrl = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = downloadUrl
+      link.download = `service-requests-${reportRange.from && reportRange.to ? `${reportRange.from}-to-${reportRange.to}` : reportRange.from || reportRange.to || 'all-time'}.csv`
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      URL.revokeObjectURL(downloadUrl)
+    } catch (error) {
+      console.error('export staff reports CSV error', error)
+      setReportExportError(error.message || t.reportError)
+    } finally {
+      setReportExporting(false)
+    }
+  }
+
+  const formatReportPeriod = () => {
+    if (!reportRange.from && !reportRange.to) return t.reportAllTime
+    const locale = language === 'fil' ? 'fil-PH' : 'en-PH'
+    const format = (value) => new Intl.DateTimeFormat(locale, {
+      dateStyle: 'medium',
+      timeZone: 'Asia/Manila',
+    }).format(new Date(`${value}T12:00:00+08:00`))
+    if (reportRange.from && reportRange.to) return `${format(reportRange.from)} – ${format(reportRange.to)}`
+    return reportRange.from ? `${t.reportStartDate}: ${format(reportRange.from)}` : `${t.reportEndDate}: ${format(reportRange.to)}`
+  }
+
+  const formatDecisionTurnaround = (hours) => {
+    if (hours === null || hours === undefined) return t.systemUnknown
+    if (hours < 24) return `${hours}h`
+    const days = Math.floor(hours / 24)
+    const remainingHours = hours % 24
+    return remainingHours ? `${days}d ${remainingHours}h` : `${days}d`
   }
 
   const formatRequestDate = (value) => {
@@ -2983,51 +3180,207 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
               )}
 
               {activeTab === 'reports' && (
-                <article className="panel-card">
-                  <div className="panel-header">
-                    <h2>{t.serviceReports}</h2>
-                    <span className="soft-label">{t.requestTotals}</span>
-                  </div>
+                <section className="staff-reports-page" aria-labelledby="staff-reports-title">
+                  <article className="panel-card report-toolbar">
+                    <div className="panel-header">
+                      <div>
+                        <h2 id="staff-reports-title">{t.serviceReports}</h2>
+                        <p className="soft-label">{t.reportPeriod}: {formatReportPeriod()}</p>
+                      </div>
+                      <div className="report-toolbar-actions">
+                        <button type="button" className="secondary-btn small" onClick={clearReportFilters}>{t.reportClearFilters}</button>
+                        <button type="button" className="secondary-btn small" onClick={exportReportCsv} disabled={reportLoading || reportExporting || Boolean(reportValidationError)}>
+                          {reportExporting ? t.working : t.reportExportCsv}
+                        </button>
+                        <button type="button" className="secondary-btn small" onClick={() => window.print()} disabled={!reportData || Boolean(reportError) || Boolean(reportValidationError)}>{t.reportPrint}</button>
+                      </div>
+                    </div>
+                    <div className="report-filters">
+                      <label>{t.reportPeriod}
+                        <select value={reportPeriod} onChange={(event) => handleReportPeriodChange(event.target.value)}>
+                          <option value="today">{t.reportToday}</option>
+                          <option value="last7">{t.reportLast7Days}</option>
+                          <option value="last30">{t.reportLast30Days}</option>
+                          <option value="thisMonth">{t.reportThisMonth}</option>
+                          <option value="previousMonth">{t.reportPreviousMonth}</option>
+                          <option value="custom">{t.reportCustomRange}</option>
+                          <option value="all">{t.reportAllTime}</option>
+                        </select>
+                      </label>
+                      {reportPeriod === 'custom' && (
+                        <>
+                          <label>{t.reportStartDate}
+                            <input type="date" value={reportRange.from} max={reportRange.to || undefined} onChange={(event) => handleReportDateChange('from', event.target.value)} />
+                          </label>
+                          <label>{t.reportEndDate}
+                            <input type="date" value={reportRange.to} min={reportRange.from || undefined} onChange={(event) => handleReportDateChange('to', event.target.value)} />
+                          </label>
+                        </>
+                      )}
+                      <label>{t.reportRequestType}
+                        <select value={reportType} onChange={(event) => setReportType(event.target.value)}>
+                          <option value="">{t.reportAllTypes}</option>
+                          {(reportData?.requestTypes || []).map((type) => <option key={type} value={type}>{type}</option>)}
+                        </select>
+                      </label>
+                      <label>{t.reportCurrentStatus}
+                        <select value={reportStatus} onChange={(event) => setReportStatus(event.target.value)}>
+                          <option value="">{t.reportAllStatuses}</option>
+                          {(reportData?.statuses || []).map((status) => <option key={status} value={status}>{getRequestStatusLabel(status, t)}</option>)}
+                        </select>
+                      </label>
+                    </div>
+                    <p className="report-filter-basis">{t.reportFilterBasis}</p>
+                    {reportValidationError && <p className="report-error" role="alert">{reportValidationError}</p>}
+                    {reportError && <div className="report-error" role="alert">
+                      <span>{reportError}</span>
+                      <button type="button" className="secondary-btn small" onClick={() => setReportRefreshKey((current) => current + 1)}>{t.reportRetry}</button>
+                    </div>}
+                    {reportExportError && <p className="report-error" role="alert">{reportExportError}</p>}
+                  </article>
 
-                  <div className="report-grid">
-                    <div className="report-item">
-                      <div className="report-badge green">📈</div>
-                      <div>
-                        <h4>{t.requests}</h4>
-                        <p className="report-value">{totalRequests}</p>
+                  {reportLoading && <p className="request-dashboard-loading" role="status">{t.reportLoading}</p>}
+                  {!reportLoading && !reportError && !reportValidationError && reportData && (
+                    <>
+                      <div className="stats-grid report-summary-grid" aria-label={t.serviceReports}>
+                        <article className="stat-card report-summary-card accent">
+                          <span className="label">{t.reportReceived}</span>
+                          <span className="stat-number">{Number(reportData.summary.received).toLocaleString()}</span>
+                          <span className="staff-metric-description">{formatReportPeriod()}</span>
+                        </article>
+                        <button type="button" className="stat-card report-summary-card" onClick={() => setQueueFilterFromReport('Pending')}>
+                          <span className="label">{t.reportPendingReview}</span>
+                          <span className="stat-number">{Number(reportData.summary.pendingReview).toLocaleString()}</span>
+                          <span className="staff-metric-description">{t.pendingReviewDescription}</span>
+                        </button>
+                        <button type="button" className="stat-card report-summary-card" onClick={() => setQueueFilterFromReport('In Review')}>
+                          <span className="label">{t.reportInProcessing}</span>
+                          <span className="stat-number">{Number(reportData.summary.inProcessing).toLocaleString()}</span>
+                          <span className="staff-metric-description">{t.inProcessingDescription}</span>
+                        </button>
+                        <article className="stat-card report-summary-card unavailable">
+                          <span className="label">{t.reportOverdue}</span>
+                          <span className="stat-number">{t.reportNotTracked}</span>
+                          <span className="staff-metric-description">{t.deadlinesNotTracked}</span>
+                        </article>
                       </div>
-                    </div>
-                    <div className="report-item">
-                      <div className="report-badge blue">✓</div>
-                      <div>
-                        <h4>{t.approvedRequests}</h4>
-                        <p className="report-value">{approvedCount}</p>
-                      </div>
-                    </div>
-                    <div className="report-item">
-                      <div className="report-badge amber">⏳</div>
-                      <div>
-                        <h4>Pending Review</h4>
-                        <p className="report-value">{pendingCount}</p>
-                      </div>
-                    </div>
-                    <div className="report-item">
-                      <div className="report-badge">⚡</div>
-                      <div>
-                        <h4>{t.averageTurnaround}</h4>
-                        <p className="report-value">{t.systemUnknown}</p>
-                      </div>
-                    </div>
-                  </div>
 
-                  <div className="info-box" style={{marginTop: '20px'}}>
-                    <h3>Service Efficiency</h3>
-                    <dl>
-                      <div><dt>Approval Rate</dt><dd>{totalRequests > 0 ? Math.round((approvedCount / totalRequests) * 100) : 0}%</dd></div>
-                      <div><dt>Pending Rate</dt><dd>{totalRequests > 0 ? Math.round((pendingCount / totalRequests) * 100) : 0}%</dd></div>
-                    </dl>
-                  </div>
-                </article>
+                      {reportData.summary.missingSubmissionDates > 0 && (
+                        <p className="report-data-notice" role="status">
+                          {t.reportMissingDates.replace('{count}', String(reportData.summary.missingSubmissionDates))}
+                        </p>
+                      )}
+
+                      <div className="report-analytics-grid">
+                        <article className="panel-card report-analytics-panel">
+                          <div className="panel-header">
+                            <h2>{t.reportActivity}</h2>
+                            <span className="soft-label">{t.reportPeriod}: {formatReportPeriod()}</span>
+                          </div>
+                          <div className="report-chart-legend" aria-hidden="true">
+                            <span><i className="received" />{t.reportReceivedSeries}</span>
+                            <span><i className="decisions" />{t.reportDecisionSeries}</span>
+                          </div>
+                          {reportData.activity.length > 0 ? (
+                            <div className="report-activity-chart" role="img" aria-label={`${t.reportActivity}: ${t.reportReceivedSeries} and ${t.reportDecisionSeries}`}>
+                              {reportData.activity.map((item) => {
+                                const maximum = Math.max(1, ...reportData.activity.map((point) => Math.max(point.received, point.decisions)))
+                                const date = item.unit === 'month' ? `${item.period}-01T12:00:00+08:00` : `${item.period}T12:00:00+08:00`
+                                const label = new Intl.DateTimeFormat(language === 'fil' ? 'fil-PH' : 'en-PH', item.unit === 'month'
+                                  ? { month: 'short', year: 'numeric', timeZone: 'Asia/Manila' }
+                                  : { month: 'short', day: 'numeric', timeZone: 'Asia/Manila' }).format(new Date(date))
+                                return (
+                                  <div className="report-activity-row" key={item.period}>
+                                    <span className="report-activity-label">{label}</span>
+                                    <div className="report-activity-bars">
+                                      <div className="report-bar-track" title={`${t.reportReceivedSeries}: ${item.received}`}><span className="received" style={{ width: `${(item.received / maximum) * 100}%` }} /><b>{item.received}</b></div>
+                                      <div className="report-bar-track" title={`${t.reportDecisionSeries}: ${item.decisions}`}><span className="decisions" style={{ width: `${(item.decisions / maximum) * 100}%` }} /><b>{item.decisions}</b></div>
+                                    </div>
+                                  </div>
+                                )
+                              })}
+                            </div>
+                          ) : <p className="empty-state">{t.reportNoData}</p>}
+                        </article>
+
+                        <article className="panel-card report-analytics-panel">
+                          <div className="panel-header"><h2>{t.reportStatusBreakdown}</h2></div>
+                          <div className="report-breakdown-list">
+                            {reportData.statusDistribution.map(({ name, count }) => (
+                              <div className="report-breakdown-item" key={name}>
+                                <span>{getRequestStatusLabel(name, t)}</span>
+                                <span className="report-breakdown-track"><i style={{ width: `${reportData.summary.received ? (count / reportData.summary.received) * 100 : 0}%` }} /></span>
+                                <strong>{count.toLocaleString()}</strong>
+                              </div>
+                            ))}
+                            {!reportData.statusDistribution.length && <p className="empty-state">{t.reportNoData}</p>}
+                          </div>
+                        </article>
+
+                        <article className="panel-card report-analytics-panel">
+                          <div className="panel-header"><h2>{t.reportTypeBreakdown}</h2></div>
+                          <div className="report-breakdown-list">
+                            {reportData.typeBreakdown.map(({ name, count }) => (
+                              <button type="button" className="report-breakdown-item report-type-filter" key={name} onClick={() => setReportType((current) => current === name ? '' : name)} aria-pressed={reportType === name}>
+                                <span>{name}</span>
+                                <span className="report-breakdown-track"><i style={{ width: `${reportData.summary.received ? (count / reportData.summary.received) * 100 : 0}%` }} /></span>
+                                <strong>{count.toLocaleString()}</strong>
+                              </button>
+                            ))}
+                            {!reportData.typeBreakdown.length && <p className="empty-state">{t.reportNoData}</p>}
+                          </div>
+                        </article>
+
+                        <article className="panel-card report-analytics-panel">
+                          <div className="panel-header"><h2>{t.reportEfficiency}</h2></div>
+                          <dl className="report-efficiency-list">
+                            <div><dt>{t.reportApprovedDecisions}</dt><dd>{reportData.summary.approvedDecisions.toLocaleString()}</dd></div>
+                            <div><dt>{t.statusRejected}</dt><dd>{reportData.summary.rejectedDecisions.toLocaleString()}</dd></div>
+                            <div><dt>{t.reportApprovalRate}</dt><dd>{reportData.summary.approvalRate === null ? t.systemUnknown : `${reportData.summary.approvalRate}%`}</dd></div>
+                            <div><dt>{t.reportPendingRate}</dt><dd>{reportData.summary.pendingRate === null ? t.systemUnknown : `${reportData.summary.pendingRate}%`}</dd></div>
+                            <div><dt>{t.reportDecisionTurnaround}</dt><dd>{formatDecisionTurnaround(reportData.summary.averageDecisionHours)}</dd></div>
+                          </dl>
+                          <p className="report-metric-note">{t.reportDecisionBasis} {t.reportActiveBasis}</p>
+                        </article>
+
+                        <article className="panel-card report-analytics-panel">
+                          <div className="panel-header"><h2>{t.reportNeedsAttention}</h2></div>
+                          <div className="report-attention-list">
+                            <button type="button" onClick={() => setQueueFilterFromReport('Pending')}>
+                              <strong>{reportData.summary.pendingReview.toLocaleString()}</strong><span>{t.reportPendingReview}</span>
+                            </button>
+                            <button type="button" onClick={() => setQueueFilterFromReport('In Review')}>
+                              <strong>{reportData.summary.inProcessing.toLocaleString()}</strong><span>{t.reportInProcessing}</span>
+                            </button>
+                            <button type="button" onClick={() => setQueueFilterFromReport('Needs Information')}>
+                              <strong>{reportData.summary.needsInformation.toLocaleString()}</strong><span>{t.reportNeedsInformation}</span>
+                            </button>
+                            <p>{t.noReleaseOrDeadlineTracking}</p>
+                          </div>
+                        </article>
+
+                        <article className="panel-card report-analytics-panel report-decisions-panel">
+                          <div className="panel-header"><h2>{t.reportRecentDecisions}</h2></div>
+                          {reportData.recentDecisions.length > 0 ? (
+                            <ul className="report-decision-list">
+                              {reportData.recentDecisions.map((decision) => (
+                                <li key={`${decision.id}-${decision.date}`}>
+                                  <span><strong>{getRequestStatusLabel(decision.status, t)}</strong><small>{decision.type}</small></span>
+                                  <span className="report-decision-reference">{t.reportReference}: {decision.id}</span>
+                                  <time dateTime={decision.date}>{new Intl.DateTimeFormat(language === 'fil' ? 'fil-PH' : 'en-PH', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Asia/Manila' }).format(new Date(decision.date))}</time>
+                                </li>
+                              ))}
+                            </ul>
+                          ) : <p className="empty-state">{t.reportNoDecisions}</p>}
+                        </article>
+                      </div>
+                      <footer className="report-footer">
+                        <span>{t.reportGeneratedAt}: {new Intl.DateTimeFormat(language === 'fil' ? 'fil-PH' : 'en-PH', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Asia/Manila' }).format(new Date(reportData.generatedAt))}</span>
+                        <span>{t.reportDecisionBasis}</span>
+                      </footer>
+                    </>
+                  )}
+                </section>
               )}
 
               {activeTab === 'announcements' && (

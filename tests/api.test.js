@@ -162,6 +162,25 @@ test('staff request dashboard returns authorized, filtered, paginated records an
     assert.equal(searchResult.total, 1)
     assert.equal(searchResult.requests[0].id, requestIds[0])
 
+    const reportResponse = await fetch(`${baseUrl}/api/staff/reports?from=2026-10-09&to=2026-10-10`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    assert.equal(reportResponse.status, 200)
+    const report = await reportResponse.json()
+    assert.equal(report.summary.received, 2)
+    assert.equal(Object.hasOwn(report, 'requests'), false)
+    assert.equal(JSON.stringify(report).includes(resident.email), false)
+    assert.equal(JSON.stringify(report).includes(resident.mobile), false)
+
+    const exportResponse = await fetch(`${baseUrl}/api/staff/reports/export.csv?from=2026-10-09&to=2026-10-10`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    assert.equal(exportResponse.status, 200)
+    const exportedCsv = await exportResponse.text()
+    assert.match(exportedCsv, /Barangay Clearance/)
+    assert.equal(exportedCsv.includes(resident.email), false)
+    assert.equal(exportedCsv.includes(resident.mobile), false)
+
     const residentLoginResponse = await fetch(`${baseUrl}/api/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -172,6 +191,10 @@ test('staff request dashboard returns authorized, filtered, paginated records an
       headers: { Authorization: `Bearer ${residentToken}` },
     })
     assert.equal(forbiddenResponse.status, 403)
+    const forbiddenReportResponse = await fetch(`${baseUrl}/api/staff/reports`, {
+      headers: { Authorization: `Bearer ${residentToken}` },
+    })
+    assert.equal(forbiddenReportResponse.status, 403)
 
     const invalidPageSize = await fetch(`${baseUrl}/api/staff/dashboard-requests?pageSize=500`, {
       headers: { Authorization: `Bearer ${token}` },
