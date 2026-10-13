@@ -1444,10 +1444,18 @@ export function createApp() {
       }
 
       const rawDays = req.body?.days
-      const parsedDays = rawDays === undefined || rawDays === null || rawDays === '' ? 1 : Number(rawDays)
-      const days = Number.isFinite(parsedDays) ? Math.max(0, parsedDays) : 1
-      const result = await store.archiveProcessedRequestsOlderThan?.(days)
-      return res.json({ archive: result || null })
+      const missingRetention = rawDays === undefined
+        || rawDays === null
+        || (typeof rawDays === 'string' && rawDays.trim() === '')
+      const days = missingRetention ? 30 : Number(rawDays)
+      if ((!missingRetention && !['number', 'string'].includes(typeof rawDays)) || !Number.isInteger(days) || days < 0) {
+        return res.status(400).json({ message: 'Retention days must be a non-negative whole number.' })
+      }
+      if (typeof store.archiveProcessedRequestsOlderThan !== 'function') {
+        throw new Error('Processed request archiving is not available for the configured storage backend.')
+      }
+      const result = await store.archiveProcessedRequestsOlderThan(days)
+      return res.json({ archive: result })
     } catch (e) {
       console.error('archive-requests error', e)
       return res.status(500).json({ message: 'Failed to archive queue and approval records.' })

@@ -608,8 +608,11 @@ export async function archiveApprovalsOlderThan(days = 30) {
   }
 }
 
-export async function archiveProcessedRequestsOlderThan(days = 1) {
-  const daysValue = Math.max(0, Number(days) || 0)
+export async function archiveProcessedRequestsOlderThan(days = 30) {
+  const daysValue = Number(days)
+  if (!Number.isInteger(daysValue) || daysValue < 0) {
+    throw new TypeError('Archive retention days must be a non-negative whole number.')
+  }
   const client = await pool.connect()
   try {
     await client.query('BEGIN')
@@ -627,17 +630,16 @@ export async function archiveProcessedRequestsOlderThan(days = 1) {
       return { count: 0, filename: null, archivedAt: null }
     }
     const archivedAt = new Date().toISOString()
-    const filename = `queue-approvals-${archivedAt.slice(0, 10)}.json`
+    const filename = `queue-approvals-${archivedAt.slice(0, 10)}-${Date.now()}-${randomUUID().slice(0, 8)}.json`
     const payload = {
       archivedAt,
-      archivedFor: daysValue === 0 ? 'manual' : `${daysValue} day(s)`,
+      archivedFor: daysValue === 0 ? 'all processed requests' : `${daysValue} day(s)`,
       total: records.length,
       records,
     }
     await client.query(
       `INSERT INTO archives (id, name, category, contents, created_at)
-       VALUES ($1, $2, 'queue-approvals', $3, $4)
-       ON CONFLICT (name) DO UPDATE SET contents = EXCLUDED.contents, created_at = EXCLUDED.created_at`,
+       VALUES ($1, $2, 'queue-approvals', $3, $4)`,
       [randomUUID(), filename, JSON.stringify(payload), archivedAt]
     )
     await client.query('DELETE FROM requests WHERE id = ANY($1::uuid[])', [records.map((request) => request.id)])

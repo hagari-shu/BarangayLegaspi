@@ -36,7 +36,9 @@ test('Filipino role dashboards have translated controls and accessible navigatio
   assert.equal(fil.needsReview, 'Kailangang suriin')
   assert.equal(fil.averageTurnaround, 'Karaniwang tagal ng pagproseso')
   assert.equal(fil.requestQueueSearch, 'Maghanap ayon sa residente, serbisyo, o layunin')
-  assert.equal(fil.archiveLastDay, 'I-archive ang nakalipas na 24 oras')
+  assert.equal(fil.archiveOlderThan30Days, 'I-archive ang mga naprosesong request na mahigit 30 araw na')
+  assert.equal(fil.archiveAllProcessed, 'I-archive ang lahat ng naprosesong request')
+  assert.equal(fil.staffProfile, 'Profile ng staff')
 })
 
 test('Filipino resident, staff, and admin dashboard copy is localized', () => {
@@ -47,6 +49,9 @@ test('Filipino resident, staff, and admin dashboard copy is localized', () => {
   assert.equal(fil.noRequestSubmitted, 'Wala pang isinumiteng kahilingan')
   assert.equal(fil.noRequestsMatchFilters, 'Walang kahilingang tumutugma sa mga piniling filter.')
   assert.equal(fil.staffNoteFor, 'Tala ng kawani para sa {service}')
+  assert.ok(!translations.en.requestStatusApprovedMessage.toLowerCase().includes('completed'))
+  assert.ok(translations.en.requestStatusApprovedMessage.includes('released'))
+  assert.ok(!fil.requestStatusApprovedMessage.toLowerCase().includes('natapos'))
   assert.equal(fil.residentManagement, 'Pamamahala sa Resident')
   assert.equal(fil.noEmergencyReports, 'Walang naitalang ulat sa emergency.')
 })
@@ -87,6 +92,16 @@ test('staff request dashboard labels are localized and distinguish approval from
     for (const key of [
       'staffDashboardTitle',
       'staffDashboardSubtitle',
+      'processedArchiveConfirmTitle',
+      'processedArchiveOlderMessage',
+      'processedArchiveAllMessage',
+      'archiveOlderThan30Days',
+      'archiveAllProcessed',
+      'staffArchiveFailed',
+      'staffArchivesLoadFailed',
+      'requestTotals',
+      'staffProfile',
+      'staffScheduleNotTracked',
       'pendingReviewMetric',
       'inProcessingMetric',
       'readyForReleaseMetric',

@@ -1693,11 +1693,11 @@ function RequestsPage({ requests, onSubmit, onRequestUpdated, onLogout, language
   const recentRequests = [...(requests || [])].slice(0, 3)
 
   const getRequestStatusMessage = (status) => {
-    if (status === 'Approved') return 'Completed by the barangay team.'
-    if (status === 'Rejected') return 'This request was declined. Check the history for staff notes.'
-    if (status === 'Needs Information') return 'Barangay staff need more information. Reply below to continue.'
-    if (status === 'In Review') return 'Your request is actively being reviewed by barangay staff.'
-    return 'Your request has been submitted and is waiting for initial review.'
+    if (status === 'Approved') return t.requestStatusApprovedMessage
+    if (status === 'Rejected') return t.requestStatusRejectedMessage
+    if (status === 'Needs Information') return t.requestStatusNeedsInformationMessage
+    if (status === 'In Review') return t.requestStatusInReviewMessage
+    return t.requestStatusPendingMessage
   }
 
   const handleChange = (event) => {
@@ -2411,6 +2411,7 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
   const [showStaffForm, setShowStaffForm] = useState(false)
   const [showAnnouncementForm, setShowAnnouncementForm] = useState(false)
   const [archiveFiles, setArchiveFiles] = useState([])
+  const [archiveError, setArchiveError] = useState('')
   const [archiveStatus, setArchiveStatus] = useState(null)
   const [archiving, setArchiving] = useState(false)
   const [activeRecordsPanel, setActiveRecordsPanel] = useState(null)
@@ -2512,15 +2513,14 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
   const loadArchiveFiles = async () => {
     try {
       const response = await fetch(`${API_BASE}/staff/archives`)
-      if (!response.ok) {
-        setArchiveFiles([])
-        return
-      }
-      const data = await response.json()
-      setArchiveFiles(data.archives || [])
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(data.message || t.staffArchivesLoadFailed)
+      if (!Array.isArray(data.archives)) throw new Error(t.staffArchivesLoadFailed)
+      setArchiveFiles(data.archives)
+      setArchiveError('')
     } catch (error) {
       console.error('load archive files error', error)
-      setArchiveFiles([])
+      setArchiveError(t.staffArchivesLoadFailed)
     }
   }
 
@@ -2547,9 +2547,9 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
     if (activeTab === 'queue' || activeTab === 'approvals') {
       loadArchiveFiles()
     }
-  }, [activeTab])
+  }, [activeTab, t.staffArchivesLoadFailed])
 
-  const handleArchiveQueue = async (days = 1) => {
+  const handleArchiveQueue = async (days = 30) => {
     setArchiving(true)
     setArchiveStatus(null)
     try {
@@ -2560,13 +2560,14 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
       })
       const data = await response.json().catch(() => ({}))
       if (!response.ok) {
-        throw new Error(data.message || 'Archive failed')
+        throw new Error(data.message || t.staffArchiveFailed)
       }
       setArchiveStatus(data.archive || null)
+      setDashboardRefreshKey((current) => current + 1)
       await loadArchiveFiles()
     } catch (error) {
       console.error('staff archive error', error)
-      alert(error.message || 'Archive failed')
+      throw new Error(error.message || t.staffArchiveFailed)
     } finally {
       setArchiving(false)
     }
@@ -2977,7 +2978,7 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
                 <article className="panel-card">
                   <div className="panel-header">
                     <h2>{t.serviceReports}</h2>
-                    <span className="soft-label">{t.monthlyStatistics}</span>
+                    <span className="soft-label">{t.requestTotals}</span>
                   </div>
 
                   <div className="report-grid">
@@ -3255,20 +3256,36 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
                     onClick={() => setActiveRecordsPanel((prev) => prev === 'archive' ? null : 'archive')}
                   >
                     <span className="record-panel-title">{t.archiveQueueApprovals}</span>
-                    <span className="record-panel-count">{archiveFiles.length}</span>
+                    <span className="record-panel-count">{archiveError ? '—' : archiveFiles.length}</span>
                   </button>
 
                   {activeRecordsPanel === 'archive' && (
                     <div className="record-dedicated-space">
                       <div className="record-details archive-record-details">
-                        <div className="archive-inline-actions">
-                          <button type="button" className="secondary-btn small" onClick={() => handleArchiveQueue(1)} disabled={archiving}>{t.archiveLastDay}</button>
-                          <button type="button" className="primary-btn small" onClick={() => handleArchiveQueue(0)} disabled={archiving}>{t.storeToday}</button>
-                        </div>
                         {archiveStatus && (
                           <p className="archive-note">{t.archiveSummary.replace('{count}', String(archiveStatus.count || 0)).replace('{date}', new Date(archiveStatus.archivedAt || Date.now()).toLocaleDateString(language === 'fil' ? 'fil-PH' : 'en-PH'))}</p>
                         )}
-                        <div className="archive-list">
+                        <div className="archive-inline-actions">
+                          <button type="button" className="secondary-btn small" onClick={() => setConfirmation({
+                            title: t.processedArchiveConfirmTitle,
+                            message: t.processedArchiveOlderMessage,
+                            confirmLabel: t.archiveOlderThan30Days,
+                            onConfirm: () => handleArchiveQueue(30),
+                          })} disabled={archiving}>{t.archiveOlderThan30Days}</button>
+                          <button type="button" className="primary-btn small" onClick={() => setConfirmation({
+                            title: t.processedArchiveConfirmTitle,
+                            message: t.processedArchiveAllMessage,
+                            confirmLabel: t.archiveAllProcessed,
+                            onConfirm: () => handleArchiveQueue(0),
+                          })} disabled={archiving}>{t.archiveAllProcessed}</button>
+                        </div>
+                        {archiveError && (
+                          <div className="request-dashboard-error" role="alert">
+                            <span>{archiveError}</span>
+                            <button type="button" className="secondary-btn small" onClick={loadArchiveFiles}>{t.retry}</button>
+                          </div>
+                        )}
+                        {!archiveError && <div className="archive-list">
                           {archiveFiles.length > 0 ? archiveFiles.map((file) => (
                             <div key={file.name} className="archive-item">
                               <div className="archive-main">
@@ -3283,7 +3300,7 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
                           )) : (
                             <p className="soft-label">{t.noArchivedQueueRecords}</p>
                           )}
-                        </div>
+                        </div>}
                       </div>
                     </div>
                   )}
@@ -3292,18 +3309,17 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
 
               <article className="profile-card">
                 <div className="profile-head">
-                  <div className="profile-avatar">S</div>
+                  <div className="profile-avatar">{(currentUser?.firstName || currentUser?.first_name || 'S').charAt(0)}</div>
                   <div>
-                    <h3>{t.staffHighlights}</h3>
-                    <span>{t.staffSupportDesk}</span>
+                    <h3>{t.staffProfile}</h3>
+                    <span>{getDisplayName(currentUser)}</span>
                   </div>
                 </div>
                 <dl className="profile-list">
-                  <div><dt>{t.shift}</dt><dd>08:00 AM – 05:00 PM</dd></div>
-                  <div><dt>{t.desk}</dt><dd>{t.serviceDesk}</dd></div>
-                  <div><dt>{t.priority}</dt><dd>{t.certificateClearance}</dd></div>
-                  <div><dt>{t.notesLabel}</dt><dd>{t.responseTimeTarget}</dd></div>
+                  <div><dt>{t.positionLabel}</dt><dd>{getStaffPositionLabel(currentUser?.position || t.staffRole, t)}</dd></div>
+                  <div><dt>{t.status}</dt><dd>{currentUser?.status || t.notAvailable}</dd></div>
                 </dl>
+                <p className="workflow-limit-notice">{t.staffScheduleNotTracked}</p>
               </article>
             </aside>
           </div>

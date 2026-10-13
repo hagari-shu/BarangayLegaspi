@@ -375,12 +375,15 @@ export async function archiveApprovalsOlderThan(days = 30) {
   return { filename: archivePath, count: old.length }
 }
 
-export async function archiveProcessedRequestsOlderThan(days = 1) {
+export async function archiveProcessedRequestsOlderThan(days = 30) {
   const db = await readDb()
   db.requests = db.requests || []
 
   const processed = db.requests.filter((request) => ['Approved', 'Rejected'].includes(request.status))
-  const daysValue = Number(days) || 1
+  const daysValue = Number(days)
+  if (!Number.isInteger(daysValue) || daysValue < 0) {
+    throw new TypeError('Archive retention days must be a non-negative whole number.')
+  }
   const cutoff = Date.now() - daysValue * 24 * 60 * 60 * 1000
 
   const old = daysValue === 0
@@ -395,18 +398,18 @@ export async function archiveProcessedRequestsOlderThan(days = 1) {
     return { count: 0, filename: null, archivedAt: null }
   }
 
-  const archiveDir = `${DB_PATH.replace('db.json', '')}archives/`
-  await fs.mkdir(archiveDir, { recursive: true })
+  await fs.mkdir(archiveDirectory, { recursive: true })
 
   const today = new Date().toISOString().slice(0, 10)
-  const filename = `${archiveDir}queue-approvals-${today}.json`
+  const filename = `queue-approvals-${today}-${Date.now()}-${randomUUID().slice(0, 8)}.json`
+  const archivePath = path.join(archiveDirectory, filename)
   const archivePayload = {
     archivedAt: new Date().toISOString(),
-    archivedFor: daysValue === 0 ? 'manual' : `${daysValue} day(s)`,
+    archivedFor: daysValue === 0 ? 'all processed requests' : `${daysValue} day(s)`,
     total: old.length,
     records: old,
   }
-  await fs.writeFile(filename, JSON.stringify(archivePayload, null, 2), 'utf8')
+  await fs.writeFile(archivePath, JSON.stringify(archivePayload, null, 2), 'utf8')
 
   db.requests = db.requests.filter((request) => !old.some((archived) => archived.id === request.id))
   await writeDb(db)

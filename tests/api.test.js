@@ -122,6 +122,8 @@ test('staff request dashboard returns authorized, filtered, paginated records an
       status: 'Pending',
       date: '2026-10-09T10:00:00+08:00',
     })
+
+
     await jsonDb.saveRequest({
       id: requestIds[1],
       userId: resident.id,
@@ -177,6 +179,114 @@ test('staff request dashboard returns authorized, filtered, paginated records an
     assert.equal(invalidPageSize.status, 400)
   } finally {
     server.close()
+  }
+})
+
+
+test('staff processed-request archives use a safe retention default and preserve separate archives', async () => {
+  const { server, baseUrl } = await createTestServer()
+  const staff = {
+    id: randomUUID(),
+    firstName: 'Staff',
+    lastName: 'Archive',
+    mobile: `092${Math.floor(10000000 + Math.random() * 90000000)}`,
+    email: `staff.archive.${Date.now()}@example.com`,
+    passwordHash: await hashPassword('StaffPass123!'),
+    role: 'staff',
+    status: 'On Duty',
+  }
+  const archiveNames = []
+
+  try {
+    await jsonDb.saveUser(staff)
+    const resident = (await jsonDb.listAllUsers()).find((user) => user.role === 'resident')
+    const olderThan30Days = {
+      id: randomUUID(),
+      userId: resident.id,
+      type: 'Barangay Certificate',
+      purpose: 'Older processed request',
+      status: 'Approved',
+      date: new Date(Date.now() - 45 * 24 * 60 * 60 * 1000).toISOString(),
+      updatedAt: new Date(Date.now() - 45 * 24 * 60 * 60 * 1000).toISOString(),
+    }
+    const recentProcessed = {
+      id: randomUUID(),
+      userId: resident.id,
+      type: 'Barangay Clearance',
+      purpose: 'Recent processed request',
+      status: 'Rejected',
+      date: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    }
+    const pending = {
+      id: randomUUID(),
+      userId: resident.id,
+      type: 'Medical Assistance',
+      purpose: 'Unprocessed request',
+      status: 'Pending',
+      date: new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString(),
+      updatedAt: new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString(),
+    }
+    await jsonDb.saveRequest(olderThan30Days)
+    await jsonDb.saveRequest(recentProcessed)
+    await jsonDb.saveRequest(pending)
+
+    const loginResponse = await fetch(`${baseUrl}/api/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ identifier: staff.email, password: 'StaffPass123!' }),
+    })
+    assert.equal(loginResponse.status, 200)
+    const { token } = await loginResponse.json()
+    const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }
+    const endpoint = `${baseUrl}/api/staff/archive-requests`
+
+    const invalidRetention = await fetch(endpoint, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ days: 1.5 }),
+    })
+    assert.equal(invalidRetention.status, 400)
+
+    const invalidBooleanRetention = await fetch(endpoint, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ days: false }),
+    })
+    assert.equal(invalidBooleanRetention.status, 400)
+
+    const defaultArchiveResponse = await fetch(endpoint, { method: 'POST', headers })
+    assert.equal(defaultArchiveResponse.status, 200)
+    const defaultArchive = (await defaultArchiveResponse.json()).archive
+    assert.equal(defaultArchive.count, 1)
+    archiveNames.push(path.basename(defaultArchive.filename))
+    assert.deepEqual((await jsonDb.getArchive(archiveNames[0])).records.map((request) => request.id), [olderThan30Days.id])
+    assert.deepEqual((await jsonDb.listAllRequests()).map((request) => request.id).sort(), [pending.id, recentProcessed.id].sort())
+
+    const archiveAllResponse = await fetch(endpoint, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ days: 0 }),
+    })
+    assert.equal(archiveAllResponse.status, 200)
+    const archiveAll = (await archiveAllResponse.json()).archive
+    assert.equal(archiveAll.count, 1)
+    archiveNames.push(path.basename(archiveAll.filename))
+    assert.notEqual(archiveNames[0], archiveNames[1])
+    assert.deepEqual((await jsonDb.getArchive(archiveNames[1])).records.map((request) => request.id), [recentProcessed.id])
+    assert.deepEqual((await jsonDb.listAllRequests()).map((request) => request.id), [pending.id])
+
+    const archiveListResponse = await fetch(`${baseUrl}/api/staff/archives`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    assert.equal(archiveListResponse.status, 200)
+    const listedNames = (await archiveListResponse.json()).archives.map((archive) => archive.name)
+    assert.ok(archiveNames.every((name) => listedNames.includes(name)))
+  } finally {
+    await Promise.all(archiveNames.map((name) => jsonDb.deleteArchive(name)))
+    await new Promise((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()))
+    })
   }
 })
 
