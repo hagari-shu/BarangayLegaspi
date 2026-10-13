@@ -670,95 +670,13 @@ test('admin-assigned staff positions persist in login profiles and the staff dir
   }
 })
 
-test('authenticated roles save private quality ratings and admins receive anonymous aggregates only', async () => {
+test('quality assessment endpoints are no longer exposed', async () => {
   const { server, baseUrl } = await createTestServer()
-  const staffPassword = 'StaffPass123!'
-  await jsonDb.saveUser({
-    id: randomUUID(),
-    firstName: 'Quality',
-    lastName: 'Staff',
-    mobile: `091${Math.floor(10000000 + Math.random() * 90000000)}`,
-    email: `quality.staff.${Date.now()}@example.com`,
-    passwordHash: await hashPassword(staffPassword),
-    role: 'staff',
-    status: 'On Duty',
-    createdAt: new Date().toISOString(),
-  })
-
-  const database = await jsonDb.readDb()
-  const staff = database.users.find((user) => user.role === 'staff' && user.email.startsWith('quality.staff.'))
 
   try {
-    const login = async (identifier, password) => {
-      const response = await fetch(`${baseUrl}/api/login`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ identifier, password }),
-      })
-      assert.equal(response.status, 200)
-      return (await response.json()).token
-    }
-    const [residentToken, staffToken, adminToken] = await Promise.all([
-      login('maria.delacruz@email.com', 'ResidentPass123!'),
-      login(staff.email, staffPassword),
-      login('admin@barangay.gov.ph', 'AdminPass123'),
-    ])
-    const factorScores = (correctness) => ({
-      correctness,
-      reliability: null,
-      efficiency: null,
-      integrity: null,
-      usability: null,
-      maintainability: null,
-      flexibility: null,
-      testability: null,
-      portability: null,
-      reusability: null,
-      interoperability: null,
-    })
-    const save = (token, scores) => fetch(`${baseUrl}/api/quality-assessment`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ scores, notes: { correctness: 'This private browser note must not reach the API.' } }),
-    })
-
-    assert.equal((await fetch(`${baseUrl}/api/quality-assessment`)).status, 401)
-    assert.equal((await save(residentToken, { ...factorScores(5), unsupported: 4 })).status, 400)
-
-    for (const [token, score] of [[residentToken, 5], [staffToken, 3], [adminToken, 1]]) {
-      const saveResponse = await save(token, factorScores(score))
-      assert.equal(saveResponse.status, 200)
-      const saveData = await saveResponse.json()
-      assert.equal(saveData.assessment.scores.correctness, score)
-
-      const ownAssessmentResponse = await fetch(`${baseUrl}/api/quality-assessment`, {
-        headers: { Authorization: `Bearer ${token}` },
-      })
-      assert.equal(ownAssessmentResponse.status, 200)
-      assert.equal((await ownAssessmentResponse.json()).assessment.scores.correctness, score)
-    }
-
-    const aggregateResponse = await fetch(`${baseUrl}/api/admin/quality-assessments`, {
-      headers: { Authorization: `Bearer ${adminToken}` },
-    })
-    assert.equal(aggregateResponse.status, 200)
-    const { summary } = await aggregateResponse.json()
-    assert.equal(summary.responseCount, 3)
-    assert.equal(summary.totalRatings, 3)
-    assert.equal(summary.average, 3)
-    assert.equal(summary.factors.correctness.average, 3)
-    assert.equal(summary.factors.correctness.ratedCount, 3)
-    assert.equal(JSON.stringify(summary).includes(staff.email), false)
-    assert.equal(JSON.stringify(summary).includes('private browser note'), false)
-
-    const forbiddenSummaryResponse = await fetch(`${baseUrl}/api/admin/quality-assessments`, {
-      headers: { Authorization: `Bearer ${residentToken}` },
-    })
-    assert.equal(forbiddenSummaryResponse.status, 403)
-
-    const storedAssessments = await jsonDb.listQualityAssessments()
-    assert.equal(storedAssessments.length, 3)
-    assert.equal(JSON.stringify(storedAssessments).includes('private browser note'), false)
+    assert.equal((await fetch(`${baseUrl}/api/quality-assessment`)).status, 404)
+    assert.equal((await fetch(`${baseUrl}/api/quality-assessment`, { method: 'PUT' })).status, 404)
+    assert.equal((await fetch(`${baseUrl}/api/admin/quality-assessments`)).status, 404)
   } finally {
     await new Promise((resolve, reject) => {
       server.close((error) => (error ? reject(error) : resolve()))

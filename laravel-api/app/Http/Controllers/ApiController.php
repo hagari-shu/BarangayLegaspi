@@ -17,18 +17,6 @@ class ApiController extends Controller
 {
     private const PASSWORD_REQUIREMENTS = 'at least 8 characters, one uppercase letter, one lowercase letter, one number, and one special character';
 
-    private const QUALITY_FACTORS = [
-        'correctness', 'reliability', 'efficiency', 'integrity', 'usability',
-        'maintainability', 'flexibility', 'testability',
-        'portability', 'reusability', 'interoperability',
-    ];
-
-    private const QUALITY_GROUPS = [
-        'productOperation' => ['correctness', 'reliability', 'efficiency', 'integrity', 'usability'],
-        'productRevision' => ['maintainability', 'flexibility', 'testability'],
-        'productTransition' => ['portability', 'reusability', 'interoperability'],
-    ];
-
     private const SERVICES = [
         ['icon' => '📄', 'title' => 'Barangay Certificate', 'subtitle' => 'Request and claim', 'tone' => 'green'],
         ['icon' => '🏥', 'title' => 'Health Assistance', 'subtitle' => 'Access public health support', 'tone' => 'blue'],
@@ -244,110 +232,6 @@ class ApiController extends Controller
     public function profile(Request $request): JsonResponse
     {
         return response()->json(['user' => $this->publicUser($request->attributes->get('actor'))]);
-    }
-
-    public function qualityAssessment(Request $request): JsonResponse
-    {
-        $actor = $request->attributes->get('actor');
-        $stored = DB::table('quality_assessments')->where('user_id', $actor->id)->first();
-        $scores = $stored ? json_decode($stored->scores, true) : null;
-
-        return response()->json([
-            'assessment' => [
-                'scores' => $this->normalizeQualityScores($scores),
-                'updatedAt' => $stored?->updated_at ? date(DATE_ATOM, strtotime($stored->updated_at)) : null,
-            ],
-        ]);
-    }
-
-    public function saveQualityAssessment(Request $request): JsonResponse
-    {
-        $actor = $request->attributes->get('actor');
-        $scores = $request->input('scores');
-        if (!is_array($scores) || array_is_list($scores) || array_diff(array_keys($scores), self::QUALITY_FACTORS)) {
-            return response()->json(['message' => 'Assessment scores must contain only supported factors.'], 400);
-        }
-
-        $normalizedScores = [];
-        foreach (self::QUALITY_FACTORS as $factor) {
-            $score = $scores[$factor] ?? null;
-            if ($score !== null && (!is_int($score) || $score < 1 || $score > 5)) {
-                return response()->json(['message' => "Invalid score for {$factor}."], 400);
-            }
-            $normalizedScores[$factor] = $score;
-        }
-
-        $updatedAt = now();
-        DB::table('quality_assessments')->updateOrInsert(
-            ['user_id' => $actor->id],
-            [
-                'role' => $actor->role,
-                'scores' => json_encode($normalizedScores, JSON_THROW_ON_ERROR),
-                'updated_at' => $updatedAt,
-            ],
-        );
-
-        return response()->json([
-            'assessment' => [
-                'scores' => $normalizedScores,
-                'updatedAt' => $updatedAt->toAtomString(),
-            ],
-        ]);
-    }
-
-    public function qualityAssessmentSummary(): JsonResponse
-    {
-        $responses = DB::table('quality_assessments')->get(['scores']);
-        $totals = array_fill_keys(self::QUALITY_FACTORS, 0);
-        $counts = array_fill_keys(self::QUALITY_FACTORS, 0);
-
-        foreach ($responses as $response) {
-            $scores = json_decode($response->scores, true);
-            foreach (self::QUALITY_FACTORS as $factor) {
-                $score = $scores[$factor] ?? null;
-                if (is_int($score) && $score >= 1 && $score <= 5) {
-                    $totals[$factor] += $score;
-                    $counts[$factor]++;
-                }
-            }
-        }
-
-        $average = static fn (int $total, int $count): ?float => $count === 0 ? null : round($total / $count, 1);
-        $factors = [];
-        foreach (self::QUALITY_FACTORS as $factor) {
-            $factors[$factor] = ['average' => $average($totals[$factor], $counts[$factor]), 'ratedCount' => $counts[$factor]];
-        }
-
-        $groups = [];
-        foreach (self::QUALITY_GROUPS as $group => $groupFactors) {
-            $total = array_sum(array_intersect_key($totals, array_flip($groupFactors)));
-            $count = array_sum(array_intersect_key($counts, array_flip($groupFactors)));
-            $groups[$group] = ['average' => $average($total, $count), 'ratedCount' => $count];
-        }
-
-        $totalRatings = array_sum($counts);
-        $totalScore = array_sum($totals);
-
-        return response()->json([
-            'summary' => [
-                'responseCount' => $responses->count(),
-                'totalRatings' => $totalRatings,
-                'average' => $average($totalScore, $totalRatings),
-                'factors' => $factors,
-                'groups' => $groups,
-            ],
-        ]);
-    }
-
-    private function normalizeQualityScores(?array $scores): array
-    {
-        $normalized = [];
-        foreach (self::QUALITY_FACTORS as $factor) {
-            $score = $scores[$factor] ?? null;
-            $normalized[$factor] = is_int($score) && $score >= 1 && $score <= 5 ? $score : null;
-        }
-
-        return $normalized;
     }
 
     public function updateProfile(Request $request): JsonResponse

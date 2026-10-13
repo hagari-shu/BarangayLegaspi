@@ -179,15 +179,6 @@ export async function initDatabase() {
   `)
   await query("ALTER TABLE announcements ADD COLUMN IF NOT EXISTS social_channels JSONB NOT NULL DEFAULT '[]'::jsonb")
 
-  await query(`
-    CREATE TABLE IF NOT EXISTS quality_assessments (
-      user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
-      role VARCHAR(30) NOT NULL,
-      scores JSONB NOT NULL,
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    );
-  `)
-
   if (SHOULD_SKIP_SEED || (IS_PRODUCTION && !ADMIN_SEED.password)) {
     return
   }
@@ -222,31 +213,6 @@ export async function initDatabase() {
       'Available',
     ]
   )
-}
-
-export async function getQualityAssessment(userId) {
-  const result = await query(
-    'SELECT user_id AS "userId", role, scores, updated_at AS "updatedAt" FROM quality_assessments WHERE user_id = $1',
-    [userId],
-  )
-  return result.rows[0] || null
-}
-
-export async function saveQualityAssessment(assessment) {
-  const result = await query(
-    `INSERT INTO quality_assessments (user_id, role, scores, updated_at)
-     VALUES ($1, $2, $3, $4)
-     ON CONFLICT (user_id) DO UPDATE
-     SET role = EXCLUDED.role, scores = EXCLUDED.scores, updated_at = EXCLUDED.updated_at
-     RETURNING user_id AS "userId", role, scores, updated_at AS "updatedAt"`,
-    [assessment.userId, assessment.role, JSON.stringify(assessment.scores), assessment.updatedAt],
-  )
-  return result.rows[0]
-}
-
-export async function listQualityAssessments() {
-  const result = await query('SELECT scores FROM quality_assessments')
-  return result.rows
 }
 
 export async function findUserByIdentifier(identifier) {

@@ -46,33 +46,13 @@ export async function readDb() {
     return data
   } catch (error) {
     if (error.code === 'ENOENT') {
-      const fallbackDb = { users: [], requests: [], announcements: [], reports: [], approvals: [], auditLogs: [], qualityAssessments: [] }
+      const fallbackDb = { users: [], requests: [], announcements: [], reports: [], approvals: [], auditLogs: [] }
       await writeJsonFile(fallbackDb)
       return fallbackDb
     }
 
     throw error
   }
-}
-
-export async function getQualityAssessment(userId) {
-  const db = await readDb()
-  return (db.qualityAssessments || []).find((assessment) => assessment.userId === userId) || null
-}
-
-export async function saveQualityAssessment(assessment) {
-  const db = await readDb()
-  db.qualityAssessments = db.qualityAssessments || []
-  const index = db.qualityAssessments.findIndex((item) => item.userId === assessment.userId)
-  if (index === -1) db.qualityAssessments.push(assessment)
-  else db.qualityAssessments[index] = assessment
-  await writeDb(db)
-  return assessment
-}
-
-export async function listQualityAssessments() {
-  const db = await readDb()
-  return db.qualityAssessments || []
 }
 
 export async function writeDb(data) {
@@ -126,7 +106,6 @@ export async function deleteUser(userId) {
   if (!user) return null
 
   db.users = db.users.filter((item) => item.id !== userId)
-  db.qualityAssessments = (db.qualityAssessments || []).filter((item) => item.userId !== userId)
   await writeDb(db)
   return user
 }

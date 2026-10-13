@@ -5,7 +5,6 @@ import barangaySeal from './assets/barangay-seal-new.png'
 import legaspiHero from './assets/legaspi-community.png'
 import { getMauQuickOptions, getMauReply, getMauResidentAnswer, getMauWelcome } from './mau-responses'
 import { reportClientError } from './client-error-reporting'
-import { AdminQualitySummary, QualityModelPage } from './QualityAssessment'
 import translations from './translations'
 import './App.css'
 
@@ -1368,7 +1367,6 @@ function DashboardPage({ profile, requests, services, announcements, events, pay
             />
           </label>
           <LanguageToggle language={language} setLanguage={setLanguage} />
-          <Link to="/quality" className="secondary-btn small">{t.qualityModelNav}</Link>
           <button className="notification-button" type="button" aria-label={`${unreadNotificationCount} unread notifications`} onClick={() => setNotificationsOpen((current) => !current)}>
             <span aria-hidden="true">🔔</span>
             {unreadNotificationCount > 0 && <span className="notification-count">{unreadNotificationCount}</span>}
@@ -1396,7 +1394,6 @@ function DashboardPage({ profile, requests, services, announcements, events, pay
             <button type="button" onClick={() => document.getElementById('announcements-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}><span aria-hidden="true">📢</span> {t.updates}</button>
             <button type="button" onClick={() => navigate('/events')}><span aria-hidden="true">📅</span> {t.events}</button>
             <button type="button" onClick={() => navigate('/payments')}><span aria-hidden="true">💳</span> {t.payments}</button>
-            <button type="button" onClick={() => navigate('/quality')}><span aria-hidden="true">📊</span> {t.qualityModelNav}</button>
             <button type="button" onClick={() => window.dispatchEvent(new Event('brgy-open-mau'))}><span aria-hidden="true">💬</span> {t.mauQuickAccess}</button>
           </nav>
 
@@ -3548,10 +3545,15 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
     return `${lastName} ${firstName}`.trim().toLowerCase()
   }
 
+  const normalizedResidentSearch = searchQuery.trim().toLowerCase()
   const filteredResidents = residents.filter((resident) => {
-    const matchesSearch = searchQuery === '' || 
-      (resident.firstName || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (resident.lastName || '').toLowerCase().includes(searchQuery.toLowerCase())
+    const searchableText = [
+      resident.firstName ?? resident.first_name,
+      resident.lastName ?? resident.last_name,
+      resident.email,
+      resident.householdId ?? resident.household_id,
+    ].filter(Boolean).join(' ').toLowerCase()
+    const matchesSearch = normalizedResidentSearch === '' || searchableText.includes(normalizedResidentSearch)
     
     const matchesZone = selectedZone === 'all' || resident.zone === parseInt(selectedZone)
     
@@ -3566,7 +3568,7 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
   const groupedResidentsByZone = zoneNumbers.map((zone) => ({
     zone,
     residents: filteredResidents.filter((resident) => resident.zone === zone),
-  })).filter((group) => group.residents.length > 0 || selectedZone === 'all')
+  })).filter((group) => group.residents.length > 0 || (selectedZone === 'all' && !normalizedResidentSearch))
 
   const sortByMode = (items, mode) => {
     const sorted = [...items]
@@ -3770,27 +3772,19 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
             >
               <span className="nav-icon">🚨</span><span>{t.emergencies}</span>
             </button>
-            <button
-              type="button"
-              className={`nav-item ${activeTab === 'quality' ? 'active' : ''}`}
-              aria-current={activeTab === 'quality' ? 'page' : undefined}
-              onClick={() => setActiveTab('quality')}
-            >
-              <span className="nav-icon">📊</span><span>{t.qualityModelNav}</span>
-            </button>
           </nav>
         </aside>
 
         <section className="content-panel" aria-label={t.adminOverviewLabel}>
           <div className="welcome-row">
             <div>
-              <p className="eyebrow">{activeTab === 'quality' ? t.qualityModelNav : t.governance}</p>
-              <h1 id={activeTab === 'quality' ? 'quality-assessment-title' : undefined}>{activeTab === 'quality' ? t.qualityModelTitle : activeTab === 'overview' ? t.adminConsoleTitle : activeTab === 'residents' ? t.residentsByZone : activeTab === 'access' ? t.userAccessManagement : t.emergencyReportsTitle}</h1>
+              <p className="eyebrow">{t.governance}</p>
+              <h1>{activeTab === 'overview' ? t.adminConsoleTitle : activeTab === 'residents' ? t.residentsByZone : activeTab === 'access' ? t.userAccessManagement : t.emergencyReportsTitle}</h1>
             </div>
-            {activeTab !== 'quality' && <span className="counter-pill">{pending} {t.pending}</span>}
+            <span className="counter-pill">{pending} {t.pending}</span>
           </div>
 
-          <div className="stats-grid" aria-label={t.adminSummaryLabel} hidden={activeTab === 'quality'}>
+          <div className="stats-grid" aria-label={t.adminSummaryLabel}>
             <article className="stat-card accent">
               <div className="stat-header">
                 <span className="label">{t.residents}</span>
@@ -3824,14 +3818,8 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
             </article>
           </div>
 
-          <div className={`dashboard-body ${activeTab === 'quality' ? 'quality-dashboard-body' : ''}`}>
+          <div className="dashboard-body">
             <div className="main-column">
-              {activeTab === 'quality' && (
-                <>
-                  <AdminQualitySummary language={language} />
-                  <QualityAssessmentPanel key={`admin:${currentUser?.id}`} accountId={currentUser?.id} audience="admin" language={language} />
-                </>
-              )}
               {activeTab === 'overview' && <CaptainPhotoSettings language={language} />}
               {activeTab === 'overview' && (
                 <article className="panel-card compact-panel">
@@ -3945,14 +3933,14 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
                   </div>
 
                   <div className="search-and-filter">
-                    <input 
-                      type="text" 
+                    <input
+                      type="search"
                       placeholder={`🔎 ${t.searchByName}`}
                       value={searchQuery}
                       onChange={(e) => setSearchQuery(e.target.value)}
                       className="search-input"
+                      aria-label={t.searchByName}
                     />
-                    <button type="button" className="primary-btn small search-button" onClick={() => setSearchQuery((prev) => prev.trim())}>{t.search}</button>
                     <select 
                       value={selectedZone}
                       onChange={(e) => setSelectedZone(e.target.value)}
@@ -3967,9 +3955,16 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
                       <option value="6">Zone 6</option>
                       <option value="7">Zone 7</option>
                     </select>
+                    {normalizedResidentSearch && (
+                      <p className="resident-search-feedback" aria-live="polite">
+                        {t.residentSearchMatches} “{searchQuery.trim()}”
+                      </p>
+                    )}
                   </div>
 
-                  {selectedZone === 'all' ? (
+                  {filteredResidents.length === 0 ? (
+                    <div className="empty-state">{t.noResidentSearchResults}</div>
+                  ) : selectedZone === 'all' ? (
                     <div className="zone-group-stack">
                       {groupedResidentsByZone.map((group) => {
                         const isExpanded = expandedZone === group.zone
@@ -4289,7 +4284,7 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
               )}
             </div>
 
-            <aside className="side-column" hidden={activeTab === 'quality'}>
+            <aside className="side-column">
               <article className="profile-card system-status-card">
                 <div className="profile-head">
                   <div className="system-status-heading">
@@ -4941,7 +4936,6 @@ function App() {
         <Route path="/" element={isAuthenticated ? <Navigate to={userRole === 'staff' ? '/staff' : userRole === 'admin' ? '/admin' : '/dashboard'} replace /> : <LoginPage onLogin={handleLogin} language={language} setLanguage={switchLanguage} />} />
         <Route path="/register" element={isAuthenticated ? <Navigate to={userRole === 'staff' ? '/staff' : userRole === 'admin' ? '/admin' : '/dashboard'} replace /> : <RegisterPage language={language} setLanguage={switchLanguage} />} />
         <Route path="/dashboard" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['resident']} userRole={userRole}><DashboardPage profile={profile} requests={requests} services={services} announcements={announcementsData} events={events} payments={payments} onLogout={handleLogout} onProfileUpdated={setProfile} language={language} setLanguage={switchLanguage} /></ProtectedRoute>} />
-        <Route path="/quality" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['resident', 'staff', 'admin']} userRole={userRole}><QualityModelPage accountId={session?.user?.id} audience={userRole} language={language} setLanguage={switchLanguage} onLogout={handleLogout} /></ProtectedRoute>} />
         <Route path="/requests" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['resident']} userRole={userRole}><RequestsPage requests={requests} onSubmit={handleRequestSubmit} onRequestUpdated={handleRequestUpdated} onLogout={handleLogout} language={language} setLanguage={switchLanguage} userId={session?.user?.id} /></ProtectedRoute>} />
         <Route path="/profile" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['resident']} userRole={userRole}><ProfilePage profile={profile} onLogout={handleLogout} language={language} setLanguage={switchLanguage} /></ProtectedRoute>} />
         <Route path="/payments" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['resident']} userRole={userRole}><PaymentsPage payments={payments} onLogout={handleLogout} language={language} setLanguage={switchLanguage} /></ProtectedRoute>} />

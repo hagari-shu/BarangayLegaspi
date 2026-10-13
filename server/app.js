@@ -16,11 +16,6 @@ import {
   getCaptainPhotoUrl,
   isCaptainPhotoStorageConfigured,
 } from './captain-photo-storage.js'
-import {
-  createEmptyQualityAssessment,
-  parseQualityScores,
-  summarizeQualityResponses,
-} from '../src/mccall-quality-model.js'
 import { ADMIN_SEED, CORS_ORIGINS, IS_PRODUCTION, PORT, SHOULD_SKIP_SEED } from './config.js'
 
 let store = process.env.DATABASE_URL ? pgDb : jsonDb
@@ -864,80 +859,6 @@ export function createApp() {
     } catch (error) {
       console.error('profile update error', error)
       return res.status(500).json({ message: 'Unable to update profile.' })
-    }
-  })
-
-  app.get('/api/quality-assessment', async (req, res) => {
-    const authHeader = req.headers.authorization || ''
-    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null
-    if (!token) return res.status(401).json({ message: 'Authentication required.' })
-
-    try {
-      const actor = await getCurrentActor(token)
-      if (!actor || !['resident', 'staff', 'admin'].includes(actor.user.role) || ['Suspended', 'Disabled'].includes(actor.user.status)) {
-        return res.status(403).json({ message: 'Access denied for this role.' })
-      }
-      const storedAssessment = await store.getQualityAssessment(actor.user.id)
-      const assessment = createEmptyQualityAssessment()
-      if (storedAssessment) {
-        assessment.scores = parseQualityScores(storedAssessment.scores)
-        assessment.updatedAt = storedAssessment.updatedAt
-          ? new Date(storedAssessment.updatedAt).toISOString()
-          : null
-      }
-      return res.json({ assessment: { scores: assessment.scores, updatedAt: assessment.updatedAt } })
-    } catch (error) {
-      console.error('load quality assessment failed', error)
-      return res.status(500).json({ message: 'Unable to load the quality assessment.' })
-    }
-  })
-
-  app.put('/api/quality-assessment', async (req, res) => {
-    const authHeader = req.headers.authorization || ''
-    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null
-    if (!token) return res.status(401).json({ message: 'Authentication required.' })
-
-    try {
-      const actor = await getCurrentActor(token)
-      if (!actor || !['resident', 'staff', 'admin'].includes(actor.user.role) || ['Suspended', 'Disabled'].includes(actor.user.status)) {
-        return res.status(403).json({ message: 'Access denied for this role.' })
-      }
-
-      let scores
-      try {
-        scores = parseQualityScores(req.body?.scores)
-      } catch (error) {
-        return res.status(400).json({ message: error.message })
-      }
-      const updatedAt = new Date().toISOString()
-      await store.saveQualityAssessment({
-        userId: actor.user.id,
-        role: actor.user.role,
-        scores,
-        updatedAt,
-      })
-      return res.json({ assessment: { scores, updatedAt } })
-    } catch (error) {
-      console.error('save quality assessment failed', error)
-      return res.status(500).json({ message: 'Unable to save the quality assessment.' })
-    }
-  })
-
-  app.get('/api/admin/quality-assessments', async (req, res) => {
-    const authHeader = req.headers.authorization || ''
-    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null
-    if (!token) return res.status(401).json({ message: 'Authentication required.' })
-
-    try {
-      const actor = await getCurrentActor(token)
-      if (!actor || actor.user.role !== 'admin' || ['Suspended', 'Disabled'].includes(actor.user.status)) {
-        return res.status(403).json({ message: 'Admin access required.' })
-      }
-      const responses = await store.listQualityAssessments()
-      return res.json({ summary: summarizeQualityResponses(responses) })
-    } catch (error) {
-      console.error('load quality assessment summary failed', error)
-      return res.status(500).json({ message: 'Unable to load quality assessment results.' })
     }
   })
 
