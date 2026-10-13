@@ -17,6 +17,8 @@ Deploy the React/Vite frontend to Vercel and the Laravel API to Render:
 
 The API migration preserves the `/api` routes and PostgreSQL data model. Laravel runs the schema migration on container startup. Back up the database before the first Laravel deployment and review the migration against a staging copy first. Keep database credentials, application keys, and webhook secrets in deployment environment variables, never in source control.
 
+For the active Node/Express API, automatic administrator seeding is only for a genuinely new database. If either configured seed identifier (`ADMIN_EMAIL` or `ADMIN_MOBILE`) already belongs to an account, seeding is skipped; it never promotes or overwrites an existing user.
+
 Residents and staff can rate their experience with the portal against all 11 factors in the McCall’s Quality Model page. Ratings are saved to the authenticated account in the API database, and administrators can review overall anonymized averages and response counts. The database retains account ownership to update the same person’s assessment and prevent duplicate submissions; admin summaries do not expose respondent identities. Optional written feedback notes remain in the user’s browser and are never uploaded. Ratings can be loaded across devices after signing in.
 
 ### Mau assistant maintenance

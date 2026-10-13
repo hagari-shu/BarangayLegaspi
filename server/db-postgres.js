@@ -192,30 +192,36 @@ export async function initDatabase() {
     return
   }
 
-  const adminCheck = await query('SELECT id FROM users WHERE email = $1', [ADMIN_SEED.email])
-  if (adminCheck.rows.length === 0) {
-    const { randomUUID } = await import('node:crypto')
-    await query(
-      `INSERT INTO users (id, first_name, last_name, mobile, email, password_hash, role, household_id, family_members, status, address, zone, position, availability)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
-      [
-        randomUUID(),
-        ADMIN_SEED.firstName,
-        ADMIN_SEED.lastName,
-        ADMIN_SEED.mobile,
-        ADMIN_SEED.email,
-        await hashPassword(ADMIN_SEED.password),
-        ADMIN_SEED.role,
-        ADMIN_SEED.householdId,
-        ADMIN_SEED.familyMembers,
-        ADMIN_SEED.status,
-        ADMIN_SEED.address,
-        ADMIN_SEED.zone,
-        'Administrator',
-        'Available',
-      ]
-    )
+  const adminCheck = await query(
+    'SELECT id FROM users WHERE email = $1 OR mobile = $2 LIMIT 1',
+    [ADMIN_SEED.email, ADMIN_SEED.mobile],
+  )
+  if (adminCheck.rows.length > 0) {
+    console.info('Administrator seed skipped because an account already matches its email or mobile.')
+    return
   }
+
+  const { randomUUID } = await import('node:crypto')
+  await query(
+    `INSERT INTO users (id, first_name, last_name, mobile, email, password_hash, role, household_id, family_members, status, address, zone, position, availability)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
+    [
+      randomUUID(),
+      ADMIN_SEED.firstName,
+      ADMIN_SEED.lastName,
+      ADMIN_SEED.mobile,
+      ADMIN_SEED.email,
+      await hashPassword(ADMIN_SEED.password),
+      ADMIN_SEED.role,
+      ADMIN_SEED.householdId,
+      ADMIN_SEED.familyMembers,
+      ADMIN_SEED.status,
+      ADMIN_SEED.address,
+      ADMIN_SEED.zone,
+      'Administrator',
+      'Available',
+    ]
+  )
 }
 
 export async function getQualityAssessment(userId) {
