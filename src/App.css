@@ -7518,3 +7518,198 @@ button.report-summary-card:focus-visible,
     box-shadow: none;
   }
 }
+
+.dashboard-shell {
+  --dashboard-border: rgba(28, 73, 63, 0.11);
+  --dashboard-shadow: 0 14px 34px rgba(22, 57, 49, 0.07);
+  background:
+    radial-gradient(ellipse at 12% 0%, rgba(41, 149, 117, 0.08), transparent 34rem),
+    linear-gradient(180deg, #f5f8f6 0%, #edf3f0 100%);
+}
+
+.dashboard-topbar {
+  min-height: 76px;
+  background: linear-gradient(115deg, #0b554a 0%, #0c483f 58%, #123e39 100%);
+  box-shadow: 0 8px 24px rgba(11, 58, 50, 0.16);
+}
+
+.dashboard-main {
+  width: min(100%, 1360px);
+  padding: clamp(20px, 2.5vw, 34px) clamp(14px, 2vw, 26px) 48px;
+  gap: 24px;
+}
+
+.sidebar,
+.content-panel {
+  border-color: var(--dashboard-border);
+  border-radius: 22px;
+  background: rgba(255, 255, 255, 0.84);
+  box-shadow: var(--dashboard-shadow);
+}
+
+.sidebar {
+  padding: 16px 12px;
+  backdrop-filter: blur(12px);
+}
+
+.content-panel {
+  padding: clamp(18px, 2vw, 28px);
+}
+
+.nav-item {
+  min-height: 48px;
+  border-radius: 12px;
+  color: #344b45;
+  transition: background-color 160ms ease, color 160ms ease, transform 160ms ease;
+}
+
+.nav-item.active {
+  background: linear-gradient(100deg, #e5f4ee, #f1f8f4);
+  color: #0c5b48;
+  box-shadow: inset 3px 0 0 #198568;
+}
+
+.welcome-row h1,
+.profile-banner h1 {
+  letter-spacing: -0.035em;
+}
+
+.stat-card,
+.panel-card,
+.profile-card,
+.page-card,
+.onboarding-card,
+.onboarding-welcome {
+  border-color: var(--dashboard-border);
+  box-shadow: 0 6px 20px rgba(22, 57, 49, 0.045);
+}
+
+.stat-card {
+  border-radius: 16px;
+  transition: border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
+}
+
+.stat-card.accent {
+  background: linear-gradient(145deg, #eaf8f1 0%, #ffffff 78%);
+}
+
+.panel-card,
+.profile-card,
+.page-card {
+  border-radius: 18px;
+}
+
+.panel-header {
+  gap: 16px;
+}
+
+.panel-header h2,
+.panel-header h3 {
+  letter-spacing: -0.02em;
+}
+
+.onboarding-card {
+  border-radius: 18px;
+  background: linear-gradient(145deg, #eef8f3 0%, #ffffff 76%);
+}
+
+.onboarding-welcome {
+  border-radius: 18px;
+  background: linear-gradient(110deg, #e7f5ee 0%, #f8fcfa 66%, #ffffff 100%);
+}
+
+.checklist-list {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 230px), 1fr));
+}
+
+.checklist-list li {
+  min-height: 72px;
+  border-radius: 13px;
+  background: #fff;
+}
+
+.dashboard-shell .service-item,
+.dashboard-shell .admin-approval-row,
+.dashboard-shell .activity-item,
+.dashboard-shell .service-count-list > div {
+  border-color: var(--dashboard-border);
+  border-radius: 12px;
+  background: #fbfdfc;
+}
+
+.dashboard-shell .request-table thead th {
+  background: #f1f6f3;
+  color: #38534b;
+}
+
+.dashboard-shell .request-table tbody tr {
+  transition: background-color 140ms ease;
+}
+
+.dashboard-shell .request-table tbody tr:hover {
+  background: #f5faf7;
+}
+
+.dashboard-shell :is(input, select, textarea) {
+  border-radius: 10px;
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+}
+
+.dashboard-shell :is(input, select, textarea):focus-visible {
+  border-color: #18856a;
+  box-shadow: 0 0 0 3px rgba(24, 133, 106, 0.14);
+  outline: none;
+}
+
+.dashboard-shell :is(button, a, [role="button"]):focus-visible {
+  outline: 3px solid rgba(24, 133, 106, 0.72);
+  outline-offset: 3px;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .nav-item:not(.active):hover {
+    background: #f0f6f3;
+    color: #0c5b48;
+    transform: translateX(2px);
+  }
+
+  .stat-card:hover {
+    border-color: rgba(24, 133, 106, 0.24);
+    box-shadow: 0 12px 26px rgba(22, 57, 49, 0.09);
+    transform: translateY(-2px);
+  }
+
+  .dashboard-shell .service-item:hover {
+    border-color: rgba(24, 133, 106, 0.22);
+    background: #f5faf7;
+  }
+}
+
+@media (max-width: 760px) {
+  .dashboard-main {
+    padding: 16px 12px 30px;
+    gap: 14px;
+  }
+
+  .sidebar,
+  .content-panel {
+    border-radius: 16px;
+  }
+
+  .content-panel {
+    padding: 16px;
+  }
+
+  .checklist-list {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nav-item,
+  .stat-card,
+  .dashboard-shell .request-table tbody tr,
+  .dashboard-shell :is(input, select, textarea) {
+    transition: none;
+  }
+}
