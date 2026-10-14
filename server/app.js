@@ -1866,6 +1866,51 @@ export function createApp() {
     }
   })
 
+  app.post('/api/admin/residents/:id/archive', async (req, res) => {
+    const authHeader = req.headers.authorization || ''
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null
+    if (!token) return res.status(401).json({ message: 'Authentication required.' })
+
+    try {
+      const actor = await getCurrentActor(token)
+      if (!actor || actor.user.role !== 'admin') {
+        return res.status(403).json({ message: 'Admin access required.' })
+      }
+
+      const resident = await store.findUserById?.(req.params.id)
+      if (!resident) return res.status(404).json({ message: 'Resident not found.' })
+      if (resident.role !== 'resident') {
+        return res.status(400).json({ message: 'Only resident accounts can be archived here.' })
+      }
+      if (resident.status === 'Disabled') {
+        return res.json({ success: true, alreadyArchived: true, user: sanitizeUserRecord(resident) })
+      }
+
+      const updatedUser = await store.updateUser?.(resident.id, { status: 'Disabled' })
+      if (!updatedUser) return res.status(404).json({ message: 'Resident not found.' })
+
+      try {
+        await writeAudit(actor.user, 'resident.archived', 'user', resident.id, {
+          previousStatus: resident.status || null,
+        })
+      } catch (error) {
+        console.error('resident archived but audit log failed', error)
+        return res.status(500).json({
+          message: 'Resident account was archived, but the audit log could not be recorded. Refresh and verify the account status before retrying.',
+          archived: true,
+          user: sanitizeUserRecord(updatedUser),
+        })
+      }
+      return res.json({ success: true, user: sanitizeUserRecord(updatedUser) })
+    } catch (error) {
+      if (['JsonWebTokenError', 'TokenExpiredError', 'NotBeforeError'].includes(error?.name)) {
+        return res.status(401).json({ message: 'Invalid or expired token.' })
+      }
+      console.error('failed to archive resident', error)
+      return res.status(500).json({ message: 'Unable to archive resident account.' })
+    }
+  })
+
   app.post('/api/admin/archive-users-by-zone', async (req, res) => {
     const authHeader = req.headers.authorization || ''
     const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null

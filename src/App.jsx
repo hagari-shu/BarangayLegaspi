@@ -268,7 +268,7 @@ function ConfirmationModal({ title, message, onClose, onConfirm, confirmLabel = 
   )
 }
 
-function UserDetailModal({ user, onClose, onUserUpdated, allowEdit = false }) {
+function UserDetailModal({ user, onClose, onUserUpdated, onArchive, allowEdit = false }) {
   const [editableUser, setEditableUser] = useState(() => ({ ...(user || {}) }))
   const [householdMembersText, setHouseholdMembersText] = useState(() => (
     Array.isArray(user?.householdMembers)
@@ -371,8 +371,8 @@ function UserDetailModal({ user, onClose, onUserUpdated, allowEdit = false }) {
                   <input value={editableUser.lastName ?? editableUser.last_name ?? ''} onChange={(event) => handleFieldChange('lastName', event.target.value)} />
                 </div>
               ) : fullName}</dd></div>
-              <div><dt>Email</dt><dd>{allowEdit ? <input value={editableUser.email || ''} onChange={(event) => handleFieldChange('email', event.target.value)} /> : (editableUser.email || 'N/A')}</dd></div>
-              <div><dt>Mobile</dt><dd>{allowEdit ? <input value={editableUser.mobile || ''} onChange={(event) => handleFieldChange('mobile', event.target.value)} /> : (editableUser.mobile || 'N/A')}</dd></div>
+              {role !== 'resident' && <div><dt>Email</dt><dd>{allowEdit ? <input value={editableUser.email || ''} onChange={(event) => handleFieldChange('email', event.target.value)} /> : (editableUser.email || 'N/A')}</dd></div>}
+              {role !== 'staff' && <div><dt>Mobile</dt><dd>{allowEdit ? <input value={editableUser.mobile || ''} onChange={(event) => handleFieldChange('mobile', event.target.value)} /> : (editableUser.mobile || 'N/A')}</dd></div>}
               <div><dt>Role</dt><dd>{allowEdit ? (
                 <select value={editableUser.role ?? role} onChange={(event) => handleFieldChange('role', event.target.value)}>
                   <option value="resident">Resident</option>
@@ -380,7 +380,7 @@ function UserDetailModal({ user, onClose, onUserUpdated, allowEdit = false }) {
                   <option value="admin">Admin</option>
                 </select>
               ) : (role.charAt(0).toUpperCase() + role.slice(1))}</dd></div>
-              <div><dt>Status</dt><dd>{allowEdit ? <input value={editableUser.status || ''} onChange={(event) => handleFieldChange('status', event.target.value)} /> : (editableUser.status || 'N/A')}</dd></div>
+              {role !== 'staff' && <div><dt>Status</dt><dd>{allowEdit ? <input value={editableUser.status || ''} onChange={(event) => handleFieldChange('status', event.target.value)} /> : (editableUser.status || 'N/A')}</dd></div>}
               <div><dt>Zone</dt><dd>{allowEdit ? (
                 <select value={editableUser.zone ?? ''} onChange={(event) => handleFieldChange('zone', event.target.value === '' ? null : Number(event.target.value))}>
                   <option value="">Select zone</option>
@@ -406,6 +406,7 @@ function UserDetailModal({ user, onClose, onUserUpdated, allowEdit = false }) {
             <div className="info-box">
               <h3>Resident Details</h3>
               <dl>
+                <div><dt>Email</dt><dd>{allowEdit ? <input value={editableUser.email || ''} onChange={(event) => handleFieldChange('email', event.target.value)} /> : (editableUser.email || 'N/A')}</dd></div>
                 <div><dt>Household ID</dt><dd>{allowEdit ? <input value={editableUser.householdId || editableUser.household_id || ''} onChange={(event) => handleFieldChange('householdId', event.target.value)} /> : (editableUser.householdId || editableUser.household_id || 'N/A')}</dd></div>
                 <div><dt>Family Members</dt><dd>{allowEdit ? <input type="number" min="1" value={editableUser.familyMembers ?? editableUser.family_members ?? 4} onChange={(event) => handleFieldChange('familyMembers', Number(event.target.value) || 0)} /> : (editableUser.familyMembers ?? editableUser.family_members ?? 'N/A')}</dd></div>
                 <div><dt>Address</dt><dd>{allowEdit ? <input value={editableUser.address || ''} onChange={(event) => handleFieldChange('address', event.target.value)} /> : (editableUser.address || 'N/A')}</dd></div>
@@ -426,6 +427,9 @@ function UserDetailModal({ user, onClose, onUserUpdated, allowEdit = false }) {
             <div className="info-box">
               <h3>Staff Access Details</h3>
               <dl>
+                <div><dt>Email</dt><dd>{allowEdit ? <input value={editableUser.email || ''} onChange={(event) => handleFieldChange('email', event.target.value)} /> : (editableUser.email || 'N/A')}</dd></div>
+                <div><dt>Mobile Number</dt><dd>{allowEdit ? <input value={editableUser.mobile || ''} onChange={(event) => handleFieldChange('mobile', event.target.value)} /> : (editableUser.mobile || 'N/A')}</dd></div>
+                <div><dt>Status</dt><dd>{allowEdit ? <input value={editableUser.status || ''} onChange={(event) => handleFieldChange('status', event.target.value)} /> : (editableUser.status || 'N/A')}</dd></div>
                 <div><dt>Position</dt><dd>{allowEdit ? <input value={editableUser.position || ''} onChange={(event) => handleFieldChange('position', event.target.value)} /> : (editableUser.position || 'Staff')}</dd></div>
                 <div><dt>Availability</dt><dd>{allowEdit ? <input value={editableUser.availability || ''} onChange={(event) => handleFieldChange('availability', event.target.value)} /> : (editableUser.availability || 'N/A')}</dd></div>
                 <div><dt>Assigned Zone</dt><dd>{zone !== 'N/A' ? `Zone ${zone}` : 'N/A'}</dd></div>
@@ -435,6 +439,9 @@ function UserDetailModal({ user, onClose, onUserUpdated, allowEdit = false }) {
 
           {allowEdit && (
             <div className="modal-actions">
+              {role === 'resident' && editableUser.status !== 'Disabled' && onArchive && (
+                <button type="button" className="small-action danger" onClick={onArchive}>Archive resident</button>
+              )}
               <button type="button" className="primary-btn small" onClick={handleSave} disabled={saving}>
                 {saving ? 'Saving...' : 'Save changes'}
               </button>
@@ -4010,6 +4017,35 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
     })
   }
 
+  const handleArchiveResident = (resident) => {
+    setConfirmation({
+      title: 'Archive resident account?',
+      message: `Archive ${getDisplayName(resident)}? This disables sign-in but preserves the account and its request history. An administrator can restore access later by changing the account status.`,
+      confirmLabel: 'Archive resident',
+      onConfirm: async () => {
+        let response
+        try {
+          response = await fetch(`${API_BASE}/admin/residents/${resident.id}/archive`, { method: 'POST' })
+        } catch {
+          throw new Error('Unable to reach the server. Check your connection and try again.')
+        }
+
+        const data = await response.json().catch(() => ({}))
+        if (!response.ok) {
+          if (data.archived && data.user) {
+            setManagedUsers((current) => current.map((user) => user.id === resident.id ? { ...user, ...data.user } : user))
+            setSelectedUser((current) => current?.id === resident.id ? data.user : current)
+          }
+          throw new Error(data.message || 'Unable to archive resident account.')
+        }
+
+        if (!data.user) throw new Error('The server did not return the archived resident account.')
+        setManagedUsers((current) => current.map((user) => user.id === resident.id ? { ...user, ...data.user } : user))
+        setSelectedUser(null)
+      },
+    })
+  }
+
   const getSortName = (person = {}) => {
     const firstName = person.firstName ?? person.first_name ?? ''
     const lastName = person.lastName ?? person.last_name ?? ''
@@ -5160,7 +5196,7 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
           </div>
         </section>
       </main>
-      {selectedUser && <UserDetailModal user={selectedUser} onClose={() => setSelectedUser(null)} allowEdit onUserUpdated={(updated) => {
+      {selectedUser && <UserDetailModal user={selectedUser} onClose={() => setSelectedUser(null)} allowEdit onArchive={() => handleArchiveResident(selectedUser)} onUserUpdated={(updated) => {
         setManagedUsers((current) => current.map((user) => user.id === updated.id ? { ...user, ...updated } : user))
         setSelectedUser((current) => ({ ...(current || {}), ...updated }))
       }} />}

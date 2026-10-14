@@ -1116,6 +1116,109 @@ test('admin deletion only allows staff members and blocks administrators', async
   }
 })
 
+test('admin can archive a resident while preserving request history and blocking resident sign-in', async () => {
+  const { server, baseUrl } = await createTestServer()
+  const resident = {
+    id: randomUUID(),
+    firstName: 'Resident',
+    lastName: 'Archive',
+    mobile: `092${Math.floor(10000000 + Math.random() * 90000000)}`,
+    email: `resident.archive.${Date.now()}@example.com`,
+    passwordHash: await hashPassword('ResidentPass123!'),
+    role: 'resident',
+    householdId: 'ARCHIVE-TEST',
+    familyMembers: 3,
+    status: 'Active Resident',
+    zone: 1,
+  }
+
+  try {
+    const missingTokenResponse = await fetch(`${baseUrl}/api/admin/residents/${resident.id}/archive`, { method: 'POST' })
+    assert.equal(missingTokenResponse.status, 401)
+
+    const invalidTokenResponse = await fetch(`${baseUrl}/api/admin/residents/${resident.id}/archive`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer invalid-token' },
+    })
+    assert.equal(invalidTokenResponse.status, 401)
+
+    await jsonDb.saveUser(resident)
+    const requestId = randomUUID()
+    await jsonDb.saveRequest({
+      id: requestId,
+      userId: resident.id,
+      type: 'Barangay Clearance',
+      purpose: 'Archive retention test',
+      status: 'Pending',
+      date: new Date().toISOString(),
+    })
+
+    const adminLoginResponse = await fetch(`${baseUrl}/api/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ identifier: 'admin@barangay.gov.ph', password: 'AdminPass123' }),
+    })
+    const { token: adminToken } = await adminLoginResponse.json()
+
+    const residentLoginResponse = await fetch(`${baseUrl}/api/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ identifier: resident.email, password: 'ResidentPass123!' }),
+    })
+    const { token: residentToken } = await residentLoginResponse.json()
+    const forbiddenResponse = await fetch(`${baseUrl}/api/admin/residents/${resident.id}/archive`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${residentToken}` },
+    })
+    assert.equal(forbiddenResponse.status, 403)
+
+    const staff = {
+      id: randomUUID(),
+      firstName: 'Staff',
+      lastName: 'NotResident',
+      mobile: `092${Math.floor(10000000 + Math.random() * 90000000)}`,
+      email: `staff.archive.${Date.now()}@example.com`,
+      passwordHash: await hashPassword('StaffPass123!'),
+      role: 'staff',
+      status: 'On Duty',
+    }
+    await jsonDb.saveUser(staff)
+    const wrongTargetResponse = await fetch(`${baseUrl}/api/admin/residents/${staff.id}/archive`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${adminToken}` },
+    })
+    assert.equal(wrongTargetResponse.status, 400)
+
+    const archiveResponse = await fetch(`${baseUrl}/api/admin/residents/${resident.id}/archive`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${adminToken}` },
+    })
+    assert.equal(archiveResponse.status, 200)
+    const archived = await archiveResponse.json()
+    assert.equal(archived.user.status, 'Disabled')
+    assert.equal((await jsonDb.findUserById(resident.id)).status, 'Disabled')
+    assert.equal((await jsonDb.listRequestsForUser(resident.id)).some((request) => request.id === requestId), true)
+
+    const archivedLoginResponse = await fetch(`${baseUrl}/api/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ identifier: resident.email, password: 'ResidentPass123!' }),
+    })
+    assert.equal(archivedLoginResponse.status, 403)
+
+    const repeatArchiveResponse = await fetch(`${baseUrl}/api/admin/residents/${resident.id}/archive`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${adminToken}` },
+    })
+    assert.equal(repeatArchiveResponse.status, 200)
+    assert.equal((await repeatArchiveResponse.json()).alreadyArchived, true)
+  } finally {
+    await new Promise((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()))
+    })
+  }
+})
+
 test('admin-visible resident lists exclude generated test accounts', async () => {
   const { server, baseUrl } = await createTestServer()
 

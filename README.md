@@ -5,6 +5,11 @@
 - [Account approval policy](./ACCOUNT_APPROVAL_POLICY.md)
 - [Location policy](./LOCATION_POLICY.md)
 
+## Database planning
+
+- [Upgrade brochure](./docs/database-upgrade-brochure.md)
+- [Database upgrade and cutover manual](./docs/database-upgrade-manual.md)
+
 ## Admin records and resident search
 
 In Admin → Access, user search updates as the administrator types and returns matching resident, staff, and administrator names across zones. The resident portal's search is intentionally limited to public dashboard content; it does not expose other residents' account details.
