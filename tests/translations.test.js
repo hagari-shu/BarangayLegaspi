@@ -418,7 +418,7 @@ test('captain photo controls and profile details have localized labels', () => {
   }
 })
 
-test('staff account creation labels are available in both supported languages', () => {
+test('staff account management labels are available in both supported languages', () => {
   for (const locale of [translations.en, translations.fil]) {
     assert.ok(locale.createStaffAccount)
     assert.ok(locale.staffAccounts)
@@ -426,6 +426,18 @@ test('staff account creation labels are available in both supported languages', 
     assert.ok(locale.staffInitialPassword)
     assert.ok(locale.staffCreatedNotice)
     assert.ok(locale.staffCreateFailed)
+    assert.ok(locale.staffCredentialsNote)
+    assert.ok(locale.resetStaffPassword)
+    assert.ok(locale.staffPasswordResetIntro)
+    assert.ok(locale.staffPasswordResetNotice)
+    assert.ok(locale.staffPasswordResetFailed)
+    assert.ok(locale.passwordsDoNotMatch)
+    assert.ok(locale.staffPresence)
+    assert.ok(locale.staffPresenceExplanation)
+    assert.ok(locale.onlineNow)
+    assert.ok(locale.offline)
+    assert.ok(locale.lastSeen)
+    assert.ok(locale.staffPresenceLoadFailed)
     assert.ok(locale.mobileNumberLabel)
   }
 })

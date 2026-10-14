@@ -2504,6 +2504,41 @@ textarea:focus {
   color: #345bb0;
 }
 
+.staff-presence-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 9px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 750;
+  white-space: nowrap;
+}
+
+.staff-presence-badge > span {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.staff-presence-badge.online {
+  color: #087653;
+  background: rgba(28, 139, 111, 0.12);
+}
+
+.staff-presence-badge.offline {
+  color: #68737b;
+  background: rgba(104, 115, 123, 0.12);
+}
+
+.staff-last-seen {
+  display: block;
+  margin-top: 5px;
+  color: #68737b;
+  white-space: nowrap;
+}
+
 .action-row {
   display: flex;
   align-items: center;

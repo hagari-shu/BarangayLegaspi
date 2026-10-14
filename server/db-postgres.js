@@ -28,6 +28,7 @@ const normalizeUser = (user = null) => {
   mfaEnabled: user.mfaEnabled ?? user.mfa_enabled ?? false,
   mfaLastStep: Number(user.mfaLastStep ?? user.mfa_last_step ?? 0),
    createdAt: user.createdAt ?? user.created_at ?? null,
+   lastSeen: user.lastSeen ?? user.last_seen ?? null,
    zone: user.zone ?? user.zone_number ?? null,
   }
 }
@@ -95,6 +96,7 @@ export async function initDatabase() {
   await query('ALTER TABLE users ADD COLUMN IF NOT EXISTS mfa_secret TEXT DEFAULT NULL')
   await query('ALTER TABLE users ADD COLUMN IF NOT EXISTS mfa_enabled BOOLEAN NOT NULL DEFAULT false')
   await query('ALTER TABLE users ADD COLUMN IF NOT EXISTS mfa_last_step BIGINT NOT NULL DEFAULT 0')
+  await query('ALTER TABLE users ADD COLUMN IF NOT EXISTS last_seen TIMESTAMPTZ')
 
   await query(`
     CREATE TABLE IF NOT EXISTS requests (
@@ -279,6 +281,7 @@ export async function updateUser(userId, updates = {}) {
     zone: updates.zone,
     position: updates.position,
     availability: updates.availability,
+    lastSeen: updates.lastSeen ?? updates.last_seen,
     mfaSecret: updates.mfaSecret,
     mfaEnabled: updates.mfaEnabled,
     mfaLastStep: updates.mfaLastStep,
@@ -303,6 +306,7 @@ export async function updateUser(userId, updates = {}) {
     zone: 'zone',
     position: 'position',
     availability: 'availability',
+    lastSeen: 'last_seen',
     mfaSecret: 'mfa_secret',
     mfaEnabled: 'mfa_enabled',
     mfaLastStep: 'mfa_last_step',

@@ -832,6 +832,171 @@ test('admin-assigned staff positions persist in login profiles and the staff dir
   }
 })
 
+test('only administrators can reset staff passwords, and reset secrets are never returned', async () => {
+  const { server, baseUrl } = await createTestServer()
+  const staffEmail = `password-reset.${Date.now()}@example.com`
+  const staffPassword = 'StaffPass123!'
+  const nextPassword = 'ChangedPass456!'
+  const staff = {
+    id: randomUUID(),
+    firstName: 'Password',
+    lastName: 'Reset',
+    mobile: `091${Math.floor(10000000 + Math.random() * 90000000)}`,
+    email: staffEmail,
+    passwordHash: await hashPassword(staffPassword),
+    role: 'staff',
+    status: 'On Duty',
+  }
+
+  try {
+    await jsonDb.saveUser(staff)
+
+    const adminLogin = await fetch(`${baseUrl}/api/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ identifier: 'admin@barangay.gov.ph', password: 'AdminPass123' }),
+    })
+    assert.equal(adminLogin.status, 200)
+    const { token: adminToken } = await adminLogin.json()
+
+    const staffLogin = await fetch(`${baseUrl}/api/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ identifier: staffEmail, password: staffPassword }),
+    })
+    assert.equal(staffLogin.status, 200)
+    const { token: staffToken } = await staffLogin.json()
+
+    const resetUrl = `${baseUrl}/api/admin/staff/${staff.id}/password`
+    const forbiddenReset = await fetch(resetUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${staffToken}` },
+      body: JSON.stringify({ password: nextPassword }),
+    })
+    assert.equal(forbiddenReset.status, 403)
+
+    const invalidPasswordReset = await fetch(resetUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${adminToken}` },
+      body: JSON.stringify({ password: 'weak' }),
+    })
+    assert.equal(invalidPasswordReset.status, 400)
+
+    const resident = (await jsonDb.listAllUsers()).find((user) => user.role === 'resident')
+    const residentReset = await fetch(`${baseUrl}/api/admin/staff/${resident.id}/password`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${adminToken}` },
+      body: JSON.stringify({ password: nextPassword }),
+    })
+    assert.equal(residentReset.status, 404)
+
+    const resetResponse = await fetch(resetUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${adminToken}` },
+      body: JSON.stringify({ password: nextPassword }),
+    })
+    assert.equal(resetResponse.status, 200)
+    assert.deepEqual(await resetResponse.json(), { ok: true })
+
+    const oldPasswordLogin = await fetch(`${baseUrl}/api/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ identifier: staffEmail, password: staffPassword }),
+    })
+    assert.equal(oldPasswordLogin.status, 401)
+
+    const newPasswordLogin = await fetch(`${baseUrl}/api/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ identifier: staffEmail, password: nextPassword }),
+    })
+    assert.equal(newPasswordLogin.status, 200)
+
+    const auditResponse = await fetch(`${baseUrl}/api/admin/audit-logs`, {
+      headers: { Authorization: `Bearer ${adminToken}` },
+    })
+    assert.equal(auditResponse.status, 200)
+    const { logs } = await auditResponse.json()
+    assert.equal(logs.some((entry) => entry.action === 'staff.password_reset' && entry.targetId === staff.id), true)
+  } finally {
+    await new Promise((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()))
+    })
+  }
+})
+
+test('staff presence is updated by staff sessions and visible only to administrators', async () => {
+  const { server, baseUrl } = await createTestServer()
+  const staff = {
+    id: randomUUID(),
+    firstName: 'Presence',
+    lastName: 'Check',
+    mobile: `091${Math.floor(10000000 + Math.random() * 90000000)}`,
+    email: `presence.${Date.now()}@example.com`,
+    passwordHash: await hashPassword('StaffPass123!'),
+    role: 'staff',
+    status: 'On Duty',
+    lastSeen: null,
+  }
+
+  try {
+    await jsonDb.saveUser(staff)
+    const login = async (identifier, password) => {
+      const response = await fetch(`${baseUrl}/api/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ identifier, password }),
+      })
+      assert.equal(response.status, 200)
+      return response.json()
+    }
+    const [{ token: adminToken }, { token: staffToken }] = await Promise.all([
+      login('admin@barangay.gov.ph', 'AdminPass123'),
+      login(staff.email, 'StaffPass123!'),
+    ])
+
+    const anonymousPresence = await fetch(`${baseUrl}/api/staff/presence`, { method: 'POST' })
+    assert.equal(anonymousPresence.status, 401)
+
+    const resident = (await jsonDb.listAllUsers()).find((user) => user.role === 'resident')
+    const residentLogin = await login(resident.email, 'ResidentPass123!')
+    const forbiddenHeartbeat = await fetch(`${baseUrl}/api/staff/presence`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${residentLogin.token}` },
+    })
+    assert.equal(forbiddenHeartbeat.status, 403)
+
+    const forbiddenList = await fetch(`${baseUrl}/api/admin/staff/presence`, {
+      headers: { Authorization: `Bearer ${staffToken}` },
+    })
+    assert.equal(forbiddenList.status, 403)
+
+    const heartbeat = await fetch(`${baseUrl}/api/staff/presence`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${staffToken}` },
+    })
+    assert.equal(heartbeat.status, 200)
+    const heartbeatData = await heartbeat.json()
+    assert.equal(heartbeatData.ok, true)
+    assert.equal(typeof heartbeatData.lastSeen, 'string')
+
+    const adminList = await fetch(`${baseUrl}/api/admin/staff/presence`, {
+      headers: { Authorization: `Bearer ${adminToken}` },
+    })
+    assert.equal(adminList.status, 200)
+    const { staff: listedStaff } = await adminList.json()
+    const listedAccount = listedStaff.find((member) => member.id === staff.id)
+    assert.equal(listedAccount.lastSeen, heartbeatData.lastSeen)
+    assert.equal(listedAccount.email, staff.email)
+    assert.equal(listedAccount.passwordHash, undefined)
+    assert.equal(listedAccount.password, undefined)
+  } finally {
+    await new Promise((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()))
+    })
+  }
+})
+
 test('quality assessment endpoints are no longer exposed', async () => {
   const { server, baseUrl } = await createTestServer()
 

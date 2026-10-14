@@ -9,6 +9,8 @@
 
 In Admin → Access, user search updates as the administrator types and returns matching resident, staff, and administrator names across zones. The resident portal's search is intentionally limited to public dashboard content; it does not expose other residents' account details.
 
+The Admin → Access staff roster shows which staff portal sessions checked in within the last two minutes. Staff clients update their presence every 30 seconds while the page is visible, and the roster refreshes every 15 seconds. This is a recent-activity indicator, not a guaranteed real-time connection or proof of a person’s identity.
+
 Approval history stays active for 30 days by default and older approvals are archived automatically when a new approval is recorded. Administrators can also archive approvals manually: the default is 30 days, and every manual archive requires confirmation. Setting retention to `0` archives every approval currently in the active list, including recent ones. Archives remain downloadable from Archived Files until an administrator explicitly deletes them.
 
 ## Deployment

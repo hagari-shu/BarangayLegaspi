@@ -1439,6 +1439,110 @@ export function createApp() {
     }
   })
 
+  app.post('/api/staff/presence', async (req, res) => {
+    const authHeader = req.headers.authorization || ''
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null
+    if (!token) return res.status(401).json({ message: 'Authentication required.' })
+
+    let actor
+    try {
+      actor = await getCurrentActor(token)
+    } catch {
+      return res.status(401).json({ message: 'Invalid or expired token.' })
+    }
+    if (!actor || actor.user.role !== 'staff') {
+      return res.status(403).json({ message: 'Staff access required.' })
+    }
+
+    try {
+      const lastSeen = new Date().toISOString()
+      const updated = await store.updateUser?.(actor.user.id, { lastSeen })
+      if (!updated) return res.status(404).json({ message: 'Staff account not found.' })
+      return res.json({ ok: true, lastSeen })
+    } catch (error) {
+      console.error('failed to update staff presence', error)
+      return res.status(500).json({ message: 'Unable to update staff presence.' })
+    }
+  })
+
+  app.get('/api/admin/staff/presence', async (req, res) => {
+    const authHeader = req.headers.authorization || ''
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null
+    if (!token) return res.status(401).json({ message: 'Authentication required.' })
+
+    let actor
+    try {
+      actor = await getCurrentActor(token)
+    } catch {
+      return res.status(401).json({ message: 'Invalid or expired token.' })
+    }
+    if (!actor || actor.user.role !== 'admin') {
+      return res.status(403).json({ message: 'Administrator access required.' })
+    }
+
+    try {
+      const staff = (await store.listAllUsers?.() || [])
+        .filter((user) => user.role === 'staff')
+        .map((user) => ({
+          id: user.id,
+          firstName: user.first_name || user.firstName,
+          lastName: user.last_name || user.lastName,
+          position: user.position || 'Staff',
+          email: user.email,
+          mobile: user.mobile,
+          status: user.status,
+          lastSeen: user.last_seen || user.lastSeen || null,
+        }))
+      return res.json({ staff })
+    } catch (error) {
+      console.error('failed to load staff presence', error)
+      return res.status(500).json({ message: 'Unable to load staff presence.' })
+    }
+  })
+
+  app.post('/api/admin/staff/:id/password', async (req, res) => {
+    const authHeader = req.headers.authorization || ''
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null
+
+    if (!token) {
+      return res.status(401).json({ message: 'Authentication required.' })
+    }
+
+    let actor
+    try {
+      actor = await getCurrentActor(token)
+    } catch {
+      return res.status(401).json({ message: 'Invalid or expired token.' })
+    }
+
+    if (!actor || actor.user.role !== 'admin') {
+      return res.status(403).json({ message: 'Administrator access required.' })
+    }
+
+    const newPassword = String(req.body?.password || '').trim()
+    if (!isValidPassword(newPassword)) {
+      return res.status(400).json({ message: `Password must have ${passwordRequirements}.` })
+    }
+
+    try {
+      const targetUser = await store.findUserById?.(req.params.id)
+      if (!targetUser || targetUser.role !== 'staff') {
+        return res.status(404).json({ message: 'Staff member not found.' })
+      }
+
+      const updatedUser = await store.updateUser?.(targetUser.id, { passwordHash: await hashPassword(newPassword) })
+      if (!updatedUser) {
+        return res.status(404).json({ message: 'Staff member not found.' })
+      }
+
+      await writeAudit(actor.user, 'staff.password_reset', 'user', targetUser.id, { email: targetUser.email })
+      return res.json({ ok: true })
+    } catch (error) {
+      console.error('failed to reset staff password', error)
+      return res.status(500).json({ message: 'Unable to reset staff password.' })
+    }
+  })
+
   app.post('/api/admin/users', async (req, res) => {
     const authHeader = req.headers.authorization || ''
     const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null

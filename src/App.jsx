@@ -3784,6 +3784,11 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
   })
   const [showStaffForm, setShowStaffForm] = useState(false)
   const [creatingStaff, setCreatingStaff] = useState(false)
+  const [staffPasswordResetTarget, setStaffPasswordResetTarget] = useState(null)
+  const [staffPasswordResetForm, setStaffPasswordResetForm] = useState({ password: '', confirmPassword: '' })
+  const [resettingStaffPassword, setResettingStaffPassword] = useState(false)
+  const [staffPresence, setStaffPresence] = useState([])
+  const [staffPresenceError, setStaffPresenceError] = useState('')
   const [selectedZone, setSelectedZone] = useState('all')
   const [selectedUser, setSelectedUser] = useState(null)
   const [selectedReport, setSelectedReport] = useState(null)
@@ -3961,6 +3966,37 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
     }
   }
 
+  const handleResetStaffPassword = async (event) => {
+    event.preventDefault()
+    if (!isValidPassword(staffPasswordResetForm.password)) {
+      alert(`${t.newPassword} must have ${passwordRequirements}.`)
+      return
+    }
+    if (staffPasswordResetForm.password !== staffPasswordResetForm.confirmPassword) {
+      alert(t.passwordsDoNotMatch)
+      return
+    }
+    if (!staffPasswordResetTarget) return
+
+    setResettingStaffPassword(true)
+    try {
+      const response = await fetch(`${API_BASE}/admin/staff/${staffPasswordResetTarget.id}/password`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: staffPasswordResetForm.password }),
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(data.message || t.staffPasswordResetFailed)
+      setStaffPasswordResetTarget(null)
+      setStaffPasswordResetForm({ password: '', confirmPassword: '' })
+      alert(t.staffPasswordResetNotice)
+    } catch (error) {
+      alert(error.message || t.staffPasswordResetFailed)
+    } finally {
+      setResettingStaffPassword(false)
+    }
+  }
+
   const handleVerification = (user, status) => {
     const approved = status === 'Active Resident'
     setConfirmation({
@@ -4113,6 +4149,7 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
     }
 
     let auditRefreshTimer
+    let staffPresenceRefreshTimer
     if (activeTab === 'overview' || activeTab === 'access') {
       const refreshAuditLogs = () => {
         fetch(`${API_BASE}/admin/audit-logs?limit=500`)
@@ -4130,10 +4167,29 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
       if (activeTab === 'overview') auditRefreshTimer = window.setInterval(refreshAuditLogs, 30000)
     }
 
+    if (activeTab === 'access') {
+      const refreshStaffPresence = async () => {
+        try {
+          const response = await fetch(`${API_BASE}/admin/staff/presence`)
+          const data = await response.json().catch(() => ({}))
+          if (!response.ok) throw new Error(data.message || t.staffPresenceLoadFailed)
+          if (!Array.isArray(data.staff)) throw new Error(t.staffPresenceLoadFailed)
+          setStaffPresence(data.staff)
+          setStaffPresenceError('')
+        } catch (error) {
+          console.error('fetch staff presence error', error)
+          setStaffPresenceError(error.message || t.staffPresenceLoadFailed)
+        }
+      }
+      refreshStaffPresence()
+      staffPresenceRefreshTimer = window.setInterval(refreshStaffPresence, 15000)
+    }
+
     return () => {
       if (auditRefreshTimer) window.clearInterval(auditRefreshTimer)
+      if (staffPresenceRefreshTimer) window.clearInterval(staffPresenceRefreshTimer)
     }
-  }, [activeTab])
+  }, [activeTab, t.staffPresenceLoadFailed])
 
   const handleArchiveNow = async () => {
     const daysToArchive = retentionDays === '' ? 30 : Number(retentionDays)
@@ -4623,11 +4679,63 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
                     </WorkflowModal>
                   )}
 
+                  {staffPasswordResetTarget && (
+                    <WorkflowModal
+                      title={t.resetStaffPassword}
+                      onClose={() => {
+                        if (resettingStaffPassword) return
+                        setStaffPasswordResetTarget(null)
+                        setStaffPasswordResetForm({ password: '', confirmPassword: '' })
+                      }}
+                      wide
+                      disableClose={resettingStaffPassword}
+                    >
+                      <form className="editor-panel workflow-modal-form" onSubmit={handleResetStaffPassword}>
+                        <p>{t.staffPasswordResetIntro.replace('{name}', getDisplayName(staffPasswordResetTarget))}</p>
+                        <div className="editor-grid">
+                          <PasswordField
+                            id="admin-staff-reset-password"
+                            label={t.newPassword}
+                            value={staffPasswordResetForm.password}
+                            onChange={(event) => setStaffPasswordResetForm((current) => ({ ...current, password: event.target.value }))}
+                            helpText={`${passwordRequirements}.`}
+                          />
+                          <PasswordField
+                            id="admin-staff-reset-password-confirm"
+                            label={t.confirmNewPassword}
+                            value={staffPasswordResetForm.confirmPassword}
+                            onChange={(event) => setStaffPasswordResetForm((current) => ({ ...current, confirmPassword: event.target.value }))}
+                            helpText={null}
+                          />
+                        </div>
+                        <div className="editor-actions">
+                          <button
+                            type="button"
+                            className="secondary-btn small"
+                            onClick={() => {
+                              setStaffPasswordResetTarget(null)
+                              setStaffPasswordResetForm({ password: '', confirmPassword: '' })
+                            }}
+                            disabled={resettingStaffPassword}
+                          >
+                            {t.cancel}
+                          </button>
+                          <button type="submit" className="primary-btn small" disabled={resettingStaffPassword}>
+                            {resettingStaffPassword ? t.working : t.resetStaffPassword}
+                          </button>
+                        </div>
+                      </form>
+                    </WorkflowModal>
+                  )}
+
                   <section className="panel-card staff-access-roster" aria-labelledby="staff-access-heading">
                     <div className="panel-header">
                       <h3 id="staff-access-heading">{t.staffAccounts}</h3>
                       <span className="soft-label">{staffCount} {t.staffMembersAvailable}</span>
                     </div>
+                    <p className="report-metric-note">{t.staffCredentialsNote}</p>
+                    <p className="report-metric-note">{t.staffPresenceExplanation}</p>
+                    {staffPresenceError && <p className="inline-error" role="alert">{staffPresenceError}</p>}
                     {staffCount > 0 ? (
                       <div className="request-table-wrap">
                         <table className="request-table">
@@ -4638,18 +4746,54 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
                               <th>{t.email}</th>
                               <th>{t.mobileNumberLabel}</th>
                               <th>{t.status}</th>
+                              <th>{t.staffPresence}</th>
+                              <th>{t.actionsLabel}</th>
                             </tr>
                           </thead>
                           <tbody>
-                            {sortedUsers.filter((user) => user.role === 'staff').map((user) => (
-                              <tr key={user.id}>
-                                <td>{getDisplayName(user)}</td>
-                                <td>{getStaffPositionLabel(user.position || t.staffRole, t)}</td>
-                                <td>{user.email}</td>
-                                <td>{user.mobile}</td>
-                                <td>{user.status || t.onDutyStatus}</td>
-                              </tr>
-                            ))}
+                            {sortedUsers.filter((user) => user.role === 'staff').map((user) => {
+                              const presence = staffPresence.find((member) => member.id === user.id)
+                              const lastSeenDate = presence?.lastSeen ? new Date(presence.lastSeen) : null
+                              const isOnline = lastSeenDate && !Number.isNaN(lastSeenDate.getTime())
+                                && Date.now() - lastSeenDate.getTime() <= 120000
+
+                              return (
+                                <tr key={user.id}>
+                                  <td>{getDisplayName(user)}</td>
+                                  <td>{getStaffPositionLabel(user.position || t.staffRole, t)}</td>
+                                  <td>{user.email}</td>
+                                  <td>{user.mobile}</td>
+                                  <td>{user.status || t.onDutyStatus}</td>
+                                  <td>
+                                    <span className={`staff-presence-badge ${isOnline ? 'online' : 'offline'}`}>
+                                      <span aria-hidden="true" />
+                                      {isOnline ? t.onlineNow : t.offline}
+                                    </span>
+                                    {lastSeenDate && !Number.isNaN(lastSeenDate.getTime()) && (
+                                      <small className="staff-last-seen">
+                                        {t.lastSeen}: {new Intl.DateTimeFormat(language === 'fil' ? 'fil-PH' : 'en-PH', {
+                                          dateStyle: 'short',
+                                          timeStyle: 'short',
+                                          timeZone: 'Asia/Manila',
+                                        }).format(lastSeenDate)}
+                                      </small>
+                                    )}
+                                  </td>
+                                  <td>
+                                    <button
+                                      type="button"
+                                      className="secondary-btn small"
+                                      onClick={() => {
+                                        setStaffPasswordResetForm({ password: '', confirmPassword: '' })
+                                        setStaffPasswordResetTarget(user)
+                                      }}
+                                    >
+                                      {t.resetStaffPassword}
+                                    </button>
+                                  </td>
+                                </tr>
+                              )
+                            })}
                           </tbody>
                         </table>
                       </div>
@@ -5321,6 +5465,34 @@ function App() {
     const interval = window.setInterval(checkDueReminders, 15_000)
     return () => window.clearInterval(interval)
   }, [language, session?.user?.id, t.reminderMessage, t.reminderTitle])
+
+  useEffect(() => {
+    if (!isAuthenticated || userRole !== 'staff' || !session?.token) return undefined
+
+    const updateStaffPresence = async () => {
+      if (document.visibilityState !== 'visible') return
+      try {
+        const response = await fetch(`${API_BASE}/staff/presence`, { method: 'POST' })
+        if (!response.ok) {
+          const data = await response.json().catch(() => ({}))
+          throw new Error(data.message || 'Unable to update staff presence.')
+        }
+      } catch (error) {
+        console.error('staff presence heartbeat failed', error)
+      }
+    }
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') updateStaffPresence()
+    }
+
+    updateStaffPresence()
+    const interval = window.setInterval(updateStaffPresence, 30_000)
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    return () => {
+      window.clearInterval(interval)
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+    }
+  }, [isAuthenticated, userRole, session?.token])
 
   useEffect(() => {
     const loadUserData = async () => {
