@@ -6,6 +6,7 @@ import legaspiHero from './assets/legaspi-community.png'
 import { getMauQuickOptions, getMauReply, getMauResidentAnswer, getMauWelcome } from './mau-responses'
 import { reportClientError } from './client-error-reporting'
 import { getReportDateRange } from './report-date-range'
+import { isStaffReportResponse } from './report-contract'
 import translations from './translations'
 import './App.css'
 
@@ -2575,6 +2576,7 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
         const response = await fetch(`${API_BASE}/staff/reports?${params}`, { signal: controller.signal })
         const data = await response.json().catch(() => ({}))
         if (!response.ok) throw new Error(data.message || t.reportError)
+        if (!isStaffReportResponse(data)) throw new Error(t.reportError)
         if (active) setReportData(data)
       } catch (error) {
         if (error.name === 'AbortError') return

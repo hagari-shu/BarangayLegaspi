@@ -2,6 +2,19 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createRequestReportCsv, filterStaffReportRequests, getStaffRequestReport, isValidReportDate } from '../server/request-reporting.js'
 import { getReportDateRange } from '../src/report-date-range.js'
+import { isStaffReportResponse } from '../src/report-contract.js'
+
+test('staff report response contract accepts API output and rejects malformed payloads', () => {
+  const report = getStaffRequestReport(requests, { from: '2026-10-09', to: '2026-10-11' })
+  assert.equal(isStaffReportResponse(report), true)
+  assert.equal(isStaffReportResponse({}), false)
+  assert.equal(isStaffReportResponse({ ...report, summary: undefined }), false)
+  assert.equal(isStaffReportResponse({ ...report, activity: {} }), false)
+  assert.equal(isStaffReportResponse({
+    ...report,
+    statusDistribution: [{ name: 'Pending', count: -1 }],
+  }), false)
+})
 
 test('staff report date presets use Manila calendar days and handle month boundaries', () => {
   const now = new Date('2026-10-14T00:30:00.000Z')

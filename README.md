@@ -15,15 +15,16 @@ Approval history stays active for 30 days by default and older approvals are arc
 
 ## Deployment
 
-Deploy the React/Vite frontend to Vercel and the Laravel API to Render:
+The current production frontend on Vercel uses the Node/Express API at `https://barangaylegaspi.onrender.com/api`, backed by PostgreSQL. Laravel is deployed as a staged migration target and is not yet the API used by the production frontend. Do not change `VITE_API_BASE` to Laravel until authenticated resident, staff, admin, and content-management workflows have passed a coordinated cutover check.
 
 1. Set the Vercel build command to `npm run build`.
-2. Set `VITE_API_BASE` in Vercel to the public API URL ending in `/api` (for example, `https://brgy-legaspi-laravel.onrender.com/api`).
-3. Deploy the API using the repository's `render.yaml` (configured for Render's Free web-service plan and linked to the existing Singapore PostgreSQL database). Provide Laravel `APP_KEY`, `JWT_SECRET`, `MFA_ENCRYPTION_KEY`, and the exact frontend URL in `CORS_ORIGINS`. Use random keys of at least 32 characters. Existing installations must coordinate JWT rotation because it invalidates existing sessions; the MFA key-rotation procedure below preserves enrolled authenticators.
-4. For a new database without an administrator, set `ADMIN_EMAIL`, `ADMIN_MOBILE`, and a strong `ADMIN_PASSWORD` in the Render service environment before the first API login. Change that password after signing in.
-5. Set `RESET_DELIVERY_URL` and `RESET_DELIVERY_TOKEN` on the Node API to an authenticated HTTPS notification service before enabling password recovery. The service must accept a bearer token and the `password_reset` JSON payload; requests time out after 10 seconds.
+2. Set `VITE_API_BASE` in Vercel to the active Node API URL ending in `/api`.
+3. Keep the active Node/Express Render service connected to PostgreSQL and configure its keys, exact frontend `CORS_ORIGINS`, and other required environment variables. Use random keys of at least 32 characters. Existing installations must coordinate JWT rotation because it invalidates existing sessions; the MFA key-rotation procedure below preserves enrolled authenticators.
+4. For a new database without an administrator, set `ADMIN_EMAIL`, `ADMIN_MOBILE`, and a strong `ADMIN_PASSWORD` on the active Node service before the first API login. Change that password after signing in.
+5. The repository's `render.yaml` provisions the staged Laravel service and its connection to the existing Singapore PostgreSQL database; it does not configure or replace the active Node service. Back up the database and review the Laravel migration against a staging copy before any production cutover. Keep database credentials, application keys, and webhook secrets in deployment environment variables, never in source control.
+6. Set `RESET_DELIVERY_URL` and `RESET_DELIVERY_TOKEN` on the active Node API to an authenticated HTTPS notification service before enabling password recovery. The service must accept a bearer token and the `password_reset` JSON payload; requests time out after 10 seconds.
 
-The API migration preserves the `/api` routes and PostgreSQL data model. Laravel runs the schema migration on container startup. Back up the database before the first Laravel deployment and review the migration against a staging copy first. Keep database credentials, application keys, and webhook secrets in deployment environment variables, never in source control.
+The staged Laravel API preserves the `/api` routes and PostgreSQL data model, and runs its schema migration on container startup. The production health-check workflow monitors the active Node API and compares public announcement/event reads with the staged Laravel API.
 
 For the active Node/Express API, automatic administrator seeding is only for a genuinely new database. If either configured seed identifier (`ADMIN_EMAIL` or `ADMIN_MOBILE`) already belongs to an account, seeding is skipped; it never promotes or overwrites an existing user.
 
