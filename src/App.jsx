@@ -5,6 +5,7 @@ import barangaySeal from './assets/barangay-seal-new.png'
 import legaspiHero from './assets/legaspi-community.png'
 import { getMauQuickOptions, getMauReply, getMauResidentAnswer, getMauWelcome } from './mau-responses'
 import { reportClientError } from './client-error-reporting'
+import { getReportDateRange } from './report-date-range'
 import translations from './translations'
 import './App.css'
 
