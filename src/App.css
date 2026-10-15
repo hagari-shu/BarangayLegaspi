@@ -7878,6 +7878,101 @@ button.report-summary-card:focus-visible,
   grid-template-columns: minmax(0, 1fr);
 }
 
+.staff-dashboard-main .staff-reports-page {
+  --report-body-size: 0.875rem;
+  --report-helper-size: 0.8125rem;
+  gap: 18px;
+  font-size: var(--report-body-size);
+  line-height: 1.5;
+}
+
+.staff-dashboard-main .staff-reports-page .panel-header h2 {
+  font-size: 1.125rem;
+  line-height: 1.35;
+}
+
+.staff-dashboard-main .report-toolbar-actions button {
+  min-height: 40px;
+  font-size: var(--report-body-size);
+}
+
+.staff-dashboard-main .report-filters label {
+  font-size: var(--report-helper-size);
+}
+
+.staff-dashboard-main .report-filter-basis,
+.staff-dashboard-main .report-chart-legend,
+.staff-dashboard-main .report-metric-note,
+.staff-dashboard-main .report-decision-list small,
+.staff-dashboard-main .report-decision-list time,
+.staff-dashboard-main .report-decision-reference,
+.staff-dashboard-main .report-footer {
+  font-size: var(--report-helper-size);
+}
+
+.staff-dashboard-main .report-summary-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.staff-dashboard-main .report-summary-card {
+  display: grid;
+  min-height: 150px;
+  align-content: start;
+  justify-items: start;
+  gap: 6px;
+  padding: 18px;
+  line-height: 1.45;
+}
+
+.staff-dashboard-main .report-summary-card > * {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.staff-dashboard-main .report-summary-card .label {
+  display: block;
+  font-size: var(--report-body-size);
+  line-height: 1.4;
+}
+
+.staff-dashboard-main .report-summary-card .stat-number {
+  display: block;
+  font-size: clamp(1.75rem, 2.2vw, 2rem);
+  line-height: 1.15;
+}
+
+.staff-dashboard-main .report-summary-card.unavailable .stat-number {
+  font-size: var(--report-body-size);
+  font-weight: 750;
+}
+
+.staff-dashboard-main .report-summary-card .staff-metric-description {
+  display: block;
+  margin: 0;
+  font-size: var(--report-helper-size);
+  line-height: 1.45;
+}
+
+.staff-dashboard-main .report-analytics-grid {
+  gap: 18px;
+}
+
+.staff-dashboard-main .report-analytics-panel .panel-header {
+  align-items: flex-start;
+}
+
+.staff-dashboard-main .report-analytics-panel .empty-state {
+  font-size: var(--report-body-size);
+}
+
+.staff-dashboard-main .report-breakdown-item,
+.staff-dashboard-main .report-efficiency-list,
+.staff-dashboard-main .report-attention-list,
+.staff-dashboard-main .report-decision-list {
+  font-size: var(--report-body-size);
+}
+
 .user-detail-modal {
   display: flex;
   max-height: min(90dvh, 900px);
@@ -7949,6 +8044,12 @@ button.report-summary-card:focus-visible,
 
   .staff-dashboard-main .report-analytics-grid {
     grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (min-width: 1181px) {
+  .staff-dashboard-main .report-summary-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 }
 
