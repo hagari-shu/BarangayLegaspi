@@ -176,10 +176,36 @@ export async function initDatabase() {
       content TEXT NOT NULL,
       date VARCHAR(100),
       social_channels JSONB NOT NULL DEFAULT '[]'::jsonb,
+      social_delivery JSONB NOT NULL DEFAULT '{}'::jsonb,
+      facebook_post_id TEXT,
+      retraction_announcement_id UUID,
+      related_announcement_id UUID,
       created_at TIMESTAMPTZ DEFAULT NOW()
     );
   `)
   await query("ALTER TABLE announcements ADD COLUMN IF NOT EXISTS social_channels JSONB NOT NULL DEFAULT '[]'::jsonb")
+  await query("ALTER TABLE announcements ADD COLUMN IF NOT EXISTS social_delivery JSONB NOT NULL DEFAULT '{}'::jsonb")
+  await query('ALTER TABLE announcements ADD COLUMN IF NOT EXISTS facebook_post_id TEXT')
+  await query('ALTER TABLE announcements ADD COLUMN IF NOT EXISTS retraction_announcement_id UUID')
+  await query('ALTER TABLE announcements ADD COLUMN IF NOT EXISTS related_announcement_id UUID')
+
+  await query(`
+    CREATE TABLE IF NOT EXISTS messenger_subscribers (
+      psid TEXT PRIMARY KEY,
+      opted_in BOOLEAN NOT NULL DEFAULT false,
+      last_message_at TIMESTAMPTZ NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `)
+
+  await query(`
+    CREATE TABLE IF NOT EXISTS announcement_messenger_deliveries (
+      announcement_id UUID NOT NULL REFERENCES announcements(id) ON DELETE CASCADE,
+      psid TEXT NOT NULL REFERENCES messenger_subscribers(psid) ON DELETE CASCADE,
+      sent_at TIMESTAMPTZ NOT NULL,
+      PRIMARY KEY (announcement_id, psid)
+    );
+  `)
 
   if (SHOULD_SKIP_SEED || (IS_PRODUCTION && !ADMIN_SEED.password)) {
     return
@@ -242,23 +268,108 @@ export async function createUser(user) {
 }
 
 export async function listAnnouncements() {
-  const result = await query('SELECT id, tag, title, content, date, social_channels AS "socialChannels", created_at AS "createdAt" FROM announcements ORDER BY created_at DESC')
+  const result = await query('SELECT id, tag, title, content, date, social_channels AS "socialChannels", social_delivery AS "socialDelivery", facebook_post_id AS "facebookPostId", retraction_announcement_id AS "retractionAnnouncementId", related_announcement_id AS "relatedAnnouncementId", created_at AS "createdAt" FROM announcements ORDER BY created_at DESC')
   return result.rows.map((row) => ({ ...row, socialChannels: Array.isArray(row.socialChannels) ? row.socialChannels : [] }))
+}
+
+export async function getAnnouncement(id) {
+  const result = await query('SELECT id, tag, title, content, date, social_channels AS "socialChannels", social_delivery AS "socialDelivery", facebook_post_id AS "facebookPostId", retraction_announcement_id AS "retractionAnnouncementId", related_announcement_id AS "relatedAnnouncementId", created_at AS "createdAt" FROM announcements WHERE id = $1', [id])
+  const row = result.rows[0]
+  return row ? { ...row, socialChannels: Array.isArray(row.socialChannels) ? row.socialChannels : [] } : null
 }
 
 export async function saveAnnouncement(announcement) {
   const result = await query(
-    `INSERT INTO announcements (id, tag, title, content, date, social_channels, created_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)
-     RETURNING id, tag, title, content, date, social_channels AS "socialChannels", created_at AS "createdAt"`,
-    [announcement.id, announcement.tag, announcement.title, announcement.content, announcement.date, JSON.stringify(Array.isArray(announcement.socialChannels) ? announcement.socialChannels : []), announcement.createdAt]
+    `INSERT INTO announcements (id, tag, title, content, date, social_channels, social_delivery, facebook_post_id, retraction_announcement_id, related_announcement_id, created_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+     RETURNING id, tag, title, content, date, social_channels AS "socialChannels", social_delivery AS "socialDelivery", facebook_post_id AS "facebookPostId", retraction_announcement_id AS "retractionAnnouncementId", related_announcement_id AS "relatedAnnouncementId", created_at AS "createdAt"`,
+    [
+      announcement.id,
+      announcement.tag,
+      announcement.title,
+      announcement.content,
+      announcement.date,
+      JSON.stringify(Array.isArray(announcement.socialChannels) ? announcement.socialChannels : []),
+      JSON.stringify(announcement.socialDelivery || {}),
+      announcement.facebookPostId || null,
+      announcement.retractionAnnouncementId || null,
+      announcement.relatedAnnouncementId || null,
+      announcement.createdAt,
+    ]
   )
   return result.rows[0] ? { ...result.rows[0], socialChannels: Array.isArray(result.rows[0].socialChannels) ? result.rows[0].socialChannels : [] } : null
+}
+
+export async function updateAnnouncement(id, updates = {}) {
+  const columns = {
+    socialDelivery: ['social_delivery', (value) => JSON.stringify(value || {})],
+    facebookPostId: ['facebook_post_id', (value) => value || null],
+    retractionAnnouncementId: ['retraction_announcement_id', (value) => value || null],
+  }
+  const entries = Object.entries(columns)
+    .filter(([key]) => Object.hasOwn(updates, key))
+    .map(([key, [column, transform]]) => [column, transform(updates[key])])
+  if (!entries.length) return getAnnouncement(id)
+  const assignments = entries.map(([column], index) => `${column} = $${index + 2}`)
+  const result = await query(
+    `UPDATE announcements SET ${assignments.join(', ')} WHERE id = $1
+     RETURNING id, tag, title, content, date, social_channels AS "socialChannels", social_delivery AS "socialDelivery", facebook_post_id AS "facebookPostId", retraction_announcement_id AS "retractionAnnouncementId", related_announcement_id AS "relatedAnnouncementId", created_at AS "createdAt"`,
+    [id, ...entries.map(([, value]) => value)],
+  )
+  const row = result.rows[0]
+  return row ? { ...row, socialChannels: Array.isArray(row.socialChannels) ? row.socialChannels : [] } : null
 }
 
 export async function deleteAnnouncement(id) {
   const result = await query('DELETE FROM announcements WHERE id = $1 RETURNING id', [id])
   return result.rows[0] || null
+}
+
+export async function upsertMessengerSubscriber({ psid, optedIn, lastMessageAt }) {
+  await query(
+    `INSERT INTO messenger_subscribers (psid, opted_in, last_message_at)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (psid) DO UPDATE SET opted_in = EXCLUDED.opted_in, last_message_at = EXCLUDED.last_message_at, updated_at = NOW()`,
+    [psid, Boolean(optedIn), lastMessageAt],
+  )
+}
+
+export async function recordMessengerContact({ psid, lastMessageAt }) {
+  await query(
+    `INSERT INTO messenger_subscribers (psid, opted_in, last_message_at)
+     VALUES ($1, false, $2)
+     ON CONFLICT (psid) DO UPDATE SET last_message_at = EXCLUDED.last_message_at, updated_at = NOW()`,
+    [psid, lastMessageAt],
+  )
+}
+
+export async function listEligibleMessengerSubscribers(since, until) {
+  const result = await query(
+    'SELECT psid, opted_in AS "optedIn", last_message_at AS "lastMessageAt" FROM messenger_subscribers WHERE opted_in = true AND last_message_at BETWEEN $1 AND $2',
+    [since, until],
+  )
+  return result.rows
+}
+
+export async function recordMessengerAnnouncementDelivery({ announcementId, psid, sentAt }) {
+  await query(
+    `INSERT INTO announcement_messenger_deliveries (announcement_id, psid, sent_at)
+     VALUES ($1, $2, $3) ON CONFLICT (announcement_id, psid) DO NOTHING`,
+    [announcementId, psid, sentAt],
+  )
+}
+
+export async function listEligibleMessengerAnnouncementRecipients(announcementId, since, until) {
+  const result = await query(
+    `SELECT deliveries.psid
+     FROM announcement_messenger_deliveries AS deliveries
+     JOIN messenger_subscribers AS subscribers ON subscribers.psid = deliveries.psid
+     WHERE deliveries.announcement_id = $1
+       AND subscribers.opted_in = true
+       AND subscribers.last_message_at BETWEEN $2 AND $3`,
+    [announcementId, since, until],
+  )
+  return result.rows
 }
 
 export async function saveUser(user) {

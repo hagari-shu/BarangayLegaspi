@@ -385,6 +385,193 @@ test('reports, announcements, and events do not return seeded demonstration cont
   }
 })
 
+test('staff can publish, retract, and delete announcements from the staff workflow', async () => {
+  const { server, baseUrl } = await createTestServer()
+  const staff = {
+    id: randomUUID(),
+    firstName: 'Announcement',
+    lastName: 'Staff',
+    mobile: `093${Math.floor(10000000 + Math.random() * 90000000)}`,
+    email: `announcement-staff.${Date.now()}@example.com`,
+    passwordHash: await hashPassword('StaffPass123!'),
+    role: 'staff',
+    status: 'On Duty',
+    position: 'Staff',
+  }
+  try {
+    await jsonDb.saveUser(staff)
+    const login = await fetch(`${baseUrl}/api/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ identifier: staff.email, password: 'StaffPass123!' }),
+    })
+    assert.equal(login.status, 200)
+    const { token } = await login.json()
+    const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
+
+    const unsupportedChannel = await fetch(`${baseUrl}/api/announcements`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ title: 'Test', content: 'Test notice', socialChannels: ['instagram'] }),
+    })
+    assert.equal(unsupportedChannel.status, 400)
+
+    const createResponse = await fetch(`${baseUrl}/api/announcements`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ title: 'Test notice', content: 'Original content', socialChannels: [] }),
+    })
+    assert.equal(createResponse.status, 201)
+    const { announcement } = await createResponse.json()
+
+    const retractionResponse = await fetch(`${baseUrl}/api/announcements/${announcement.id}/retract`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ content: 'Correction: please disregard the earlier time.' }),
+    })
+    assert.equal(retractionResponse.status, 201)
+    const { announcement: retraction } = await retractionResponse.json()
+    assert.equal(retraction.relatedAnnouncementId, announcement.id)
+
+    const deleteResponse = await fetch(`${baseUrl}/api/announcements/${announcement.id}`, {
+      method: 'DELETE',
+      headers,
+    })
+    assert.equal(deleteResponse.status, 200)
+    assert.equal((await deleteResponse.json()).messengerMessagesCannotBeUnsent, false)
+  } finally {
+    server.close()
+  }
+})
+
+test('Messenger corrections stay limited to recipients of the original announcement', async () => {
+  const { server, baseUrl } = await createTestServer()
+  const staff = {
+    id: randomUUID(),
+    firstName: 'Messenger',
+    lastName: 'Staff',
+    mobile: `093${Math.floor(10000000 + Math.random() * 90000000)}`,
+    email: `messenger-staff.${Date.now()}@example.com`,
+    passwordHash: await hashPassword('StaffPass123!'),
+    role: 'staff',
+    status: 'On Duty',
+    position: 'Staff',
+  }
+  const metaKeys = [
+    'META_PAGE_ID',
+    'META_PAGE_ACCESS_TOKEN',
+    'META_APP_SECRET',
+    'META_WEBHOOK_VERIFY_TOKEN',
+    'META_GRAPH_API_VERSION',
+  ]
+  const originalMetaEnv = Object.fromEntries(metaKeys.map((key) => [key, process.env[key]]))
+  const originalFetch = globalThis.fetch
+  const sentRecipients = []
+  Object.assign(process.env, {
+    META_PAGE_ID: 'test-page-id',
+    META_PAGE_ACCESS_TOKEN: 'test-page-token',
+    META_APP_SECRET: 'test-app-secret',
+    META_WEBHOOK_VERIFY_TOKEN: 'test-verify-token',
+    META_GRAPH_API_VERSION: 'v23.0',
+  })
+  globalThis.fetch = async (input, options) => {
+    if (String(input).startsWith('https://graph.facebook.com/')) {
+      const params = new URLSearchParams(options.body)
+      sentRecipients.push(JSON.parse(params.get('recipient')).id)
+      return new Response(JSON.stringify({ message_id: `mid.${sentRecipients.length}` }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }
+    return originalFetch(input, options)
+  }
+  await jsonDb.saveUser(staff)
+
+  try {
+    const login = await fetch(`${baseUrl}/api/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ identifier: staff.email, password: 'StaffPass123!' }),
+    })
+    assert.equal(login.status, 200)
+    const { token } = await login.json()
+    const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
+    const integrationStatus = await fetch(`${baseUrl}/api/social-integrations/status`, { headers })
+    assert.equal(integrationStatus.status, 200)
+    assert.deepEqual((await integrationStatus.json()).integrations, { facebook: true, messenger: true })
+    const unrelatedPagePayload = JSON.stringify({
+      object: 'page',
+      entry: [{
+        id: 'another-page-id',
+        messaging: [{
+          sender: { id: 'unrelated-psid' },
+          timestamp: Date.now(),
+          message: { text: 'SUBSCRIBE' },
+        }],
+      }],
+    })
+    const webhookSignature = `sha256=${createHmac('sha256', process.env.META_APP_SECRET).update(unrelatedPagePayload).digest('hex')}`
+    const unrelatedWebhook = await fetch(`${baseUrl}/api/meta/webhook`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-hub-signature-256': webhookSignature },
+      body: unrelatedPagePayload,
+    })
+    assert.equal(unrelatedWebhook.status, 200)
+    assert.deepEqual(sentRecipients, [])
+    assert.equal((await jsonDb.readDb()).messengerSubscribers?.length || 0, 0)
+
+    const lastMessageAt = new Date().toISOString()
+    await jsonDb.upsertMessengerSubscriber({ psid: 'original-1', optedIn: true, lastMessageAt })
+    await jsonDb.upsertMessengerSubscriber({ psid: 'original-2', optedIn: true, lastMessageAt })
+    await jsonDb.upsertMessengerSubscriber({
+      psid: 'future-contact',
+      optedIn: true,
+      lastMessageAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+    })
+
+    const createResponse = await fetch(`${baseUrl}/api/announcements`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ title: 'Original notice', content: 'Original message', socialChannels: ['messenger'] }),
+    })
+    assert.equal(createResponse.status, 201)
+    const { announcement } = await createResponse.json()
+    assert.equal(announcement.socialDelivery.messenger.sent, 2)
+
+    const configuredAppSecret = process.env.META_APP_SECRET
+    delete process.env.META_APP_SECRET
+    let unavailableRetraction
+    try {
+      unavailableRetraction = await fetch(`${baseUrl}/api/announcements/${announcement.id}/retract`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ content: 'This must not be recorded without Messenger.' }),
+      })
+    } finally {
+      process.env.META_APP_SECRET = configuredAppSecret
+    }
+    assert.equal(unavailableRetraction.status, 503)
+    assert.equal((await jsonDb.listAnnouncements()).length, 1)
+
+    await jsonDb.upsertMessengerSubscriber({ psid: 'new-subscriber', optedIn: true, lastMessageAt })
+    const retractResponse = await fetch(`${baseUrl}/api/announcements/${announcement.id}/retract`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ content: 'Correction for the original notice.' }),
+    })
+    assert.equal(retractResponse.status, 201)
+    assert.equal((await retractResponse.json()).socialDelivery.messenger.sent, 2)
+    assert.deepEqual(sentRecipients, ['original-1', 'original-2', 'original-1', 'original-2'])
+  } finally {
+    globalThis.fetch = originalFetch
+    for (const key of metaKeys) {
+      if (originalMetaEnv[key] === undefined) delete process.env[key]
+      else process.env[key] = originalMetaEnv[key]
+    }
+    server.close()
+  }
+})
+
 test('registers a resident and waits for administrator approval', async () => {
   const { server, baseUrl } = await createTestServer()
   const mobile = `091${Math.floor(10000000 + Math.random() * 90000000)}`

@@ -327,10 +327,25 @@ export async function listAnnouncements() {
   return Array.isArray(db.announcements) ? db.announcements : []
 }
 
+export async function getAnnouncement(id) {
+  const db = await readDb()
+  return (db.announcements || []).find((item) => String(item.id || item.title) === String(id)) || null
+}
+
 export async function saveAnnouncement(announcement) {
   const db = await readDb()
   db.announcements = Array.isArray(db.announcements) ? db.announcements : []
   db.announcements.unshift(announcement)
+  await writeDb(db)
+  return announcement
+}
+
+export async function updateAnnouncement(id, updates) {
+  const db = await readDb()
+  db.announcements = Array.isArray(db.announcements) ? db.announcements : []
+  const announcement = db.announcements.find((item) => String(item.id || item.title) === String(id))
+  if (!announcement) return null
+  Object.assign(announcement, updates)
   await writeDb(db)
   return announcement
 }
@@ -341,8 +356,75 @@ export async function deleteAnnouncement(id) {
   const announcement = db.announcements.find((item) => String(item.id || item.title) === String(id))
   if (!announcement) return null
   db.announcements = db.announcements.filter((item) => String(item.id || item.title) !== String(id))
+  db.messengerAnnouncementDeliveries = (db.messengerAnnouncementDeliveries || [])
+    .filter((delivery) => String(delivery.announcementId) !== String(id))
   await writeDb(db)
   return announcement
+}
+
+export async function upsertMessengerSubscriber({ psid, optedIn, lastMessageAt }) {
+  const db = await readDb()
+  db.messengerSubscribers = Array.isArray(db.messengerSubscribers) ? db.messengerSubscribers : []
+  const subscriber = db.messengerSubscribers.find((item) => item.psid === psid)
+  if (subscriber) {
+    subscriber.optedIn = Boolean(optedIn)
+    subscriber.lastMessageAt = lastMessageAt
+  } else {
+    db.messengerSubscribers.push({ psid, optedIn: Boolean(optedIn), lastMessageAt })
+  }
+  await writeDb(db)
+}
+
+export async function recordMessengerContact({ psid, lastMessageAt }) {
+  const db = await readDb()
+  db.messengerSubscribers = Array.isArray(db.messengerSubscribers) ? db.messengerSubscribers : []
+  const subscriber = db.messengerSubscribers.find((item) => item.psid === psid)
+  if (subscriber) subscriber.lastMessageAt = lastMessageAt
+  else db.messengerSubscribers.push({ psid, optedIn: false, lastMessageAt })
+  await writeDb(db)
+}
+
+export async function listEligibleMessengerSubscribers(since, until) {
+  const db = await readDb()
+  const cutoff = Date.parse(since)
+  const deadline = Date.parse(until)
+  return (db.messengerSubscribers || []).filter((subscriber) => (
+    subscriber.optedIn === true
+    && Date.parse(subscriber.lastMessageAt) >= cutoff
+    && Date.parse(subscriber.lastMessageAt) <= deadline
+  ))
+}
+
+export async function recordMessengerAnnouncementDelivery({ announcementId, psid, sentAt }) {
+  const db = await readDb()
+  db.messengerAnnouncementDeliveries = Array.isArray(db.messengerAnnouncementDeliveries)
+    ? db.messengerAnnouncementDeliveries
+    : []
+  if (!db.messengerAnnouncementDeliveries.some((delivery) => (
+    String(delivery.announcementId) === String(announcementId) && delivery.psid === psid
+  ))) {
+    db.messengerAnnouncementDeliveries.push({ announcementId, psid, sentAt })
+    await writeDb(db)
+  }
+}
+
+export async function listEligibleMessengerAnnouncementRecipients(announcementId, since, until) {
+  const db = await readDb()
+  const cutoff = Date.parse(since)
+  const deadline = Date.parse(until)
+  const eligiblePsids = new Set((db.messengerSubscribers || [])
+    .filter((subscriber) => (
+      subscriber.optedIn === true
+      && Date.parse(subscriber.lastMessageAt) >= cutoff
+      && Date.parse(subscriber.lastMessageAt) <= deadline
+    ))
+    .map((subscriber) => subscriber.psid))
+  return (db.messengerAnnouncementDeliveries || [])
+    .filter((delivery) => (
+      String(delivery.announcementId) === String(announcementId)
+      && eligiblePsids.has(delivery.psid)
+    ))
+    .map((delivery) => ({ psid: delivery.psid }))
 }
 
 export async function addAuditLog(entry) {

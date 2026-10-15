@@ -29,6 +29,19 @@ The current production frontend on Vercel uses the Node/Express API at `https://
 5. The repository's `render.yaml` provisions the staged Laravel service and its connection to the existing Singapore PostgreSQL database; it does not configure or replace the active Node service. Back up the database and review the Laravel migration against a staging copy before any production cutover. Keep database credentials, application keys, and webhook secrets in deployment environment variables, never in source control.
 6. Set `RESET_DELIVERY_URL` and `RESET_DELIVERY_TOKEN` on the active Node API to an authenticated HTTPS notification service before enabling password recovery. The service must accept a bearer token and the `password_reset` JSON payload; requests time out after 10 seconds.
 
+### Staff announcement publishing to Facebook and Messenger
+
+The staff portal supports Facebook Page posts and Messenger announcements only. Configure these variables as secrets/environment settings on the active Node/Express Render service; never put Page tokens or app secrets in Vercel or source control:
+
+- `META_PAGE_ID`: the official Barangay Legaspi Facebook Page ID. Do not use the currently linked Sangguniang Kabataan profile.
+- `META_PAGE_ACCESS_TOKEN`: a Page access token with Meta's `pages_manage_posts` permission for Page publishing, `pages_messaging` for Messenger, and `pages_manage_metadata` to subscribe the Page to app webhooks.
+- `META_APP_SECRET` and `META_WEBHOOK_VERIFY_TOKEN`: required to verify Messenger webhook deliveries.
+- `META_GRAPH_API_VERSION`: a currently supported Meta Graph API version, in `vNN.N` format.
+
+Configure the Meta app's Page webhook subscription for `messages` and `messaging_postbacks`, pointing to `https://barangaylegaspi.onrender.com/api/meta/webhook`. Publish the app and obtain any required Meta review/advanced access before enabling it for real residents. Staff can share the Page's Messenger link from the announcement form. A resident must start a Page conversation and send `SUBSCRIBE`; `STOP` or `UNSUBSCRIBE` opts them out. Subscriber Page-scoped IDs and consent state are stored by the active API.
+
+Messenger delivery is restricted to opted-in people who messaged the Page within the preceding 24 hours. A correction is sent only to recipients who received that specific original Messenger announcement and who remain opted in and eligible; the API does not send a correction to a broader subscriber list. Facebook Page posts can be deleted from the staff portal; already-delivered Messenger messages cannot be unsent, so staff must publish a correction/retraction instead. Subscriber Page-scoped IDs and per-announcement delivery relationships are stored by the API to enforce these rules. Establish and publish an appropriate privacy notice and retention schedule for this data before enabling Messenger for residents. Verify the connected Page and permissions in Meta before setting the production environment variables.
+
 The staged Laravel API preserves the `/api` routes and PostgreSQL data model, and runs its schema migration on container startup. The production health-check workflow monitors the active Node API and compares public announcement/event reads with the staged Laravel API.
 
 For the active Node/Express API, automatic administrator seeding is only for a genuinely new database. If either configured seed identifier (`ADMIN_EMAIL` or `ADMIN_MOBILE`) already belongs to an account, seeding is skipped; it never promotes or overwrites an existing user.

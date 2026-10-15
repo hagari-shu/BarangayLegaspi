@@ -405,6 +405,22 @@ test('Facebook group and profile links have localized labels', () => {
   }
 })
 
+test('larger text controls are localized for both supported languages', () => {
+  assert.ok(translations.en.largerText)
+  assert.ok(translations.en.standardText)
+  assert.ok(translations.fil.largerText)
+  assert.ok(translations.fil.standardText)
+})
+
+test('staff social publishing status and Messenger safety labels are localized', () => {
+  for (const locale of [translations.en, translations.fil]) {
+    assert.ok(locale.socialNotConfigured)
+    assert.ok(locale.socialIntegrationStatusUnavailable)
+    assert.ok(locale.messengerMessagesRemain)
+    assert.ok(locale.messengerOptInLink)
+  }
+})
+
 test('captain photo controls and profile details have localized labels', () => {
   for (const locale of [translations.en, translations.fil]) {
     assert.ok(locale.captainIdentification)

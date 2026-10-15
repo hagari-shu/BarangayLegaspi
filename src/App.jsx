@@ -11,6 +11,7 @@ import translations from './translations'
 import './App.css'
 
 const sessionKey = 'brgy-legaspi-session'
+const readableTextStorageKey = 'brgy-legaspi-readable-text'
 const getRequestReminderStorageKey = (userId) => `brgy-legaspi-request-reminders:${userId}`
 const API_BASE = (import.meta.env.VITE_API_BASE || (import.meta.env.DEV ? 'http://localhost:3001/api' : '')).replace(/\/$/, '')
 
@@ -62,12 +63,45 @@ const isValidPassword = (value) => {
 }
 const passwordRequirements = 'at least 8 characters, one uppercase letter, one lowercase letter, one number, and one special character'
 
-const LanguageToggle = ({ language, setLanguage }) => (
-  <div className="language-toggle" role="group" aria-label={translations[language]?.languageSelectionLabel || translations.en.languageSelectionLabel}>
-    <button type="button" className={language === 'en' ? 'active' : ''} aria-pressed={language === 'en'} onClick={() => setLanguage('en')}>EN</button>
-    <button type="button" className={language === 'fil' ? 'active' : ''} aria-pressed={language === 'fil'} onClick={() => setLanguage('fil')}>FIL</button>
-  </div>
-)
+const LanguageToggle = ({ language, setLanguage }) => {
+  const [largeText, setLargeText] = useState(() => {
+    try {
+      return localStorage.getItem(readableTextStorageKey) === 'true'
+    } catch (error) {
+      console.error('load readable text preference failed', error)
+      return false
+    }
+  })
+  const t = translations[language] || translations.en
+
+  useEffect(() => {
+    document.documentElement.classList.toggle('large-readable-text', largeText)
+    try {
+      localStorage.setItem(readableTextStorageKey, String(largeText))
+    } catch (error) {
+      console.error('save readable text preference failed', error)
+    }
+  }, [largeText])
+
+  return (
+    <>
+      <div className="language-toggle" role="group" aria-label={t.languageSelectionLabel}>
+        <button type="button" className={language === 'en' ? 'active' : ''} aria-pressed={language === 'en'} onClick={() => setLanguage('en')}>EN</button>
+        <button type="button" className={language === 'fil' ? 'active' : ''} aria-pressed={language === 'fil'} onClick={() => setLanguage('fil')}>FIL</button>
+      </div>
+      <button
+        type="button"
+        className={`text-size-toggle${largeText ? ' active' : ''}`}
+        aria-label={largeText ? t.standardText : t.largerText}
+        aria-pressed={largeText}
+        title={largeText ? t.standardText : t.largerText}
+        onClick={() => setLargeText((current) => !current)}
+      >
+        <span aria-hidden="true">Aa</span><span className="text-size-toggle-mark" aria-hidden="true">{largeText ? '−' : '+'}</span>
+      </button>
+    </>
+  )
+}
 
 function PasswordField({ id, label, value, onChange, autoComplete = 'new-password', minLength = 8, placeholder, required = true, helpText }) {
   const [visible, setVisible] = useState(false)
@@ -160,10 +194,8 @@ const initialProfile = {
 
 const initialRequests = []
 const defaultSocialAccounts = [
-  { key: 'facebook', label: 'Facebook', connected: false },
-  { key: 'instagram', label: 'Instagram', connected: false },
-  { key: 'x', label: 'X / Twitter', connected: false },
-  { key: 'messenger', label: 'Messenger', connected: false },
+  { key: 'facebook', label: 'Facebook' },
+  { key: 'messenger', label: 'Messenger' },
 ]
 
 const getDisplayName = (user = {}) => {
@@ -185,7 +217,7 @@ const formatDateValue = (value) => {
   return parsed.toLocaleString()
 }
 
-function WorkflowModal({ title, onClose, children, wide = false, disableClose = false, closeLabel = 'Close dialog', closeButtonRef, trapFocus = false }) {
+function WorkflowModal({ title, onClose, children, wide = false, className = '', disableClose = false, closeLabel = 'Close dialog', closeButtonRef, trapFocus = false }) {
   const titleId = 'workflow-modal-title'
   const modalRef = useRef(null)
   useEffect(() => {
@@ -224,7 +256,7 @@ function WorkflowModal({ title, onClose, children, wide = false, disableClose = 
     }}>
       <section
         ref={modalRef}
-        className={`modal-content workflow-modal${wide ? ' workflow-modal-wide' : ''}`}
+        className={`modal-content workflow-modal${wide ? ' workflow-modal-wide' : ''}${className ? ` ${className}` : ''}`}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
@@ -2457,7 +2489,7 @@ function SettingsPage({ profile, onLogout, language, setLanguage }) {
   )
 }
 
-function StaffPage({ staffMembers = [], announcements = [], currentUser, userRole = 'staff', onProcessRequest, onLogout, onAddStaffMember, onStaffMemberUpdated, onAddAnnouncement, onDeleteAnnouncement, onDeleteStaffMember, language, setLanguage }) {
+function StaffPage({ staffMembers = [], announcements = [], currentUser, userRole = 'staff', onProcessRequest, onLogout, onAddStaffMember, onStaffMemberUpdated, onAddAnnouncement, onDeleteAnnouncement, onRetractAnnouncement, onDeleteStaffMember, language, setLanguage }) {
   const t = translations[language] || translations.en
   const [activeTab, setActiveTab] = useState('queue')
   const [openRequestPanel, setOpenRequestPanel] = useState('queue')
@@ -2491,6 +2523,12 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
   const [reportExporting, setReportExporting] = useState(false)
   const [reportExportError, setReportExportError] = useState('')
   const [reportValidationError, setReportValidationError] = useState('')
+  const [socialIntegrationStatus, setSocialIntegrationStatus] = useState(null)
+  const [socialIntegrationStatusError, setSocialIntegrationStatusError] = useState('')
+  const [messengerLink, setMessengerLink] = useState('')
+  const [retractionTarget, setRetractionTarget] = useState(null)
+  const [retractionContent, setRetractionContent] = useState('')
+  const [retractionSubmitting, setRetractionSubmitting] = useState(false)
   const [todayDate] = useState(() => new Date())
   const [requestStatusDrafts, setRequestStatusDrafts] = useState({})
   const [requestStatusNotes, setRequestStatusNotes] = useState({})
@@ -2504,7 +2542,33 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
     mobile: '',
     password: '',
   })
-  const connectedSocialAccounts = defaultSocialAccounts
+  const connectedSocialAccounts = defaultSocialAccounts.map((account) => ({
+    ...account,
+    connected: Boolean(socialIntegrationStatus?.[account.key]),
+  }))
+
+  useEffect(() => {
+    let active = true
+    fetch(`${API_BASE}/social-integrations/status`)
+      .then(async (response) => {
+        const data = await response.json().catch(() => ({}))
+        if (!response.ok) throw new Error(data.message || 'Unable to load social connection status.')
+        if (active) {
+          setSocialIntegrationStatus(data.integrations || {})
+          setMessengerLink(data.messengerLink || '')
+        }
+      })
+      .catch((error) => {
+        console.error('load social integration status error', error)
+        if (active) {
+          setSocialIntegrationStatus({})
+          setSocialIntegrationStatusError(error.message || 'Unable to load social connection status.')
+        }
+      })
+    return () => {
+      active = false
+    }
+  }, [])
   const [announcementForm, setAnnouncementForm] = useState({
     title: '',
     content: '',
@@ -2856,6 +2920,25 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
 
       return { ...prev, socialChannels: Array.from(nextChannels) }
     })
+  }
+
+  const handleRetractionSubmit = async (event) => {
+    event.preventDefault()
+    const content = sanitizeText(retractionContent)
+    if (!retractionTarget || !content) {
+      alert(t.retractionMessageRequired)
+      return
+    }
+    setRetractionSubmitting(true)
+    try {
+      await onRetractAnnouncement?.(retractionTarget.id, content)
+      setRetractionTarget(null)
+      setRetractionContent('')
+    } catch (error) {
+      alert(error.message || t.retractionFailed)
+    } finally {
+      setRetractionSubmitting(false)
+    }
   }
 
   const handleAnnouncementSubmit = async (event) => {
@@ -3414,20 +3497,20 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
                   </div>
 
                   {showAnnouncementForm && (
-                    <WorkflowModal title={t.publishAnnouncement} onClose={() => setShowAnnouncementForm(false)} wide>
-                    <form className="editor-panel workflow-modal-form" onSubmit={handleAnnouncementSubmit}>
-                    <div className="editor-grid">
+                    <WorkflowModal title={t.publishAnnouncement} onClose={() => setShowAnnouncementForm(false)} wide className="announcement-modal">
+                    <form className="editor-panel workflow-modal-form announcement-composer" onSubmit={handleAnnouncementSubmit}>
+                    <div className="editor-grid announcement-composer-fields">
                       <div className="input-block full-width">
-                        <label>Title</label>
-                        <input type="text" value={announcementForm.title} onChange={(event) => setAnnouncementForm((prev) => ({ ...prev, title: event.target.value }))} placeholder="e.g. Barangay Day celebration" />
+                        <label htmlFor="announcement-title">Title</label>
+                        <input id="announcement-title" type="text" value={announcementForm.title} onChange={(event) => setAnnouncementForm((prev) => ({ ...prev, title: event.target.value }))} placeholder="e.g. Barangay Day celebration" />
                       </div>
                       <div className="input-block">
-                        <label>Date</label>
-                        <input type="text" value={announcementForm.date} onChange={(event) => setAnnouncementForm((prev) => ({ ...prev, date: event.target.value }))} placeholder="June 25 • 8:00 AM" />
+                        <label htmlFor="announcement-date">Date</label>
+                        <input id="announcement-date" type="text" value={announcementForm.date} onChange={(event) => setAnnouncementForm((prev) => ({ ...prev, date: event.target.value }))} placeholder="June 25 • 8:00 AM" />
                       </div>
                       <div className="input-block">
-                        <label>Priority</label>
-                        <select value={announcementForm.tag} onChange={(event) => setAnnouncementForm((prev) => ({ ...prev, tag: event.target.value }))}>
+                        <label htmlFor="announcement-priority">Priority</label>
+                        <select id="announcement-priority" value={announcementForm.tag} onChange={(event) => setAnnouncementForm((prev) => ({ ...prev, tag: event.target.value }))}>
                           <option value="green">General</option>
                           <option value="blue">Information</option>
                           <option value="amber">Important</option>
@@ -3435,28 +3518,37 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
                         </select>
                       </div>
                       <div className="input-block full-width">
-                        <label>Message</label>
-                        <textarea rows="4" value={announcementForm.content} onChange={(event) => setAnnouncementForm((prev) => ({ ...prev, content: event.target.value }))} placeholder="Write the key message for residents and staff." />
+                        <label htmlFor="announcement-message">Message</label>
+                        <textarea id="announcement-message" rows="4" value={announcementForm.content} onChange={(event) => setAnnouncementForm((prev) => ({ ...prev, content: event.target.value }))} placeholder="Write the key message for residents and staff." />
                       </div>
-                      <div className="input-block full-width">
+                      <div className="input-block full-width announcement-social-field">
                         <label>{t.socialMediaIntegration}</label>
-                        <div className="social-account-picker" style={{ display: 'flex', flexWrap: 'wrap', gap: '12px', marginTop: '8px' }}>
+                        <div className="social-account-picker announcement-social-picker" role="group" aria-label={t.socialMediaIntegration}>
                           {connectedSocialAccounts.map((account) => {
                             const isSelected = (announcementForm.socialChannels || []).includes(account.key)
                             return (
-                              <label key={account.key} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 12px', border: '1px solid #d7dfe3', borderRadius: '999px', background: isSelected ? '#eafaf3' : '#f7f9fa', cursor: 'pointer' }}>
+                              <label
+                                key={account.key}
+                                className={`announcement-social-option${isSelected ? ' selected' : ''}${account.connected ? '' : ' unavailable'}`}
+                              >
                                 <input
+                                  className="announcement-social-checkbox"
                                   type="checkbox"
                                   checked={isSelected}
+                                  disabled={!account.connected}
                                   onChange={() => toggleAnnouncementChannel(account.key)}
                                 />
-                                <span>{account.label}</span>
-                                <small style={{ color: account.connected ? '#0e7a5d' : '#7a7f85' }}>{account.connected ? t.connected : t.connectLater}</small>
+                                <span className="announcement-social-copy">
+                                  <span>{account.label}</span>
+                                  <small>{account.connected ? t.connected : t.socialNotConfigured}</small>
+                                </span>
                               </label>
                             )
                           })}
                         </div>
-                        <small className="request-staff-note">{t.socialIntegrationPending}</small>
+                        <small className="announcement-social-guidance">{t.socialIntegrationPending}</small>
+                        {messengerLink && <small className="announcement-social-guidance"><a href={messengerLink} target="_blank" rel="noreferrer">{t.messengerOptInLink}</a></small>}
+                        {socialIntegrationStatusError && <small className="announcement-social-guidance status-error" role="status">{t.socialIntegrationStatusUnavailable}</small>}
                       </div>
                     </div>
                     <div className="editor-actions">
@@ -3476,22 +3568,65 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
                           <p>{item.content || t.noAdditionalContent}</p>
                           <small>{item.date}</small>
                           <small>{(item.socialChannels || []).length > 0 ? `${t.socialChannelsSelectedLabel}: ${item.socialChannels.join(', ')}` : t.internalNoticeOnly}</small>
+                          {item.socialDelivery && Object.entries(item.socialDelivery).map(([channel, result]) => (
+                            <small key={channel}>{t.socialDeliveryStatus} · {channel}: {result.status}{result.sent > 0 ? ` (${result.sent})` : ''}{result.failed > 0 ? ` — ${result.failed} failed` : ''}{result.message ? ` — ${result.message}` : ''}</small>
+                          ))}
+                          {item.relatedAnnouncementId && <small>{t.retractAnnouncementTitle}</small>}
+                          {item.retractionAnnouncementId && <small>{t.retractionPublished}</small>}
                         </div>
+                        <div className="announcement-actions">
+                          <button
+                            type="button"
+                            className="small-action secondary"
+                            disabled={Boolean(item.retractionAnnouncementId)}
+                            onClick={() => {
+                              setRetractionTarget(item)
+                              setRetractionContent('')
+                            }}
+                          >
+                            {t.retractAnnouncement}
+                          </button>
                         <button
                           type="button"
                           className="small-action danger"
                           onClick={() => setConfirmation({
                             title: t.delete,
-                            message: t.deleteAnnouncementConfirm,
+                            message: t.deleteAnnouncementWarning,
                             confirmLabel: t.delete,
                             onConfirm: () => onDeleteAnnouncement?.(item.id || item.title),
                           })}
                         >
                           {t.delete}
                         </button>
+                        </div>
                       </div>
                     ))}
                   </div>
+
+                  {retractionTarget && (
+                    <WorkflowModal title={t.retractAnnouncementTitle} onClose={() => {
+                      if (!retractionSubmitting) setRetractionTarget(null)
+                    }} wide>
+                      <form className="workflow-modal-form" onSubmit={handleRetractionSubmit}>
+                        <p>{retractionTarget.title}</p>
+                        <div className="input-block full-width">
+                          <label htmlFor="announcement-retraction-message">{t.retractionMessageLabel}</label>
+                          <textarea
+                            id="announcement-retraction-message"
+                            rows="5"
+                            value={retractionContent}
+                            onChange={(event) => setRetractionContent(event.target.value)}
+                            required
+                          />
+                        </div>
+                        <p className="request-staff-note">{t.socialIntegrationPending}</p>
+                        <div className="editor-actions">
+                          <button type="button" className="secondary-btn small" onClick={() => setRetractionTarget(null)} disabled={retractionSubmitting}>{t.cancel}</button>
+                          <button type="submit" className="primary-btn small" disabled={retractionSubmitting}>{retractionSubmitting ? t.working : t.retractAnnouncement}</button>
+                        </div>
+                      </form>
+                    </WorkflowModal>
+                  )}
                 </article>
               )}
 
@@ -5806,6 +5941,7 @@ function App() {
         id: `announcement-${Date.now()}`,
       }
       setAnnouncementsData((prev) => [nextAnnouncement, ...prev])
+      return data
     } catch (error) {
       throw new Error(error.message || 'Unable to publish announcement.')
     }
@@ -5823,9 +5959,28 @@ function App() {
       }
 
       setAnnouncementsData((prev) => prev.filter((announcement) => String(announcement.id || announcement.title) !== String(announcementId)))
+      if (data.messengerMessagesCannotBeUnsent) alert(translations[language]?.messengerMessagesRemain || translations.en.messengerMessagesRemain)
     } catch (error) {
       alert(error.message || 'Unable to delete announcement.')
     }
+  }
+
+  const handleRetractAnnouncement = async (announcementId, content) => {
+    const response = await fetch(`${API_BASE}/announcements/${announcementId}/retract`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content }),
+    })
+    const data = await response.json()
+    if (!response.ok) throw new Error(data.message || 'Unable to publish the retraction.')
+
+    setAnnouncementsData((prev) => [
+      data.announcement,
+      ...prev.map((announcement) => String(announcement.id) === String(announcementId)
+        ? { ...announcement, retractionAnnouncementId: data.announcement.id }
+        : announcement),
+    ])
+    return data
   }
 
   return (
@@ -5852,7 +6007,7 @@ function App() {
         <Route path="/payments" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['resident']} userRole={userRole}><PaymentsPage payments={payments} onLogout={handleLogout} language={language} setLanguage={switchLanguage} /></ProtectedRoute>} />
         <Route path="/events" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['resident']} userRole={userRole}><EventsPage events={events} onLogout={handleLogout} language={language} setLanguage={switchLanguage} /></ProtectedRoute>} />
         <Route path="/settings" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['resident', 'staff', 'admin']} userRole={userRole}><SettingsPage profile={profile} onLogout={handleLogout} language={language} setLanguage={switchLanguage} /></ProtectedRoute>} />
-        <Route path="/staff" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['staff', 'admin']} userRole={userRole}><StaffPage staffMembers={staffMembers} announcements={announcementsData} currentUser={session?.user} userRole={userRole} onProcessRequest={handleRequestStatus} onLogout={handleLogout} onAddStaffMember={handleAddStaffMember} onStaffMemberUpdated={handleStaffMemberUpdated} onAddAnnouncement={handleAddAnnouncement} onDeleteAnnouncement={handleDeleteAnnouncement} onDeleteStaffMember={handleDeleteStaffMember} language={language} setLanguage={switchLanguage} /></ProtectedRoute>} />
+        <Route path="/staff" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['staff', 'admin']} userRole={userRole}><StaffPage staffMembers={staffMembers} announcements={announcementsData} currentUser={session?.user} userRole={userRole} onProcessRequest={handleRequestStatus} onLogout={handleLogout} onAddStaffMember={handleAddStaffMember} onStaffMemberUpdated={handleStaffMemberUpdated} onAddAnnouncement={handleAddAnnouncement} onDeleteAnnouncement={handleDeleteAnnouncement} onRetractAnnouncement={handleRetractAnnouncement} onDeleteStaffMember={handleDeleteStaffMember} language={language} setLanguage={switchLanguage} /></ProtectedRoute>} />
         <Route path="/admin" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['admin']} userRole={userRole}><AdminPage users={users} residents={residents} requests={requests} reports={reports} currentUser={session?.user} onLogout={handleLogout} language={language} setLanguage={switchLanguage} /></ProtectedRoute>} />
         <Route path="*" element={<Navigate to={userRole === 'staff' ? '/staff' : userRole === 'admin' ? '/admin' : '/dashboard'} replace />} />
       </Routes>

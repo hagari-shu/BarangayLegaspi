@@ -17,6 +17,14 @@ import {
   getCaptainPhotoUrl,
   isCaptainPhotoStorageConfigured,
 } from './captain-photo-storage.js'
+import {
+  deleteFacebookPost,
+  deliverMessengerAnnouncement,
+  getMetaIntegrationStatus,
+  processMessengerWebhook,
+  publishFacebookPost,
+  verifyMetaWebhookSignature,
+} from './meta-social.js'
 import { ADMIN_SEED, CORS_ORIGINS, IS_PRODUCTION, PORT, SHOULD_SKIP_SEED } from './config.js'
 
 let store = process.env.DATABASE_URL ? pgDb : jsonDb
@@ -178,6 +186,41 @@ export function createApp() {
     legacyHeaders: false,
     message: { message: 'Too many requests, please try again later.' },
   }))
+
+  app.get('/api/meta/webhook', (req, res) => {
+    const verifyToken = process.env.META_WEBHOOK_VERIFY_TOKEN
+    if (
+      verifyToken
+      && req.query['hub.mode'] === 'subscribe'
+      && req.query['hub.verify_token'] === verifyToken
+      && typeof req.query['hub.challenge'] === 'string'
+    ) {
+      return res.type('text/plain').send(req.query['hub.challenge'])
+    }
+    return res.sendStatus(403)
+  })
+
+  app.post('/api/meta/webhook', express.raw({ type: 'application/json', limit: '1mb' }), async (req, res) => {
+    if (!getMetaIntegrationStatus().messenger) {
+      return res.status(503).json({ message: 'Messenger integration is not configured.' })
+    }
+    if (!verifyMetaWebhookSignature(req.body, req.get('x-hub-signature-256'), process.env.META_APP_SECRET)) {
+      return res.status(401).json({ message: 'Invalid webhook signature.' })
+    }
+
+    try {
+      const payload = JSON.parse(req.body.toString('utf8'))
+      const pagePayload = payload?.object === 'page'
+        ? { ...payload, entry: (payload.entry || []).filter((entry) => String(entry.id) === String(process.env.META_PAGE_ID)) }
+        : payload
+      await processMessengerWebhook(pagePayload, store)
+      return res.sendStatus(200)
+    } catch (error) {
+      console.error('Messenger webhook processing failed', error)
+      return res.status(500).json({ message: 'Unable to process Messenger event.' })
+    }
+  })
+
   app.use(express.json({ limit: '100kb' }))
   app.use(express.urlencoded({ extended: true, limit: '100kb' }))
 
@@ -192,6 +235,28 @@ export function createApp() {
   const hasCurrentRole = async (token, roles) => {
     const actor = await getCurrentActor(token)
     return Boolean(actor && roles.includes(actor.user.role) && !['Suspended', 'Disabled'].includes(actor.user.status))
+  }
+
+  const deliverAnnouncementChannels = async (announcement, channels, options = {}) => {
+    const delivery = {}
+    if (channels.includes('facebook')) {
+      try {
+        const postId = await publishFacebookPost(announcement)
+        delivery.facebook = { status: 'published', postId }
+      } catch (error) {
+        console.error('Facebook announcement delivery failed', error.message)
+        delivery.facebook = { status: 'failed', message: error.message }
+      }
+    }
+    if (channels.includes('messenger')) {
+      try {
+        delivery.messenger = await deliverMessengerAnnouncement(announcement, store, options)
+      } catch (error) {
+        console.error('Messenger announcement delivery failed', error.message)
+        delivery.messenger = { status: 'failed', eligible: 0, sent: 0, failed: 0, message: error.message }
+      }
+    }
+    return delivery
   }
 
   const writeAudit = async (actor, action, targetType, targetId, metadata = {}) => {
@@ -934,47 +999,95 @@ export function createApp() {
     }
   })
 
+  app.get('/api/social-integrations/status', async (req, res) => {
+    const authHeader = req.headers.authorization || ''
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null
+    if (!token) return res.status(401).json({ message: 'Authentication required.' })
+
+    try {
+      verifyToken(token)
+    } catch {
+      return res.status(401).json({ message: 'Invalid or expired token.' })
+    }
+
+    try {
+      const actor = await getCurrentActor(token)
+      if (!actor || !['admin', 'staff'].includes(actor.user.role)) {
+        return res.status(403).json({ message: 'Staff access required.' })
+      }
+      return res.json({
+        integrations: getMetaIntegrationStatus(),
+        messengerLink: getMetaIntegrationStatus().messenger
+          ? `https://m.me/${encodeURIComponent(process.env.META_PAGE_ID)}`
+          : null,
+      })
+    } catch (error) {
+      console.error('failed to load social integration status', error)
+      return res.status(503).json({ message: 'Unable to load social integration status.' })
+    }
+  })
+
   app.post('/api/announcements', async (req, res) => {
     const authHeader = req.headers.authorization || ''
     const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null
-
     if (!token) {
       return res.status(401).json({ message: 'Authentication required.' })
     }
 
+    let actor
     try {
-      if (!(await hasCurrentRole(token, ['admin']))) {
-        return res.status(403).json({ message: 'Administrator access required.' })
-      }
+      actor = await getCurrentActor(token)
+    } catch {
+      return res.status(401).json({ message: 'Invalid or expired token.' })
+    }
+    if (!actor || !['admin', 'staff'].includes(actor.user.role)) {
+      return res.status(403).json({ message: 'Staff access required.' })
+    }
 
-      const title = sanitizeText(req.body?.title)
-      const content = sanitizeText(req.body?.content)
-      const date = sanitizeText(req.body?.date) || new Date().toLocaleDateString()
-      const tag = sanitizeText(req.body?.tag) || 'green'
-      const socialChannels = Array.isArray(req.body?.socialChannels)
-        ? req.body.socialChannels.map((channel) => sanitizeText(channel)).filter(Boolean)
-        : []
+    const title = sanitizeText(req.body?.title)
+    const content = sanitizeText(req.body?.content)
+    const date = sanitizeText(req.body?.date) || new Date().toLocaleDateString()
+    const tag = sanitizeText(req.body?.tag) || 'green'
+    const allowedChannels = new Set(['facebook', 'messenger'])
+    const socialChannels = Array.isArray(req.body?.socialChannels)
+      ? [...new Set(req.body.socialChannels.map((channel) => sanitizeText(channel).toLowerCase()))]
+      : []
 
-      if (!title || !content) {
-        return res.status(400).json({ message: 'Title and message are required.' })
-      }
+    if (socialChannels.some((channel) => !allowedChannels.has(channel))) {
+      return res.status(400).json({ message: 'Only Facebook and Messenger announcement channels are supported.' })
+    }
+    if (!title || !content) {
+      return res.status(400).json({ message: 'Title and message are required.' })
+    }
+    const integrationStatus = getMetaIntegrationStatus()
+    const unconfiguredChannel = socialChannels.find((channel) => !integrationStatus[channel])
+    if (unconfiguredChannel) {
+      return res.status(503).json({
+        message: `${unconfiguredChannel === 'facebook' ? 'Facebook' : 'Messenger'} is not connected. Contact the system administrator.`,
+      })
+    }
 
-      const announcement = {
-        id: randomUUID(),
-        tag,
-        title,
-        content,
-        date,
-        socialChannels,
-        createdAt: new Date().toISOString(),
-      }
+    const announcement = {
+      id: randomUUID(),
+      tag,
+      title,
+      content,
+      date,
+      socialChannels,
+      socialDelivery: {},
+      createdAt: new Date().toISOString(),
+    }
 
-      const savedAnnouncement = await store.saveAnnouncement?.(announcement)
-
-      return res.status(201).json({ announcement: savedAnnouncement || announcement })
+    try {
+      const savedAnnouncement = await store.saveAnnouncement(announcement)
+      const delivery = await deliverAnnouncementChannels(savedAnnouncement || announcement, socialChannels)
+      const updatedAnnouncement = Object.keys(delivery).length
+        ? await store.updateAnnouncement(announcement.id, { socialDelivery: delivery, facebookPostId: delivery.facebook?.postId })
+        : savedAnnouncement || announcement
+      return res.status(201).json({ announcement: updatedAnnouncement, socialDelivery: delivery })
     } catch (error) {
       console.error('failed to create announcement', error)
-      return res.status(401).json({ message: 'Invalid or expired token.' })
+      return res.status(500).json({ message: 'Announcement could not be saved or its delivery status could not be recorded.' })
     }
   })
 
@@ -986,21 +1099,101 @@ export function createApp() {
       return res.status(401).json({ message: 'Authentication required.' })
     }
 
+    let actor
     try {
-      if (!(await hasCurrentRole(token, ['admin']))) {
-        return res.status(403).json({ message: 'Administrator access required.' })
-      }
+      actor = await getCurrentActor(token)
+    } catch {
+      return res.status(401).json({ message: 'Invalid or expired token.' })
+    }
+    if (!actor || !['admin', 'staff'].includes(actor.user.role)) {
+      return res.status(403).json({ message: 'Staff access required.' })
+    }
 
-      const targetId = req.params.id
-      const deletedAnnouncement = await store.deleteAnnouncement?.(targetId)
-      if (!deletedAnnouncement) {
-        return res.status(404).json({ message: 'Announcement not found.' })
+    const targetId = req.params.id
+    try {
+      const announcement = await store.getAnnouncement(targetId)
+      if (!announcement) return res.status(404).json({ message: 'Announcement not found.' })
+      if (announcement.facebookPostId) {
+        try {
+          await deleteFacebookPost(announcement.facebookPostId)
+        } catch (error) {
+          console.error('Facebook announcement removal failed', error.message)
+          return res.status(502).json({ message: `The Facebook post could not be deleted: ${error.message}` })
+        }
       }
-
-      return res.json({ success: true, removedId: targetId })
+      const deletedAnnouncement = await store.deleteAnnouncement(targetId)
+      if (!deletedAnnouncement) return res.status(404).json({ message: 'Announcement not found.' })
+      return res.json({
+        success: true,
+        removedId: targetId,
+        messengerMessagesCannotBeUnsent: Number(announcement.socialDelivery?.messenger?.sent) > 0,
+      })
     } catch (error) {
       console.error('failed to delete announcement', error)
+      return res.status(500).json({ message: 'Unable to delete announcement.' })
+    }
+  })
+
+  app.post('/api/announcements/:id/retract', async (req, res) => {
+    const authHeader = req.headers.authorization || ''
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null
+    if (!token) return res.status(401).json({ message: 'Authentication required.' })
+
+    let actor
+    try {
+      actor = await getCurrentActor(token)
+    } catch {
       return res.status(401).json({ message: 'Invalid or expired token.' })
+    }
+    if (!actor || !['admin', 'staff'].includes(actor.user.role)) {
+      return res.status(403).json({ message: 'Staff access required.' })
+    }
+
+    const content = sanitizeText(req.body?.content)
+    if (!content) return res.status(400).json({ message: 'A correction message is required.' })
+
+    try {
+      const original = await store.getAnnouncement(req.params.id)
+      if (!original) return res.status(404).json({ message: 'Announcement not found.' })
+      if (original.retractionAnnouncementId) {
+        return res.status(409).json({ message: 'A retraction has already been published for this announcement.' })
+      }
+
+      const channels = []
+      if (original.facebookPostId) channels.push('facebook')
+      if (Number(original.socialDelivery?.messenger?.sent) > 0) channels.push('messenger')
+      const integrationStatus = getMetaIntegrationStatus()
+      const unavailableChannel = channels.find((channel) => !integrationStatus[channel])
+      if (unavailableChannel) {
+        return res.status(503).json({
+          message: `${unavailableChannel === 'facebook' ? 'Facebook' : 'Messenger'} is not connected. The retraction was not created.`,
+        })
+      }
+      const retraction = {
+        id: randomUUID(),
+        tag: 'red',
+        title: `Retraction: ${original.title}`.slice(0, 200),
+        content,
+        date: new Date().toLocaleDateString(),
+        socialChannels: channels,
+        socialDelivery: {},
+        relatedAnnouncementId: original.id,
+        createdAt: new Date().toISOString(),
+      }
+      const savedRetraction = await store.saveAnnouncement(retraction)
+      const delivery = await deliverAnnouncementChannels(
+        savedRetraction || retraction,
+        channels,
+        { recipientAnnouncementId: original.id },
+      )
+      const updatedRetraction = Object.keys(delivery).length
+        ? await store.updateAnnouncement(retraction.id, { socialDelivery: delivery, facebookPostId: delivery.facebook?.postId })
+        : savedRetraction || retraction
+      await store.updateAnnouncement(original.id, { retractionAnnouncementId: retraction.id })
+      return res.status(201).json({ announcement: updatedRetraction, socialDelivery: delivery })
+    } catch (error) {
+      console.error('failed to publish announcement retraction', error)
+      return res.status(500).json({ message: 'Unable to publish the retraction.' })
     }
   })
 
