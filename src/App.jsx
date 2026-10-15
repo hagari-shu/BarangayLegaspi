@@ -5252,10 +5252,14 @@ function MauAssistant({ language, userRole, isAuthenticated, pathname, mobileDas
   const hasBottomNavigation = ['staff', 'admin'].includes(userRole)
   const [open, setOpen] = useState(false)
   const [question, setQuestion] = useState('')
-  const [quickOptionsMinimized, setQuickOptionsMinimized] = useState(false)
+  const [quickOptionsMinimized, setQuickOptionsMinimized] = useState(() => (
+    window.matchMedia('(max-width: 760px) and (max-height: 480px)').matches
+    || (window.innerWidth <= 760 && window.visualViewport?.height <= 480)
+  ))
   const [residencyCheck, setResidencyCheck] = useState(isHomepage ? 'asked' : 'confirmed')
   const triggerRef = useRef(null)
   const questionInputRef = useRef(null)
+  const assistantRef = useRef(null)
   const [messages, setMessages] = useState([
     {
       id: 'welcome',
@@ -5275,7 +5279,7 @@ function MauAssistant({ language, userRole, isAuthenticated, pathname, mobileDas
 
     window.addEventListener('brgy-open-mau', openAssistant)
     document.addEventListener('keydown', closeOnEscape)
-    if (open) {
+    if (open && !window.matchMedia('(pointer: coarse), (max-width: 640px)').matches) {
       questionInputRef.current?.focus()
     } else {
       triggerRef.current?.focus()
@@ -5284,6 +5288,47 @@ function MauAssistant({ language, userRole, isAuthenticated, pathname, mobileDas
     return () => {
       window.removeEventListener('brgy-open-mau', openAssistant)
       document.removeEventListener('keydown', closeOnEscape)
+    }
+  }, [open])
+
+  useEffect(() => {
+    const compactViewport = window.matchMedia('(max-width: 760px) and (max-height: 480px)')
+    const syncQuickOptions = () => {
+      setQuickOptionsMinimized(compactViewport.matches || (
+        window.innerWidth <= 760 && window.visualViewport?.height <= 480
+      ))
+    }
+
+    compactViewport.addEventListener('change', syncQuickOptions)
+    window.addEventListener('resize', syncQuickOptions)
+    window.visualViewport?.addEventListener('resize', syncQuickOptions)
+    syncQuickOptions()
+
+    return () => {
+      compactViewport.removeEventListener('change', syncQuickOptions)
+      window.removeEventListener('resize', syncQuickOptions)
+      window.visualViewport?.removeEventListener('resize', syncQuickOptions)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!open || !window.visualViewport) return undefined
+
+    const viewport = window.visualViewport
+    const updateViewport = () => {
+      const keyboardInset = Math.max(0, window.innerHeight - viewport.offsetTop - viewport.height)
+      assistantRef.current?.style.setProperty('--mau-visual-height', `${viewport.height}px`)
+      assistantRef.current?.style.setProperty('--mau-keyboard-inset', `${keyboardInset}px`)
+    }
+
+    updateViewport()
+    viewport.addEventListener('resize', updateViewport)
+    viewport.addEventListener('scroll', updateViewport)
+    return () => {
+      viewport.removeEventListener('resize', updateViewport)
+      viewport.removeEventListener('scroll', updateViewport)
+      assistantRef.current?.style.removeProperty('--mau-visual-height')
+      assistantRef.current?.style.removeProperty('--mau-keyboard-inset')
     }
   }, [open])
 
@@ -5349,6 +5394,7 @@ function MauAssistant({ language, userRole, isAuthenticated, pathname, mobileDas
       {open && (
         <div
           id="mau-assistant-dialog"
+          ref={assistantRef}
           className={`mau-assistant ${hasBottomNavigation ? 'with-bottom-nav' : ''}`}
           role="dialog"
           aria-labelledby="mau-dialog-title"
