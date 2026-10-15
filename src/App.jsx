@@ -284,6 +284,18 @@ function UserDetailModal({ user, onClose, onUserUpdated, onArchive, allowEdit = 
       : '')
   }, [user])
 
+  useEffect(() => {
+    const previousBodyOverflow = document.body.style.overflow
+    const previousDocumentOverflow = document.documentElement.style.overflow
+    document.body.style.overflow = 'hidden'
+    document.documentElement.style.overflow = 'hidden'
+
+    return () => {
+      document.body.style.overflow = previousBodyOverflow
+      document.documentElement.style.overflow = previousDocumentOverflow
+    }
+  }, [])
+
   if (!user) return null
 
   const fullName = getDisplayName(editableUser)
@@ -351,12 +363,12 @@ function UserDetailModal({ user, onClose, onUserUpdated, onArchive, allowEdit = 
 
   return (
     <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-content" onClick={(event) => event.stopPropagation()}>
+      <div className="modal-content user-detail-modal" role="dialog" aria-modal="true" aria-labelledby="user-detail-title" onClick={(event) => event.stopPropagation()}>
         <button type="button" className="modal-close" onClick={onClose} aria-label="Close user details">×</button>
         <div className="modal-header">
           <div className="modal-avatar">{initials}</div>
           <div>
-            <h2>{fullName}</h2>
+            <h2 id="user-detail-title">{fullName}</h2>
             <p>{role.charAt(0).toUpperCase() + role.slice(1)} • {zone !== 'N/A' ? `Zone ${zone}` : 'No assigned zone'}</p>
           </div>
         </div>
@@ -2897,7 +2909,7 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
         </div>
       </header>
 
-      <main className="dashboard-main">
+      <main className="dashboard-main staff-dashboard-main">
         <aside className="sidebar" aria-label={t.staffNavigationLabel}>
           <nav className="sidebar-nav" aria-label={t.staffNavigationLabel}>
             <button
@@ -2943,7 +2955,7 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
           </nav>
         </aside>
 
-        <section className="content-panel" aria-label={t.staffOverviewLabel}>
+        <section className={`content-panel staff-content-panel staff-module-${activeTab}`} aria-label={t.staffOverviewLabel}>
           <div className="welcome-row">
             <div>
               <p className="eyebrow">{t.operations}</p>
