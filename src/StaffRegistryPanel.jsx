@@ -8,8 +8,21 @@ const text = {
   en: {
     title: 'Resident and household registry',
     subtitle: 'Restricted staff workspace. Counts include active, verified records only.',
+    sourceReviewTitle: 'Source list follow-up',
+    sourceReviewHelp: 'Record an incomplete or unclear source sheet for follow-up. Do not include resident names or sensitive details; resolve the warning only after the source list is reconciled.',
+    sourceReviewAttention: 'Source list is incomplete or contains unclear entries; staff review is required.',
+    sourceReviewLocation: 'Purok for follow-up',
+    sourceReviewOpen: 'Add warning',
+    sourceReviewResolve: 'Mark resolved',
+    sourceReviewConfirm: 'Confirm the source list for this purok has been reconciled and all remaining residents have been accounted for?',
+    sourceReviewLoadError: 'Unable to load source-review warnings.',
+    sourceReviewCreateError: 'Unable to add the source-review warning.',
+    sourceReviewResolveError: 'Unable to resolve the source-review warning.',
+    sourceReviewCreated: 'Source-review warning added.',
+    sourceReviewAlreadyOpen: 'An open warning already exists for this location.',
+    sourceReviewNone: 'No open source-review warnings.',
     privacyTitle: 'Personal information — authorized use only',
-    privacyNotice: 'Use these records only for authorized barangay duties. Enter only information needed from an official source; leave unknown fields blank. Do not share screenshots or exports outside approved work. New entries stay pending, and create, import, verification, and status changes are recorded in the audit log.',
+    privacyNotice: 'Use these records only for authorized barangay duties. Enter only information needed from an official source; leave unknown fields blank. Do not share screenshots or exports outside approved work. New entries stay pending, and resident, import, verification, status, and source-warning changes are recorded in the audit log.',
     search: 'Search full name',
     birthDate: 'Exact birthdate',
     age: 'Exact age',
@@ -93,8 +106,21 @@ const text = {
   fil: {
     title: 'Talaan ng mga residente at sambahayan',
     subtitle: 'Limitado sa awtorisadong kawani. Kasama lamang sa bilang ang aktibo at beripikadong tala.',
+    sourceReviewTitle: 'Follow-up sa source list',
+    sourceReviewHelp: 'Itala para sa follow-up ang hindi kumpleto o hindi malinaw na source sheet. Huwag ilagay ang pangalan ng residente o sensitibong detalye; lutasin lamang ang babala kapag naitugma na ang source list.',
+    sourceReviewAttention: 'Hindi kumpleto ang source list o may hindi malinaw na tala; kailangan itong suriin ng kawani.',
+    sourceReviewLocation: 'Purok na susuriin',
+    sourceReviewOpen: 'Magdagdag ng babala',
+    sourceReviewResolve: 'Markahang nalutas',
+    sourceReviewConfirm: 'Kumpirmahing naitugma na ang source list para sa purok na ito at naisama na ang lahat ng natitirang residente?',
+    sourceReviewLoadError: 'Hindi makuha ang mga babala sa pagsusuri ng source.',
+    sourceReviewCreateError: 'Hindi maidagdag ang babala sa pagsusuri ng source.',
+    sourceReviewResolveError: 'Hindi malutas ang babala sa pagsusuri ng source.',
+    sourceReviewCreated: 'Naidagdag ang babala sa pagsusuri ng source.',
+    sourceReviewAlreadyOpen: 'May bukas nang babala para sa lokasyong ito.',
+    sourceReviewNone: 'Walang bukas na babala sa pagsusuri ng source.',
     privacyTitle: 'Personal na impormasyon — para lamang sa awtorisadong gawain',
-    privacyNotice: 'Gamitin lamang ang mga tala para sa awtorisadong tungkulin ng barangay. Ilagay lamang ang impormasyong kailangan mula sa opisyal na sanggunian; iwang blangko ang hindi alam. Huwag magbahagi ng screenshot o kopya sa labas ng aprubadong gawain. Mananatiling pending ang mga bagong tala, at itinatala sa audit log ang paglikha, pag-import, beripikasyon, at pagbabago ng katayuan.',
+    privacyNotice: 'Gamitin lamang ang mga tala para sa awtorisadong tungkulin ng barangay. Ilagay lamang ang impormasyong kailangan mula sa opisyal na sanggunian; iwang blangko ang hindi alam. Huwag magbahagi ng screenshot o kopya sa labas ng aprubadong gawain. Mananatiling pending ang mga bagong tala, at itinatala sa audit log ang pagbabago ng resident, import, beripikasyon, status, at source-warning.',
     search: 'Hanapin ang buong pangalan',
     birthDate: 'Eksaktong petsa ng kapanganakan',
     age: 'Eksaktong edad',
@@ -195,6 +221,12 @@ export default function StaffRegistryPanel({ language = 'en' }) {
   const [debounced, setDebounced] = useState({ search: '', birthDate: '', age: '', zone: '', purok: '' })
   const [records, setRecords] = useState([])
   const [demographics, setDemographics] = useState(null)
+  const [sourceReviews, setSourceReviews] = useState([])
+  const [sourceReviewPurok, setSourceReviewPurok] = useState('')
+  const [sourceReviewZone, setSourceReviewZone] = useState('')
+  const [sourceReviewError, setSourceReviewError] = useState('')
+  const [sourceReviewMessage, setSourceReviewMessage] = useState('')
+  const [sourceReviewBusy, setSourceReviewBusy] = useState(false)
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
   const [pageSize] = useState(25)
@@ -278,6 +310,74 @@ export default function StaffRegistryPanel({ language = 'en' }) {
       controller.abort()
     }
   }, [debounced, page, pageSize, labels.loadError, refreshKey])
+
+  useEffect(() => {
+    let active = true
+    const controller = new AbortController()
+    const loadSourceReviews = async () => {
+      setSourceReviewError('')
+      try {
+        const response = await fetch(`${API_BASE}/staff/registry-source-reviews`, { signal: controller.signal })
+        const data = await response.json().catch(() => ({}))
+        if (!response.ok) throw new Error(data.message || labels.sourceReviewLoadError)
+        if (active) setSourceReviews(Array.isArray(data.reviews) ? data.reviews : [])
+      } catch (loadError) {
+        if (loadError.name !== 'AbortError' && active) {
+          console.error('load registry source-review warnings failed', loadError)
+          setSourceReviewError(loadError.message || labels.sourceReviewLoadError)
+        }
+      }
+    }
+    loadSourceReviews()
+    return () => {
+      active = false
+      controller.abort()
+    }
+  }, [labels.sourceReviewLoadError, refreshKey])
+
+  const openSourceReview = async (event) => {
+    event.preventDefault()
+    setSourceReviewBusy(true)
+    setSourceReviewError('')
+    setSourceReviewMessage('')
+    try {
+      const response = await fetch(`${API_BASE}/staff/registry-source-reviews`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ purok: sourceReviewPurok.trim(), zone: sourceReviewZone || null }),
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(data.message || labels.sourceReviewCreateError)
+      setSourceReviews((current) => current.some((review) => review.id === data.review.id) ? current : [...current, data.review])
+      setSourceReviewError('')
+      setSourceReviewMessage(data.created ? labels.sourceReviewCreated : labels.sourceReviewAlreadyOpen)
+    } catch (openError) {
+      console.error('create registry source-review warning failed', openError)
+      setSourceReviewError(openError.message || labels.sourceReviewCreateError)
+    } finally {
+      setSourceReviewBusy(false)
+    }
+  }
+
+  const resolveSourceReview = async (review) => {
+    if (!window.confirm(labels.sourceReviewConfirm)) return
+    setSourceReviewBusy(true)
+    setSourceReviewError('')
+    try {
+      const response = await fetch(`${API_BASE}/staff/registry-source-reviews/${encodeURIComponent(review.id)}/resolve`, {
+        method: 'PATCH',
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(data.message || labels.sourceReviewResolveError)
+      setSourceReviews((current) => current.filter((item) => item.id !== review.id))
+      setSourceReviewMessage('')
+    } catch (resolveError) {
+      console.error('resolve registry source-review warning failed', resolveError)
+      setSourceReviewError(resolveError.message || labels.sourceReviewResolveError)
+    } finally {
+      setSourceReviewBusy(false)
+    }
+  }
 
   const saveResident = async (event, confirmPotentialMatch = false) => {
     event?.preventDefault()
@@ -469,6 +569,32 @@ export default function StaffRegistryPanel({ language = 'en' }) {
         <strong>{labels.privacyTitle}</strong>
         <p>{labels.privacyNotice}</p>
       </aside>
+
+      <section className="registry-source-reviews" aria-labelledby="registry-source-review-title">
+        <div className="registry-source-review-heading">
+          <div>
+            <h3 id="registry-source-review-title">{labels.sourceReviewTitle}</h3>
+            <p>{labels.sourceReviewHelp}</p>
+          </div>
+        </div>
+        {sourceReviewError && <p className="registry-message error" role="alert">{sourceReviewError}</p>}
+        {sourceReviews.length ? (
+          <ul className="registry-source-review-list">
+            {sourceReviews.map((review) => (
+              <li key={review.id}>
+                <div><strong><span className="registry-warning-icon" aria-hidden="true">⚠</span> {review.purok}{review.zone ? ` · Zone ${review.zone}` : ''}</strong><small>{labels.sourceReviewAttention}</small></div>
+                <button type="button" className="secondary-btn small" disabled={sourceReviewBusy} onClick={() => resolveSourceReview(review)}>{labels.sourceReviewResolve}</button>
+              </li>
+            ))}
+          </ul>
+        ) : !sourceReviewError && <p className="registry-source-review-empty">{labels.sourceReviewNone}</p>}
+        {sourceReviewMessage && <p className="registry-message" role="status">{sourceReviewMessage}</p>}
+        <form className="registry-source-review-form" onSubmit={openSourceReview}>
+          <label>{labels.sourceReviewLocation}<input value={sourceReviewPurok} maxLength={100} onChange={(event) => setSourceReviewPurok(event.target.value)} required /></label>
+          <label>{labels.zone}<select value={sourceReviewZone} onChange={(event) => setSourceReviewZone(event.target.value)}><option value="">{labels.unassigned}</option>{[1, 2, 3, 4, 5, 6, 7].map((number) => <option key={number} value={number}>{number}</option>)}</select></label>
+          <button type="submit" className="secondary-btn small" disabled={!sourceReviewPurok.trim() || sourceReviewBusy}>{labels.sourceReviewOpen}</button>
+        </form>
+      </section>
 
       {importOpen && (
         <section className="registry-import" aria-label={labels.importTitle}>

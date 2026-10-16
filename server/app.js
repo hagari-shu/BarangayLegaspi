@@ -222,7 +222,7 @@ export function createApp() {
     }
   })
 
-  app.use(['/api/staff/residents', '/api/staff/demographics'], (_req, res, next) => {
+  app.use(['/api/staff/residents', '/api/staff/demographics', '/api/staff/registry-source-reviews'], (_req, res, next) => {
     res.set('Cache-Control', 'private, no-store')
     res.set('Vary', 'Authorization')
     next()

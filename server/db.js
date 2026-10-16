@@ -54,7 +54,7 @@ export async function readDb() {
     return data
   } catch (error) {
     if (error.code === 'ENOENT') {
-      const fallbackDb = { users: [], requests: [], announcements: [], reports: [], approvals: [], residentRegistry: [], auditLogs: [] }
+      const fallbackDb = { users: [], requests: [], announcements: [], reports: [], approvals: [], residentRegistry: [], registrySourceReviews: [], auditLogs: [] }
       await writeJsonFile(fallbackDb)
       return fallbackDb
     }
@@ -445,6 +445,57 @@ export async function addAuditLog(entry) {
 export async function listAuditLogs(limit = 100) {
   const db = await readDb()
   return (db.auditLogs || []).slice(-Math.max(1, Math.min(Number(limit) || 100, 500))).reverse()
+}
+
+const normalizeRegistrySourceReview = (review) => ({
+  ...review,
+  zone: review.zone === null || review.zone === undefined ? null : Number(review.zone),
+  status: review.status || 'open',
+  createdAt: review.createdAt ?? review.created_at ?? null,
+  createdBy: review.createdBy ?? review.created_by ?? null,
+  resolvedAt: review.resolvedAt ?? review.resolved_at ?? null,
+  resolvedBy: review.resolvedBy ?? review.resolved_by ?? null,
+})
+
+export async function listRegistrySourceReviews() {
+  const db = await readDb()
+  return (db.registrySourceReviews || [])
+    .map(normalizeRegistrySourceReview)
+    .filter((review) => review.status === 'open')
+    .sort((left, right) => String(left.createdAt || '').localeCompare(String(right.createdAt || '')))
+}
+
+export async function openRegistrySourceReview(review, auditEntry) {
+  return serializeRegistryMutation(async () => {
+    const db = await readDb()
+    db.registrySourceReviews = db.registrySourceReviews || []
+    db.auditLogs = db.auditLogs || []
+    const existing = db.registrySourceReviews.find((item) => (
+      item.status === 'open'
+      && Number(item.zone || 0) === Number(review.zone || 0)
+      && String(item.purok || '').trim().toLocaleLowerCase() === review.purok.trim().toLocaleLowerCase()
+    ))
+    if (existing) return { review: normalizeRegistrySourceReview(existing), created: false }
+
+    const created = normalizeRegistrySourceReview(review)
+    db.registrySourceReviews.push(created)
+    db.auditLogs.push(auditEntry)
+    await writeDb(db)
+    return { review: created, created: true }
+  })
+}
+
+export async function resolveRegistrySourceReview(id, actorId, resolvedAt, auditEntry) {
+  return serializeRegistryMutation(async () => {
+    const db = await readDb()
+    const review = (db.registrySourceReviews || []).find((item) => item.id === id && item.status === 'open')
+    if (!review) return null
+    Object.assign(review, { status: 'resolved', resolvedBy: actorId, resolvedAt })
+    db.auditLogs = db.auditLogs || []
+    db.auditLogs.push(auditEntry)
+    await writeDb(db)
+    return normalizeRegistrySourceReview(review)
+  })
 }
 
 const normalizeRegistryResident = (record) => ({

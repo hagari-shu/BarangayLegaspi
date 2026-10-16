@@ -197,6 +197,21 @@ export async function initDatabase() {
   await query('CREATE INDEX IF NOT EXISTS resident_registry_last_name_prefix_idx ON resident_registry (LOWER(last_name) text_pattern_ops)')
 
   await query(`
+    CREATE TABLE IF NOT EXISTS registry_source_reviews (
+      id UUID PRIMARY KEY,
+      zone SMALLINT,
+      purok VARCHAR(100) NOT NULL,
+      status VARCHAR(20) NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'resolved')),
+      created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      resolved_by UUID REFERENCES users(id) ON DELETE SET NULL,
+      resolved_at TIMESTAMPTZ
+    );
+  `)
+  await query(`CREATE UNIQUE INDEX IF NOT EXISTS registry_source_reviews_open_location_idx
+    ON registry_source_reviews ((COALESCE(zone, 0)), (LOWER(purok))) WHERE status = 'open'`)
+
+  await query(`
     CREATE TABLE IF NOT EXISTS announcements (
       id UUID PRIMARY KEY,
       tag VARCHAR(30) NOT NULL DEFAULT 'green',
@@ -720,6 +735,100 @@ export async function listAuditLogs(limit = 100) {
   } catch (error) {
     console.error('PostgreSQL audit log query failed', error)
     throw error
+  }
+}
+
+const normalizeRegistrySourceReview = (review) => ({
+  id: review.id,
+  zone: review.zone === null || review.zone === undefined ? null : Number(review.zone),
+  purok: review.purok,
+  status: review.status,
+  createdBy: review.createdBy ?? review.created_by ?? null,
+  createdAt: review.createdAt ?? review.created_at ?? null,
+  resolvedBy: review.resolvedBy ?? review.resolved_by ?? null,
+  resolvedAt: review.resolvedAt ?? review.resolved_at ?? null,
+})
+
+const registrySourceReviewColumns = `id, zone, purok, status, created_by AS "createdBy",
+  created_at AS "createdAt", resolved_by AS "resolvedBy", resolved_at AS "resolvedAt"`
+
+export async function listRegistrySourceReviews() {
+  const result = await query(
+    `SELECT ${registrySourceReviewColumns} FROM registry_source_reviews
+     WHERE status = 'open' ORDER BY created_at`
+  )
+  return result.rows.map(normalizeRegistrySourceReview)
+}
+
+export async function openRegistrySourceReview(review, auditEntry) {
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+    const inserted = await client.query(
+      `INSERT INTO registry_source_reviews (id, zone, purok, status, created_by, created_at)
+       VALUES ($1, $2, $3, 'open', $4, $5)
+       ON CONFLICT ((COALESCE(zone, 0)), (LOWER(purok))) WHERE status = 'open' DO NOTHING
+       RETURNING ${registrySourceReviewColumns}`,
+      [review.id, review.zone, review.purok, review.createdBy || null, review.createdAt]
+    )
+    if (!inserted.rows.length) {
+      const existing = await client.query(
+        `SELECT ${registrySourceReviewColumns} FROM registry_source_reviews
+         WHERE status = 'open' AND zone IS NOT DISTINCT FROM $1
+           AND LOWER(purok) = LOWER($2)`,
+        [review.zone, review.purok]
+      )
+      if (!existing.rows.length) throw new Error('Open registry source review conflict could not be resolved.')
+      await client.query('COMMIT')
+      return { review: normalizeRegistrySourceReview(existing.rows[0]), created: false }
+    }
+    await client.query(
+      `INSERT INTO audit_logs (id, actor_id, actor_role, action, target_type, target_id, metadata)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [auditEntry.id, auditEntry.actorId || null, auditEntry.actorRole || null, auditEntry.action,
+        auditEntry.targetType || null, auditEntry.targetId || null, auditEntry.metadata || {}]
+    )
+    await client.query('COMMIT')
+    return { review: normalizeRegistrySourceReview(inserted.rows[0]), created: true }
+  } catch (error) {
+    await client.query('ROLLBACK')
+    throw error
+  } finally {
+    client.release()
+  }
+}
+
+export async function resolveRegistrySourceReview(id, actorId, resolvedAt, auditEntry) {
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+    const current = await client.query(
+      `SELECT ${registrySourceReviewColumns} FROM registry_source_reviews
+       WHERE id = $1 AND status = 'open' FOR UPDATE`,
+      [id]
+    )
+    if (!current.rows.length) {
+      await client.query('COMMIT')
+      return null
+    }
+    const updated = await client.query(
+      `UPDATE registry_source_reviews SET status = 'resolved', resolved_by = $2, resolved_at = $3
+       WHERE id = $1 RETURNING ${registrySourceReviewColumns}`,
+      [id, actorId, resolvedAt]
+    )
+    await client.query(
+      `INSERT INTO audit_logs (id, actor_id, actor_role, action, target_type, target_id, metadata)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [auditEntry.id, auditEntry.actorId || null, auditEntry.actorRole || null, auditEntry.action,
+        auditEntry.targetType || null, auditEntry.targetId || null, auditEntry.metadata || {}]
+    )
+    await client.query('COMMIT')
+    return normalizeRegistrySourceReview(updated.rows[0])
+  } catch (error) {
+    await client.query('ROLLBACK')
+    throw error
+  } finally {
+    client.release()
   }
 }
 
