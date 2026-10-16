@@ -39,6 +39,83 @@
   margin: 0.35rem 0 0;
 }
 
+.registry-source-reviews {
+  display: grid;
+  gap: 0.75rem;
+  padding: 1rem;
+  border: 1px solid #ead18a;
+  border-left: 0.3rem solid #9a6700;
+  border-radius: 0.65rem;
+  background: #fff9e8;
+  color: #4c3908;
+}
+
+.registry-source-review-heading h3,
+.registry-source-review-heading p {
+  margin: 0;
+}
+
+.registry-source-review-heading p {
+  margin-top: 0.35rem;
+}
+
+.registry-source-review-list {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.registry-source-review-list li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.7rem;
+  border: 1px solid #ead18a;
+  border-radius: 0.5rem;
+  background: #fff;
+}
+
+.registry-source-review-list small {
+  display: block;
+  margin-top: 0.2rem;
+}
+
+.registry-source-review-empty {
+  margin: 0;
+}
+
+.registry-source-review-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 0.75rem;
+}
+
+.registry-source-review-form label {
+  display: grid;
+  gap: 0.35rem;
+  font-weight: 600;
+}
+
+.registry-source-review-form input,
+.registry-source-review-form select {
+  min-height: 2.75rem;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid #8699a4;
+  border-radius: 0.45rem;
+  background: #fff;
+  color: #14212b;
+  font: inherit;
+}
+
+.registry-warning-icon {
+  color: #9a6700;
+}
+
 .registry-import h3,
 .registry-import h4,
 .registry-import p {

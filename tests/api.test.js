@@ -2081,6 +2081,121 @@ test('resident registry imports are staff-only, duplicate-reviewed, pending, and
   }
 })
 
+test('registry source-review warnings are staff-only, persistent, idempotent, and audited', async () => {
+  const { server, baseUrl } = await createTestServer()
+  const staffPassword = 'ReviewStaffPass123!'
+  const staff = {
+    id: randomUUID(),
+    firstName: 'Review',
+    lastName: 'Staff',
+    mobile: `091${Math.floor(10000000 + Math.random() * 90000000)}`,
+    email: `source-review.${Date.now()}@example.com`,
+    passwordHash: await hashPassword(staffPassword),
+    role: 'staff',
+    status: 'On Duty',
+    createdAt: new Date().toISOString(),
+  }
+  try {
+    await jsonDb.saveUser(staff)
+    const login = async (email, password) => {
+      const response = await fetch(`${baseUrl}/api/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ identifier: email, password }),
+      })
+      assert.equal(response.status, 200)
+      return (await response.json()).token
+    }
+    const staffToken = await login(staff.email, staffPassword)
+    const residentToken = await login('maria.delacruz@email.com', 'ResidentPass123!')
+    const headers = { Authorization: `Bearer ${staffToken}`, 'Content-Type': 'application/json' }
+    const endpoint = `${baseUrl}/api/staff/registry-source-reviews`
+
+    const anonymousResponse = await fetch(endpoint)
+    assert.equal(anonymousResponse.status, 401)
+    assert.equal(anonymousResponse.headers.get('cache-control'), 'private, no-store')
+
+    const invalidLocation = await fetch(endpoint, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ purok: 'Purok 3 Laud', zone: 8 }),
+    })
+    assert.equal(invalidLocation.status, 400)
+
+    const createResponse = await fetch(endpoint, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ purok: 'Purok 3 Laud' }),
+    })
+    assert.equal(createResponse.status, 201)
+    assert.equal(createResponse.headers.get('cache-control'), 'private, no-store')
+    assert.equal(createResponse.headers.get('vary'), 'Authorization')
+    const created = await createResponse.json()
+    assert.equal(created.review.purok, 'Purok 3 Laud')
+    assert.equal(created.review.zone, null)
+    assert.equal(created.review.status, 'open')
+    assert.equal(Object.hasOwn(created.review, 'createdBy'), false)
+
+    const duplicateResponse = await fetch(endpoint, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ purok: 'PUROK 3 LAUD' }),
+    })
+    assert.equal(duplicateResponse.status, 200)
+    const duplicate = await duplicateResponse.json()
+    assert.equal(duplicate.created, false)
+    assert.equal(duplicate.review.id, created.review.id)
+
+    const residentResponse = await fetch(endpoint, {
+      headers: { Authorization: `Bearer ${residentToken}` },
+    })
+    assert.equal(residentResponse.status, 403)
+
+    const listResponse = await fetch(endpoint, { headers: { Authorization: `Bearer ${staffToken}` } })
+    assert.equal(listResponse.status, 200)
+    assert.deepEqual((await listResponse.json()).reviews.map(({ id, purok, status }) => ({ id, purok, status })), [
+      { id: created.review.id, purok: 'Purok 3 Laud', status: 'open' },
+    ])
+
+    const invalidIdResponse = await fetch(`${endpoint}/not-a-uuid/resolve`, {
+      method: 'PATCH',
+      headers: { Authorization: `Bearer ${staffToken}` },
+    })
+    assert.equal(invalidIdResponse.status, 400)
+
+    const resolveResponse = await fetch(`${endpoint}/${created.review.id}/resolve`, {
+      method: 'PATCH',
+      headers: { Authorization: `Bearer ${staffToken}` },
+    })
+    assert.equal(resolveResponse.status, 200)
+    assert.equal((await resolveResponse.json()).review.status, 'resolved')
+
+    const resolvedListResponse = await fetch(endpoint, { headers: { Authorization: `Bearer ${staffToken}` } })
+    assert.deepEqual((await resolvedListResponse.json()).reviews, [])
+    const repeatResolve = await fetch(`${endpoint}/${created.review.id}/resolve`, {
+      method: 'PATCH',
+      headers: { Authorization: `Bearer ${staffToken}` },
+    })
+    assert.equal(repeatResolve.status, 404)
+
+    const stored = await jsonDb.readDb()
+    assert.equal(stored.registrySourceReviews[0].status, 'resolved')
+    assert.equal(stored.registrySourceReviews[0].resolvedBy, staff.id)
+    const auditLogs = await jsonDb.listAuditLogs()
+    const warningAudits = auditLogs.filter((entry) => entry.targetType === 'resident_registry_source_review')
+    assert.deepEqual(warningAudits.map((entry) => entry.action).sort(), [
+      'resident_registry.source_review_opened',
+      'resident_registry.source_review_resolved',
+    ])
+    assert.ok(warningAudits.every((entry) => entry.actorId === staff.id))
+    assert.equal(warningAudits.some((entry) => JSON.stringify(entry).includes('Test Resident')), false)
+  } finally {
+    await new Promise((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()))
+    })
+  }
+})
+
 test('staff can add a manual resident with duplicate review and privacy safeguards', async () => {
   const { server, baseUrl } = await createTestServer()
   const staffPassword = 'ManualStaffPass123!'

@@ -142,6 +142,83 @@ export function registerResidentRegistryRoutes(app, { store }) {
     if (missing.length) throw new Error(`Resident registry storage is missing: ${missing.join(', ')}`)
   }
 
+  app.get('/api/staff/registry-source-reviews', async (req, res) => {
+    if (!await authorizeStaff(req, res)) return
+    try {
+      requireStorage('listRegistrySourceReviews')
+      const reviews = await store.listRegistrySourceReviews()
+      return res.json({ reviews: reviews.map(({ id, zone, purok, status, createdAt }) => ({ id, zone, purok, status, createdAt })) })
+    } catch (error) {
+      console.error('staff registry source review query failed', error)
+      return res.status(500).json({ message: 'Unable to load source-review warnings.' })
+    }
+  })
+
+  app.post('/api/staff/registry-source-reviews', async (req, res) => {
+    const actor = await authorizeStaff(req, res)
+    if (!actor) return
+    if (typeof req.body?.purok !== 'string') return res.status(400).json({ message: 'Enter a purok name of up to 100 characters.' })
+    const purok = cleanText(req.body?.purok)
+    const zoneText = req.body?.zone === null || req.body?.zone === undefined ? '' : String(req.body.zone)
+    const zone = zoneText ? Number(zoneText) : null
+    if (!purok || purok.length > 100) return res.status(400).json({ message: 'Enter a purok name of up to 100 characters.' })
+    if (zone !== null && (!Number.isInteger(zone) || zone < 1 || zone > 7)) {
+      return res.status(400).json({ message: 'Choose a valid zone from 1 to 7.' })
+    }
+    try {
+      requireStorage('openRegistrySourceReview')
+      const createdAt = new Date().toISOString()
+      const review = {
+        id: randomUUID(),
+        zone,
+        purok,
+        status: 'open',
+        createdBy: actor.id,
+        createdAt,
+        resolvedBy: null,
+        resolvedAt: null,
+      }
+      const outcome = await store.openRegistrySourceReview(review, makeAuditEntry(
+        actor,
+        'resident_registry.source_review_opened',
+        'resident_registry_source_review',
+        review.id,
+        { zone, purok }
+      ))
+      const { id, status, createdAt: openedAt } = outcome.review
+      return res.status(outcome.created ? 201 : 200).json({
+        review: { id, zone: outcome.review.zone, purok: outcome.review.purok, status, createdAt: openedAt },
+        created: outcome.created,
+      })
+    } catch (error) {
+      console.error('staff registry source review creation failed', error)
+      return res.status(500).json({ message: 'Unable to create the source-review warning.' })
+    }
+  })
+
+  app.patch('/api/staff/registry-source-reviews/:id/resolve', async (req, res) => {
+    const actor = await authorizeStaff(req, res)
+    if (!actor) return
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(req.params.id)) {
+      return res.status(400).json({ message: 'Choose a valid source-review warning.' })
+    }
+    try {
+      requireStorage('resolveRegistrySourceReview')
+      const resolvedAt = new Date().toISOString()
+      const review = await store.resolveRegistrySourceReview(req.params.id, actor.id, resolvedAt, makeAuditEntry(
+        actor,
+        'resident_registry.source_review_resolved',
+        'resident_registry_source_review',
+        req.params.id
+      ))
+      if (!review) return res.status(404).json({ message: 'Open source-review warning not found.' })
+      return res.json({ review: { id: review.id, status: review.status, resolvedAt: review.resolvedAt } })
+    } catch (error) {
+      console.error('staff registry source review resolution failed', error)
+      return res.status(500).json({ message: 'Unable to resolve the source-review warning.' })
+    }
+  })
+
   app.get('/api/staff/residents', async (req, res) => {
     if (!await authorizeStaff(req, res)) return
     const search = String(req.query.search || '').trim()
