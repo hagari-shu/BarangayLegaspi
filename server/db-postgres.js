@@ -169,6 +169,32 @@ export async function initDatabase() {
   `)
 
   await query(`
+    CREATE TABLE IF NOT EXISTS resident_registry (
+      id UUID PRIMARY KEY,
+      first_name VARCHAR(100) NOT NULL,
+      last_name VARCHAR(100) NOT NULL,
+      birth_date DATE,
+      sex VARCHAR(20),
+      household_id VARCHAR(100),
+      purok VARCHAR(100),
+      zone SMALLINT,
+      address VARCHAR(255),
+      record_status VARCHAR(20) NOT NULL DEFAULT 'active',
+      verification_status VARCHAR(20) NOT NULL DEFAULT 'pending',
+      source_reference VARCHAR(255),
+      source_filename VARCHAR(255),
+      source_fingerprint CHAR(64) UNIQUE,
+      created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+      verified_by UUID REFERENCES users(id) ON DELETE SET NULL,
+      verified_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ
+    );
+  `)
+  await query('CREATE INDEX IF NOT EXISTS resident_registry_location_status_idx ON resident_registry (zone, purok, record_status, verification_status)')
+  await query('CREATE INDEX IF NOT EXISTS resident_registry_household_location_idx ON resident_registry (household_id, zone, purok)')
+
+  await query(`
     CREATE TABLE IF NOT EXISTS announcements (
       id UUID PRIMARY KEY,
       tag VARCHAR(30) NOT NULL DEFAULT 'green',
@@ -692,6 +718,217 @@ export async function listAuditLogs(limit = 100) {
   } catch (error) {
     console.error('PostgreSQL audit log query failed', error)
     throw error
+  }
+}
+
+const normalizeRegistryResident = (record) => ({
+  ...record,
+  firstName: record.firstName ?? record.first_name ?? '',
+  lastName: record.lastName ?? record.last_name ?? '',
+  birthDate: record.birthDate ?? record.birth_date ?? null,
+  householdId: record.householdId ?? record.household_id ?? null,
+  verificationStatus: record.verificationStatus ?? record.verification_status ?? 'pending',
+  sourceReference: record.sourceReference ?? record.source_reference ?? null,
+  sourceFilename: record.sourceFilename ?? record.source_filename ?? null,
+  verifiedBy: record.verifiedBy ?? record.verified_by ?? null,
+  verifiedAt: record.verifiedAt ?? record.verified_at ?? null,
+  createdBy: record.createdBy ?? record.created_by ?? null,
+  status: record.status ?? record.recordStatus ?? record.record_status ?? 'active',
+  recordStatus: record.recordStatus ?? record.record_status ?? record.status ?? 'active',
+})
+
+const registryWhere = (filters = {}) => {
+  const clauses = []
+  const params = []
+  const add = (sql, value) => {
+    params.push(value)
+    clauses.push(sql.replace('?', `$${params.length}`))
+  }
+  if (filters.search) {
+    for (const term of String(filters.search).toLowerCase().split(/\s+/).filter(Boolean)) {
+      params.push(`%${term}%`)
+      const placeholder = `$${params.length}`
+      clauses.push(`(LOWER(first_name) LIKE ${placeholder} OR LOWER(last_name) LIKE ${placeholder})`)
+    }
+  }
+  if (filters.birthDate) add('birth_date = ?', filters.birthDate)
+  if (filters.ageStart && filters.ageEnd) {
+    params.push(filters.ageStart, filters.ageEnd)
+    clauses.push(`birth_date BETWEEN $${params.length - 1} AND $${params.length}`)
+  }
+  if (filters.zone) add('zone = ?', Number(filters.zone))
+  if (filters.purok) add('purok = ?', filters.purok)
+  return { sql: clauses.length ? `WHERE ${clauses.join(' AND ')}` : '', params }
+}
+
+export async function listResidentRegistry(filters = {}) {
+  const where = registryWhere(filters)
+  const countResult = await query(`SELECT COUNT(*)::integer AS total FROM resident_registry ${where.sql}`, where.params)
+  const offset = (filters.page - 1) * filters.pageSize
+  const params = [...where.params, filters.pageSize, offset]
+  const rows = await query(
+    `SELECT * FROM resident_registry ${where.sql}
+     ORDER BY zone NULLS LAST, purok NULLS LAST, last_name, first_name
+     LIMIT $${params.length - 1} OFFSET $${params.length}`,
+    params
+  )
+  return {
+    residents: rows.rows.map(normalizeRegistryResident),
+    total: Number(countResult.rows[0]?.total || 0),
+  }
+}
+
+export async function getResidentDemographics(filters = {}) {
+  const where = registryWhere({ zone: filters.zone, purok: filters.purok })
+  const eligibleSql = `${where.sql ? `${where.sql} AND ` : 'WHERE '}record_status = 'active' AND verification_status = 'verified'`
+  const counts = `COUNT(*)::integer AS total,
+    COUNT(*) FILTER (WHERE LOWER(sex) = 'male')::integer AS male,
+    COUNT(*) FILTER (WHERE LOWER(sex) = 'female')::integer AS female,
+    COUNT(*) FILTER (WHERE sex IS NULL OR BTRIM(sex) = '' OR LOWER(sex) NOT IN ('male', 'female'))::integer AS unclassified,
+    COUNT(DISTINCT NULLIF(BTRIM(household_id), ''))::integer AS households`
+  const overallResult = await query(`SELECT ${counts} FROM resident_registry ${eligibleSql}`, where.params)
+  const groupResult = await query(
+    `SELECT zone, purok, ${counts} FROM resident_registry ${eligibleSql}
+     GROUP BY zone, purok ORDER BY zone NULLS LAST, purok NULLS LAST`,
+    where.params
+  )
+  const byPurok = groupResult.rows.map((row) => ({
+    zone: row.zone === null ? null : Number(row.zone),
+    purok: row.purok,
+    label: row.purok || (row.zone ? `Zone ${row.zone}` : 'Unassigned / needs verification'),
+    total: Number(row.total),
+    male: Number(row.male),
+    female: Number(row.female),
+    unclassified: Number(row.unclassified),
+    households: Number(row.households),
+  }))
+  const householdResult = await query(
+    `SELECT zone, purok, household_id,
+     COUNT(*)::integer AS total,
+     COUNT(*) FILTER (WHERE LOWER(sex) = 'male')::integer AS male,
+     COUNT(*) FILTER (WHERE LOWER(sex) = 'female')::integer AS female,
+     COUNT(*) FILTER (WHERE sex IS NULL OR BTRIM(sex) = '' OR LOWER(sex) NOT IN ('male', 'female'))::integer AS unclassified
+     FROM resident_registry ${eligibleSql}
+     AND NULLIF(BTRIM(household_id), '') IS NOT NULL
+     GROUP BY zone, purok, household_id ORDER BY zone NULLS LAST, purok NULLS LAST, household_id`,
+    where.params
+  )
+  const byHousehold = householdResult.rows.map((row) => ({
+    zone: row.zone === null ? null : Number(row.zone),
+    purok: row.purok,
+    householdId: row.household_id,
+    total: Number(row.total),
+    male: Number(row.male),
+    female: Number(row.female),
+    unclassified: Number(row.unclassified),
+  }))
+  const row = overallResult.rows[0] || {}
+  return {
+    eligibility: 'Active records with verified household/resident status; unclassified sex is reported separately.',
+    overall: {
+      total: Number(row.total || 0),
+      male: Number(row.male || 0),
+      female: Number(row.female || 0),
+      unclassified: Number(row.unclassified || 0),
+      households: Number(row.households || 0),
+    },
+    byPurok,
+    byHousehold,
+    filters: { zone: filters.zone || null, purok: filters.purok || '' },
+  }
+}
+
+export async function findPotentialRegistryMatches(firstName, lastName, birthDate) {
+  const result = await query(
+    `SELECT id, first_name, last_name, birth_date, household_id, purok, zone, verification_status
+     FROM resident_registry
+     WHERE LOWER(first_name) = LOWER($1) AND LOWER(last_name) = LOWER($2)
+     AND ($3::date IS NULL OR birth_date = $3::date)
+     ORDER BY created_at LIMIT 5`,
+    [firstName, lastName, birthDate || null]
+  )
+  return result.rows.map((row) => ({
+    id: row.id,
+    firstName: row.first_name,
+    lastName: row.last_name,
+    birthDate: row.birth_date,
+    householdId: row.household_id,
+    purok: row.purok,
+    zone: row.zone === null ? null : Number(row.zone),
+    verificationStatus: row.verification_status,
+  }))
+}
+
+export async function insertRegistryResidents(residents, auditEntry) {
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+    for (const resident of residents) {
+      await client.query(
+        `INSERT INTO resident_registry (
+          id, first_name, last_name, birth_date, sex, household_id, purok, zone, address,
+          record_status, verification_status, source_reference, source_filename, created_by, created_at, updated_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'active', 'pending', $10, $11, $12, $13, $13)`,
+        [
+          resident.id, resident.firstName, resident.lastName, resident.birthDate, resident.sex,
+          resident.householdId, resident.purok, resident.zone, resident.address, resident.sourceReference,
+          resident.sourceFilename, resident.createdBy, resident.createdAt,
+        ]
+      )
+    }
+    await client.query(
+      `INSERT INTO audit_logs (id, actor_id, actor_role, action, target_type, target_id, metadata)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [auditEntry.id, auditEntry.actorId || null, auditEntry.actorRole || null, auditEntry.action,
+        auditEntry.targetType || null, auditEntry.targetId || null, auditEntry.metadata || {}]
+    )
+    await client.query('COMMIT')
+    return residents
+  } catch (error) {
+    await client.query('ROLLBACK')
+    throw error
+  } finally {
+    client.release()
+  }
+}
+
+export async function updateRegistryResidentWithAudit(id, updates, auditEntry) {
+  const columns = {
+    verificationStatus: 'verification_status',
+    verifiedBy: 'verified_by',
+    verifiedAt: 'verified_at',
+    status: 'record_status',
+  }
+  const entries = Object.entries(updates).filter(([key]) => columns[key])
+  if (!entries.length) return null
+  const values = entries.map(([, value]) => value)
+  const assignments = entries.map(([key], index) => `${columns[key]} = $${index + 1}`)
+  values.push(id)
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+    const result = await client.query(
+      `UPDATE resident_registry SET ${assignments.join(', ')}, updated_at = NOW()
+       WHERE id = $${values.length} RETURNING *`,
+      values
+    )
+    if (!result.rows.length) {
+      await client.query('ROLLBACK')
+      return null
+    }
+    await client.query(
+      `INSERT INTO audit_logs (id, actor_id, actor_role, action, target_type, target_id, metadata)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [auditEntry.id, auditEntry.actorId || null, auditEntry.actorRole || null, auditEntry.action,
+        auditEntry.targetType || null, auditEntry.targetId || null, auditEntry.metadata || {}]
+    )
+    await client.query('COMMIT')
+    return normalizeRegistryResident(result.rows[0])
+  } catch (error) {
+    await client.query('ROLLBACK')
+    throw error
+  } finally {
+    client.release()
   }
 }
 

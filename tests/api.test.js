@@ -1872,3 +1872,133 @@ test('reset password request sends a delivery webhook payload when configured', 
     })
   }
 })
+
+test('resident registry imports are staff-only, duplicate-reviewed, pending, and audited', async () => {
+  const { server, baseUrl } = await createTestServer()
+  const staffPassword = 'StaffPass123!'
+  const staff = {
+    id: randomUUID(),
+    firstName: 'Registry',
+    lastName: 'Staff',
+    mobile: `091${Math.floor(10000000 + Math.random() * 90000000)}`,
+    email: `registry.${Date.now()}@example.com`,
+    passwordHash: await hashPassword(staffPassword),
+    role: 'staff',
+    status: 'On Duty',
+    createdAt: new Date().toISOString(),
+  }
+
+  try {
+    await jsonDb.saveUser(staff)
+    const staffLogin = await fetch(`${baseUrl}/api/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ identifier: staff.email, password: staffPassword }),
+    })
+    assert.equal(staffLogin.status, 200)
+    const staffToken = (await staffLogin.json()).token
+    const headers = { Authorization: `Bearer ${staffToken}`, 'Content-Type': 'application/json' }
+    const importBody = {
+      filename: 'family-sheet.csv',
+      residents: [
+        { firstName: 'Ana', lastName: 'Reyes', birthDate: '2000-01-02', sex: 'Female', zone: '2', purok: 'Purok 2' },
+        { firstName: 'Ana', lastName: 'Reyes', birthDate: '2000-01-02', sex: 'Female', zone: '2', purok: 'Purok 2' },
+      ],
+    }
+
+    const oversizedFieldResponse = await fetch(`${baseUrl}/api/staff/residents/import`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        filename: 'large-row.csv',
+        residents: [{ firstName: 'Ana', lastName: 'Reyes', address: 'x'.repeat(120_000) }],
+      }),
+    })
+    assert.equal(oversizedFieldResponse.status, 400)
+
+    const duplicateReview = await fetch(`${baseUrl}/api/staff/residents/import`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(importBody),
+    })
+    assert.equal(duplicateReview.status, 409)
+    const reviewData = await duplicateReview.json()
+    assert.equal(reviewData.reviewRequired, true)
+    assert.equal(reviewData.potentialMatches.length, 1)
+    assert.equal(reviewData.potentialMatches[0].records[0].source, 'same import file')
+    assert.equal((await jsonDb.listResidentRegistry({ page: 1, pageSize: 25 })).total, 0)
+
+    const importResponse = await fetch(`${baseUrl}/api/staff/residents/import`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ ...importBody, confirmPotentialMatches: true }),
+    })
+    assert.equal(importResponse.status, 201)
+    assert.deepEqual(await importResponse.json(), {
+      imported: 2,
+      verificationStatus: 'pending',
+      potentialMatches: reviewData.potentialMatches,
+    })
+
+    const residentsResponse = await fetch(`${baseUrl}/api/staff/residents?page=1&pageSize=25`, {
+      headers: { Authorization: `Bearer ${staffToken}` },
+    })
+    assert.equal(residentsResponse.status, 200)
+    const residentsData = await residentsResponse.json()
+    assert.equal(residentsData.total, 2)
+    assert.ok(residentsData.residents.every((resident) => resident.verificationStatus === 'pending'))
+    assert.ok(residentsData.residents.every((resident) => resident.sourceFilename === importBody.filename))
+
+    const demographicsResponse = await fetch(`${baseUrl}/api/staff/demographics`, {
+      headers: { Authorization: `Bearer ${staffToken}` },
+    })
+    assert.equal(demographicsResponse.status, 200)
+    assert.equal((await demographicsResponse.json()).overall.total, 0)
+
+    const verifyResponse = await fetch(`${baseUrl}/api/staff/residents/${residentsData.residents[0].id}/verify`, {
+      method: 'PATCH',
+      headers,
+      body: JSON.stringify({ verificationStatus: 'verified' }),
+    })
+    assert.equal(verifyResponse.status, 200)
+    const verifiedDemographics = await fetch(`${baseUrl}/api/staff/demographics`, {
+      headers: { Authorization: `Bearer ${staffToken}` },
+    })
+    assert.equal((await verifiedDemographics.json()).overall.total, 1)
+
+    const inactiveResponse = await fetch(`${baseUrl}/api/staff/residents/${residentsData.residents[0].id}/status`, {
+      method: 'PATCH',
+      headers,
+      body: JSON.stringify({ status: 'inactive' }),
+    })
+    assert.equal(inactiveResponse.status, 200)
+    const inactiveDemographics = await fetch(`${baseUrl}/api/staff/demographics`, {
+      headers: { Authorization: `Bearer ${staffToken}` },
+    })
+    assert.equal((await inactiveDemographics.json()).overall.total, 0)
+
+    const residentLogin = await fetch(`${baseUrl}/api/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ identifier: 'maria.delacruz@email.com', password: 'ResidentPass123!' }),
+    })
+    const residentToken = (await residentLogin.json()).token
+    const deniedResponse = await fetch(`${baseUrl}/api/staff/residents`, {
+      headers: { Authorization: `Bearer ${residentToken}` },
+    })
+    assert.equal(deniedResponse.status, 403)
+
+    const auditLogs = await jsonDb.listAuditLogs()
+    const importAudit = auditLogs.find((entry) => entry.action === 'resident_registry.bulk_imported')
+    assert.ok(importAudit)
+    assert.equal(importAudit.actorId, staff.id)
+    assert.equal(importAudit.metadata.count, 2)
+    assert.equal(importAudit.metadata.filename, importBody.filename)
+    assert.ok(auditLogs.some((entry) => entry.action === 'resident_registry.verified'))
+    assert.ok(auditLogs.some((entry) => entry.action === 'resident_registry.status_changed'))
+  } finally {
+    await new Promise((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()))
+    })
+  }
+})

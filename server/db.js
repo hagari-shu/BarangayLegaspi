@@ -47,7 +47,7 @@ export async function readDb() {
     return data
   } catch (error) {
     if (error.code === 'ENOENT') {
-      const fallbackDb = { users: [], requests: [], announcements: [], reports: [], approvals: [], auditLogs: [] }
+      const fallbackDb = { users: [], requests: [], announcements: [], reports: [], approvals: [], residentRegistry: [], auditLogs: [] }
       await writeJsonFile(fallbackDb)
       return fallbackDb
     }
@@ -438,6 +438,140 @@ export async function addAuditLog(entry) {
 export async function listAuditLogs(limit = 100) {
   const db = await readDb()
   return (db.auditLogs || []).slice(-Math.max(1, Math.min(Number(limit) || 100, 500))).reverse()
+}
+
+const normalizeRegistryResident = (record) => ({
+  ...record,
+  firstName: record.firstName ?? record.first_name ?? '',
+  lastName: record.lastName ?? record.last_name ?? '',
+  birthDate: record.birthDate ?? record.birth_date ?? null,
+  householdId: record.householdId ?? record.household_id ?? null,
+  verificationStatus: record.verificationStatus ?? record.verification_status ?? 'pending',
+  sourceReference: record.sourceReference ?? record.source_reference ?? null,
+  sourceFilename: record.sourceFilename ?? record.source_filename ?? null,
+  verifiedBy: record.verifiedBy ?? record.verified_by ?? null,
+  verifiedAt: record.verifiedAt ?? record.verified_at ?? null,
+  createdBy: record.createdBy ?? record.created_by ?? null,
+  status: record.status ?? record.recordStatus ?? record.record_status ?? 'active',
+  recordStatus: record.recordStatus ?? record.record_status ?? record.status ?? 'active',
+})
+
+export async function listResidentRegistry(filters = {}) {
+  const db = await readDb()
+  const matches = (db.residentRegistry || []).map(normalizeRegistryResident).filter((resident) => {
+    const nameParts = String(filters.search || '').toLowerCase().split(/\s+/).filter(Boolean)
+    const fullName = `${resident.firstName} ${resident.lastName}`.toLowerCase()
+    if (nameParts.some((part) => !fullName.includes(part))) return false
+    if (filters.birthDate && resident.birthDate !== filters.birthDate) return false
+    if (filters.ageStart && filters.ageEnd && (!resident.birthDate || resident.birthDate < filters.ageStart || resident.birthDate > filters.ageEnd)) return false
+    if (filters.zone && Number(resident.zone) !== Number(filters.zone)) return false
+    if (filters.purok && resident.purok !== filters.purok) return false
+    return true
+  }).sort((left, right) => (
+    Number(left.zone || 99) - Number(right.zone || 99)
+    || String(left.purok || '').localeCompare(String(right.purok || ''))
+    || left.lastName.localeCompare(right.lastName)
+    || left.firstName.localeCompare(right.firstName)
+  ))
+  const offset = (filters.page - 1) * filters.pageSize
+  return { residents: matches.slice(offset, offset + filters.pageSize), total: matches.length }
+}
+
+export async function getResidentDemographics(filters = {}) {
+  const db = await readDb()
+  const eligible = (db.residentRegistry || []).map(normalizeRegistryResident).filter((resident) => (
+    resident.recordStatus === 'active'
+    && resident.verificationStatus === 'verified'
+    && (!filters.zone || Number(resident.zone) === Number(filters.zone))
+    && (!filters.purok || resident.purok === filters.purok)
+  ))
+  const count = (residents) => ({
+    total: residents.length,
+    male: residents.filter((item) => String(item.sex || '').toLowerCase() === 'male').length,
+    female: residents.filter((item) => String(item.sex || '').toLowerCase() === 'female').length,
+    unclassified: residents.filter((item) => !['male', 'female'].includes(String(item.sex || '').toLowerCase())).length,
+    households: new Set(residents.map((item) => item.householdId).filter(Boolean)).size,
+  })
+  const groups = new Map()
+  const households = new Map()
+  for (const resident of eligible) {
+    const groupKey = `${resident.zone || ''}\u0000${resident.purok || ''}`
+    if (!groups.has(groupKey)) groups.set(groupKey, [])
+    groups.get(groupKey).push(resident)
+    const householdKey = `${groupKey}\u0000${resident.householdId || ''}`
+    if (resident.householdId && !households.has(householdKey)) households.set(householdKey, [])
+    if (resident.householdId) households.get(householdKey).push(resident)
+  }
+  const byPurok = [...groups.entries()].map(([key, residents]) => {
+    const [zoneValue, purok] = key.split('\u0000')
+    const counts = count(residents)
+    const zone = zoneValue ? Number(zoneValue) : null
+    return {
+      zone,
+      purok: purok || null,
+      label: purok || (zone ? `Zone ${zone}` : 'Unassigned / needs verification'),
+      ...counts,
+    }
+  }).sort((left, right) => (left.zone || 99) - (right.zone || 99) || String(left.purok || '').localeCompare(String(right.purok || '')))
+  const byHousehold = [...households.entries()].map(([key, residents]) => {
+    const [zoneValue, purok, householdId] = key.split('\u0000')
+    const counts = count(residents)
+    return {
+      zone: zoneValue ? Number(zoneValue) : null,
+      purok: purok || null,
+      householdId,
+      total: counts.total,
+      male: counts.male,
+      female: counts.female,
+      unclassified: counts.unclassified,
+    }
+  })
+  return {
+    eligibility: 'Active records with verified household/resident status; unclassified sex is reported separately.',
+    overall: count(eligible),
+    byPurok,
+    byHousehold,
+    filters: { zone: filters.zone || null, purok: filters.purok || '' },
+  }
+}
+
+export async function findPotentialRegistryMatches(firstName, lastName, birthDate) {
+  const db = await readDb()
+  return (db.residentRegistry || []).map(normalizeRegistryResident).filter((resident) => (
+    resident.firstName.trim().toLowerCase() === firstName.trim().toLowerCase()
+    && resident.lastName.trim().toLowerCase() === lastName.trim().toLowerCase()
+    && (!birthDate || resident.birthDate === birthDate)
+  )).slice(0, 5).map((resident) => ({
+    id: resident.id,
+    firstName: resident.firstName,
+    lastName: resident.lastName,
+    birthDate: resident.birthDate,
+    householdId: resident.householdId,
+    purok: resident.purok,
+    zone: resident.zone,
+    verificationStatus: resident.verificationStatus,
+  }))
+}
+
+export async function insertRegistryResidents(residents, auditEntry) {
+  const db = await readDb()
+  db.residentRegistry = db.residentRegistry || []
+  db.auditLogs = db.auditLogs || []
+  db.residentRegistry.push(...residents)
+  db.auditLogs.push(auditEntry)
+  await writeDb(db)
+  return residents
+}
+
+export async function updateRegistryResidentWithAudit(id, updates, auditEntry) {
+  const db = await readDb()
+  const resident = (db.residentRegistry || []).find((item) => item.id === id)
+  if (!resident) return null
+  Object.assign(resident, updates, updates.status ? { recordStatus: updates.status } : {})
+  db.auditLogs = db.auditLogs || []
+  db.auditLogs.push(auditEntry)
+  await writeDb(db)
+  return normalizeRegistryResident(resident)
 }
 
 export async function archiveApprovalsOlderThan(days = 30) {

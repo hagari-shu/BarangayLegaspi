@@ -18,6 +18,10 @@ The Admin → Access staff roster shows which staff portal sessions checked in w
 
 Approval history stays active for 30 days by default and older approvals are archived automatically when a new approval is recorded. Administrators can also archive approvals manually: the default is 30 days, and every manual archive requires confirmation. Setting retention to `0` archives every approval currently in the active list, including recent ones. Archives remain downloadable from Archived Files until an administrator explicitly deletes them.
 
+## Resident registry
+
+The staff portal's Resident registry supports CSV preview and import, duplicate review, record search, and manual verification. Imports accept up to 500 rows per batch; every imported record is saved as pending verification, and only active, verified records are included in demographic totals. Resident records and batch actions are restricted to staff accounts and are recorded in the audit log. The Node API initializes the PostgreSQL registry table on startup. Before loading real resident data, confirm the office's authorization, privacy notice, access controls, and retention schedule; use the managed staff workflow rather than writing directly to the database.
+
 ## Deployment
 
 The current production frontend on Vercel uses the Node/Express API at `https://barangaylegaspi.onrender.com/api`, backed by PostgreSQL. Laravel is deployed as a staged migration target and is not yet the API used by the production frontend. Do not change `VITE_API_BASE` to Laravel until authenticated resident, staff, admin, and content-management workflows have passed a coordinated cutover check.

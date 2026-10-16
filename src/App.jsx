@@ -7,6 +7,7 @@ import { getMauQuickOptions, getMauReply, getMauResidentAnswer, getMauWelcome } 
 import { reportClientError } from './client-error-reporting'
 import { getReportDateRange } from './report-date-range'
 import { isStaffReportResponse } from './report-contract'
+import StaffRegistryPanel from './StaffRegistryPanel'
 import translations from './translations'
 import './App.css'
 
@@ -3003,6 +3004,16 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
             >
               <span className="nav-icon">📄</span><span>{t.staffDashboardTitle}</span>
             </button>
+            {userRole === 'staff' && (
+              <button
+                type="button"
+                className={`nav-item ${activeTab === 'residents' ? 'active' : ''}`}
+                aria-current={activeTab === 'residents' ? 'page' : undefined}
+                onClick={() => setActiveTab('residents')}
+              >
+                <span className="nav-icon">🏘️</span><span>{language === 'fil' ? 'Talaan ng residente' : 'Resident registry'}</span>
+              </button>
+            )}
             <button
               type="button"
               className={`nav-item ${activeTab === 'approvals' ? 'active' : ''}`}
@@ -3042,7 +3053,7 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
           <div className="welcome-row">
             <div>
               <p className="eyebrow">{t.operations}</p>
-              <h1>{activeTab === 'queue' ? t.staffDashboardTitle : activeTab === 'reports' ? t.serviceReports : activeTab === 'announcements' ? t.announcements : activeTab === 'staff' ? t.staffDirectory : t.approvalsManagement}</h1>
+              <h1>{activeTab === 'queue' ? t.staffDashboardTitle : activeTab === 'reports' ? t.serviceReports : activeTab === 'announcements' ? t.announcements : activeTab === 'staff' ? t.staffDirectory : activeTab === 'residents' ? (language === 'fil' ? 'Talaan ng residente' : 'Resident registry') : t.approvalsManagement}</h1>
               {activeTab === 'queue' && <p className="staff-dashboard-subtitle">{t.staffDashboardSubtitle}</p>}
             </div>
             {activeTab === 'queue' ? (
@@ -3053,10 +3064,10 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
                   {dashboardLoading ? t.loadingRequests : t.refreshRequests}
                 </button>
               </div>
-            ) : <span className="counter-pill">{activeTab === 'approvals' ? approvedCount : totalRequests} {activeTab === 'approvals' ? t.processed : t.requests}</span>}
+            ) : activeTab !== 'residents' && <span className="counter-pill">{activeTab === 'approvals' ? approvedCount : totalRequests} {activeTab === 'approvals' ? t.processed : t.requests}</span>}
           </div>
 
-          <div className="stats-grid staff-dashboard-metrics" aria-label={t.staffSummaryLabel}>
+          {activeTab !== 'residents' && <div className="stats-grid staff-dashboard-metrics" aria-label={t.staffSummaryLabel}>
             <button className="stat-card staff-metric-card accent" type="button" onClick={() => setQueueFilter('Pending')}>
               <span className="label">{t.pendingReviewMetric}</span>
               <span className="stat-number">{pendingCount}</span>
@@ -3077,10 +3088,11 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
               <span className="stat-number" aria-label={t.systemUnknown}>—</span>
               <span className="staff-metric-description">{t.deadlinesNotTracked}</span>
             </article>
-          </div>
+          </div>}
 
           <div className="dashboard-body">
             <div className="main-column">
+              {activeTab === 'residents' && <StaffRegistryPanel language={language} />}
               {activeTab === 'queue' && (
                 <>
                 <section className="panel-card needs-attention" aria-labelledby="needs-attention-title">
