@@ -7,7 +7,9 @@ const API_BASE = (import.meta.env.VITE_API_BASE || (import.meta.env.DEV ? 'http:
 const text = {
   en: {
     title: 'Resident and household registry',
-    subtitle: 'Private staff workspace. Counts include active, verified records only.',
+    subtitle: 'Restricted staff workspace. Counts include active, verified records only.',
+    privacyTitle: 'Personal information — authorized use only',
+    privacyNotice: 'Use these records only for authorized barangay duties. Enter only information needed from an official source; leave unknown fields blank. Do not share screenshots or exports outside approved work. New entries stay pending, and create, import, verification, and status changes are recorded in the audit log.',
     search: 'Search full name',
     birthDate: 'Exact birthdate',
     age: 'Exact age',
@@ -72,9 +74,8 @@ const text = {
     previous: 'Previous',
     next: 'Next',
     importTitle: 'Import reviewed CSV',
-    importHelp: 'Select a CSV to preview it. Imported rows remain pending verification and do not affect population totals.',
+    importHelp: 'Select a CSV to preview the first 10 rows locally. Review them, then explicitly choose Import pending records. Imported rows remain pending verification and do not affect population totals.',
     chooseCsv: 'Choose CSV file',
-    previewImport: 'Preview import',
     importRecords: 'Import pending records',
     importDuplicates: 'Possible matches found. Review these rows before confirming; every imported row will remain pending verification.',
     importDone: 'Pending records imported. Verify each record against its source before counting it.',
@@ -87,7 +88,9 @@ const text = {
   },
   fil: {
     title: 'Talaan ng mga residente at sambahayan',
-    subtitle: 'Pribadong workspace ng kawani. Kasama lamang sa bilang ang aktibo at beripikadong tala.',
+    subtitle: 'Limitado sa awtorisadong kawani. Kasama lamang sa bilang ang aktibo at beripikadong tala.',
+    privacyTitle: 'Personal na impormasyon — para lamang sa awtorisadong gawain',
+    privacyNotice: 'Gamitin lamang ang mga tala para sa awtorisadong tungkulin ng barangay. Ilagay lamang ang impormasyong kailangan mula sa opisyal na sanggunian; iwang blangko ang hindi alam. Huwag magbahagi ng screenshot o kopya sa labas ng aprubadong gawain. Mananatiling pending ang mga bagong tala, at itinatala sa audit log ang paglikha, pag-import, beripikasyon, at pagbabago ng katayuan.',
     search: 'Hanapin ang buong pangalan',
     birthDate: 'Eksaktong petsa ng kapanganakan',
     age: 'Eksaktong edad',
@@ -152,9 +155,8 @@ const text = {
     previous: 'Nakaraan',
     next: 'Susunod',
     importTitle: 'Mag-import ng nasuring CSV',
-    importHelp: 'Pumili ng CSV para makita muna ang preview. Nananatiling pending ang mga tala at hindi isasama sa bilang ng populasyon.',
+    importHelp: 'Pumili ng CSV para makita nang lokal ang unang 10 row. Suriin ang mga ito, saka piliin ang I-import bilang pending. Nananatiling pending ang mga tala at hindi isasama sa bilang ng populasyon.',
     chooseCsv: 'Pumili ng CSV file',
-    previewImport: 'I-preview ang import',
     importRecords: 'I-import bilang pending',
     importDuplicates: 'May posibleng katugmang tala. Suriin muna ang mga row bago kumpirmahin; pending pa rin ang lahat ng i-import.',
     importDone: 'Na-import na ang mga pending na tala. Beripikahin ang bawat tala gamit ang source bago isama sa bilang.',
@@ -442,6 +444,11 @@ export default function StaffRegistryPanel({ language = 'en' }) {
         </div>
       </div>
 
+      <aside className="registry-privacy-notice" aria-label={labels.privacyTitle}>
+        <strong>{labels.privacyTitle}</strong>
+        <p>{labels.privacyNotice}</p>
+      </aside>
+
       {importOpen && (
         <section className="registry-import" aria-label={labels.importTitle}>
           <h3>{labels.importTitle}</h3>
@@ -453,7 +460,7 @@ export default function StaffRegistryPanel({ language = 'en' }) {
               previewImport(file)
             }} /></label>
             <button type="button" className="secondary-btn small" onClick={downloadImportTemplate}>{labels.importTemplate}</button>
-            <button type="button" className="primary-btn small" disabled={!importRows.length || importBusy} onClick={() => submitImport(false)}>{importBusy ? labels.saving : labels.previewImport}</button>
+            <button type="button" className="primary-btn small" disabled={!importRows.length || importBusy} onClick={() => submitImport(false)}>{importBusy ? labels.saving : labels.importRecords}</button>
           </div>
           {importError && <p className="registry-message error" role="alert">{labels.importValidation}: {importError}</p>}
           {importMessage && <p className="registry-message" role="status">{importMessage}</p>}
@@ -544,7 +551,7 @@ export default function StaffRegistryPanel({ language = 'en' }) {
               <tr key={resident.id}>
                 <td>{resident.firstName} {resident.lastName}<small>{resident.sex || labels.unclassifiedOption}</small></td>
                 <td>{formatDate(resident.birthDate, language) || labels.noDob}<small>{resident.age === null ? labels.noDob : `${resident.age}`}</small></td>
-                <td>{resident.purok || (resident.zone ? `Zone ${resident.zone}` : labels.unassigned)}{resident.address && <small>{resident.address}</small>}</td>
+                <td>{resident.purok || (resident.zone ? `Zone ${resident.zone}` : labels.unassigned)}</td>
                 <td>{resident.householdId || labels.unassigned}</td>
                 <td><span className={`registry-status is-${resident.verificationStatus}`}>{resident.verificationStatus === 'verified' ? labels.verified : resident.verificationStatus === 'needs_review' ? labels.needsReview : labels.pending}</span></td>
                 <td><label className="registry-status-select"><span className="sr-only">{labels.updateStatus}: {resident.firstName} {resident.lastName}</span><select value={resident.status} onChange={(event) => updateRecordStatus(resident, event.target.value)}><option value="active">{labels.active}</option><option value="inactive">{labels.inactive}</option><option value="deceased">{labels.deceased}</option><option value="archived">{labels.archived}</option></select></label></td>

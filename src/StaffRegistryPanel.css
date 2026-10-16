@@ -26,6 +26,19 @@
   background: #f8fafb;
 }
 
+.registry-privacy-notice {
+  padding: 0.85rem 1rem;
+  border: 1px solid #b8cbd5;
+  border-left: 0.3rem solid #245b78;
+  border-radius: 0.55rem;
+  background: #f0f6f8;
+  color: #173746;
+}
+
+.registry-privacy-notice p {
+  margin: 0.35rem 0 0;
+}
+
 .registry-import h3,
 .registry-import h4,
 .registry-import p {

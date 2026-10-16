@@ -222,6 +222,11 @@ export function createApp() {
     }
   })
 
+  app.use(['/api/staff/residents', '/api/staff/demographics'], (_req, res, next) => {
+    res.set('Cache-Control', 'private, no-store')
+    res.set('Vary', 'Authorization')
+    next()
+  })
   app.use('/api/staff/residents/import', express.json({ limit: '2mb' }))
   app.use(express.json({ limit: '100kb' }))
   app.use(express.urlencoded({ extended: true, limit: '100kb' }))

@@ -1944,15 +1944,21 @@ test('resident registry imports are staff-only, duplicate-reviewed, pending, and
       headers: { Authorization: `Bearer ${staffToken}` },
     })
     assert.equal(residentsResponse.status, 200)
+    assert.equal(residentsResponse.headers.get('cache-control'), 'private, no-store')
     const residentsData = await residentsResponse.json()
     assert.equal(residentsData.total, 2)
     assert.ok(residentsData.residents.every((resident) => resident.verificationStatus === 'pending'))
-    assert.ok(residentsData.residents.every((resident) => resident.sourceFilename === importBody.filename))
+    assert.ok(residentsData.residents.every((resident) => !Object.hasOwn(resident, 'address')))
+    assert.ok(residentsData.residents.every((resident) => !Object.hasOwn(resident, 'sourceReference')))
+    assert.ok(residentsData.residents.every((resident) => !Object.hasOwn(resident, 'sourceFilename')))
+    const storedResidents = await jsonDb.listResidentRegistry({ page: 1, pageSize: 25 })
+    assert.ok(storedResidents.residents.every((resident) => resident.sourceFilename === importBody.filename))
 
     const demographicsResponse = await fetch(`${baseUrl}/api/staff/demographics`, {
       headers: { Authorization: `Bearer ${staffToken}` },
     })
     assert.equal(demographicsResponse.status, 200)
+    assert.equal(demographicsResponse.headers.get('cache-control'), 'private, no-store')
     assert.equal((await demographicsResponse.json()).overall.total, 0)
 
     const verifyResponse = await fetch(`${baseUrl}/api/staff/residents/${residentsData.residents[0].id}/verify`, {
@@ -1961,6 +1967,23 @@ test('resident registry imports are staff-only, duplicate-reviewed, pending, and
       body: JSON.stringify({ verificationStatus: 'verified' }),
     })
     assert.equal(verifyResponse.status, 200)
+    const flagReviewResponse = await fetch(`${baseUrl}/api/staff/residents/${residentsData.residents[0].id}/verify`, {
+      method: 'PATCH',
+      headers,
+      body: JSON.stringify({ verificationStatus: 'needs_review' }),
+    })
+    assert.equal(flagReviewResponse.status, 200)
+    assert.equal((await flagReviewResponse.json()).resident.verifiedAt, null)
+    const flaggedDemographics = await fetch(`${baseUrl}/api/staff/demographics`, {
+      headers: { Authorization: `Bearer ${staffToken}` },
+    })
+    assert.equal((await flaggedDemographics.json()).overall.total, 0)
+    const reverifyResponse = await fetch(`${baseUrl}/api/staff/residents/${residentsData.residents[0].id}/verify`, {
+      method: 'PATCH',
+      headers,
+      body: JSON.stringify({ verificationStatus: 'verified' }),
+    })
+    assert.equal(reverifyResponse.status, 200)
     const verifiedDemographics = await fetch(`${baseUrl}/api/staff/demographics`, {
       headers: { Authorization: `Bearer ${staffToken}` },
     })
@@ -1993,9 +2016,104 @@ test('resident registry imports are staff-only, duplicate-reviewed, pending, and
     assert.ok(importAudit)
     assert.equal(importAudit.actorId, staff.id)
     assert.equal(importAudit.metadata.count, 2)
-    assert.equal(importAudit.metadata.filename, importBody.filename)
+    assert.equal(importAudit.metadata.hasFilename, true)
+    assert.equal(JSON.stringify(importAudit).includes(importBody.filename), false)
     assert.ok(auditLogs.some((entry) => entry.action === 'resident_registry.verified'))
     assert.ok(auditLogs.some((entry) => entry.action === 'resident_registry.status_changed'))
+  } finally {
+    await new Promise((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()))
+    })
+  }
+})
+
+test('staff can add a manual resident with duplicate review and privacy safeguards', async () => {
+  const { server, baseUrl } = await createTestServer()
+  const staffPassword = 'ManualStaffPass123!'
+  const staff = {
+    id: randomUUID(),
+    firstName: 'Manual',
+    lastName: 'Entry',
+    mobile: `091${Math.floor(10000000 + Math.random() * 90000000)}`,
+    email: `manual-entry.${Date.now()}@example.com`,
+    passwordHash: await hashPassword(staffPassword),
+    role: 'staff',
+    status: 'On Duty',
+    createdAt: new Date().toISOString(),
+  }
+
+  try {
+    await jsonDb.saveUser(staff)
+    const loginResponse = await fetch(`${baseUrl}/api/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ identifier: staff.email, password: staffPassword }),
+    })
+    assert.equal(loginResponse.status, 200)
+    const token = (await loginResponse.json()).token
+    const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
+    const resident = {
+      firstName: 'Luz',
+      lastName: 'Santos',
+      birthDate: '1980-02-03',
+      sex: 'Female',
+      address: 'Sensitive address',
+      sourceFilename: 'confidential-source-sheet.csv',
+    }
+
+    const anonymousResponse = await fetch(`${baseUrl}/api/staff/residents`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(resident),
+    })
+    assert.equal(anonymousResponse.status, 401)
+    assert.equal(anonymousResponse.headers.get('cache-control'), 'private, no-store')
+
+    const createResponse = await fetch(`${baseUrl}/api/staff/residents`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(resident),
+    })
+    assert.equal(createResponse.status, 201)
+    assert.equal(createResponse.headers.get('cache-control'), 'private, no-store')
+    const created = await createResponse.json()
+    assert.equal(created.resident.verificationStatus, 'pending')
+    assert.equal(Object.hasOwn(created.resident, 'firstName'), false)
+    assert.equal(Object.hasOwn(created.resident, 'birthDate'), false)
+    assert.equal(Object.hasOwn(created.resident, 'address'), false)
+    assert.equal(JSON.stringify(created).includes('confidential-source-sheet.csv'), false)
+
+    const duplicateResponse = await fetch(`${baseUrl}/api/staff/residents`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(resident),
+    })
+    assert.equal(duplicateResponse.status, 409)
+    assert.equal((await duplicateResponse.json()).reviewRequired, true)
+
+    const confirmedResponse = await fetch(`${baseUrl}/api/staff/residents`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ ...resident, confirmPotentialMatch: true }),
+    })
+    assert.equal(confirmedResponse.status, 201)
+    assert.equal((await confirmedResponse.json()).resident.verificationStatus, 'pending')
+
+    const recordsResponse = await fetch(`${baseUrl}/api/staff/residents?page=1&pageSize=25`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    const records = await recordsResponse.json()
+    assert.equal(records.total, 2)
+    assert.ok(records.residents.every((record) => record.verificationStatus === 'pending'))
+    assert.ok(records.residents.every((record) => !Object.hasOwn(record, 'address')))
+    assert.ok(records.residents.every((record) => !Object.hasOwn(record, 'sourceFilename')))
+
+    const auditLogs = await jsonDb.listAuditLogs()
+    const createAudits = auditLogs.filter((entry) => entry.action === 'resident_registry.created')
+    assert.equal(createAudits.length, 2)
+    assert.ok(createAudits.every((entry) => entry.actorId === staff.id))
+    assert.ok(createAudits.every((entry) => !JSON.stringify(entry).includes('Luz')))
+    assert.ok(createAudits.every((entry) => !JSON.stringify(entry).includes('confidential-source-sheet.csv')))
   } finally {
     await new Promise((resolve, reject) => {
       server.close((error) => (error ? reject(error) : resolve()))

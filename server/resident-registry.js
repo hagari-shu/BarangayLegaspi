@@ -134,11 +134,8 @@ export function registerResidentRegistryRoutes(app, { store }) {
         householdId: resident.householdId || resident.household_id || null,
         purok: resident.purok || null,
         zone: resident.zone === null || resident.zone === undefined ? null : Number(resident.zone),
-        address: resident.address || null,
         status: resident.status || resident.recordStatus || resident.record_status || 'active',
         verificationStatus: resident.verificationStatus || resident.verification_status || 'pending',
-        sourceReference: resident.sourceReference || resident.source_reference || null,
-        sourceFilename: resident.sourceFilename || resident.source_filename || null,
       }))
       return res.json({ residents, total: result.total, page, pageSize, filters: { search, birthDate, age, zone, purok } })
     } catch (error) {
@@ -234,22 +231,7 @@ export function registerResidentRegistryRoutes(app, { store }) {
       })
       await store.insertRegistryResidents([resident], auditEntry)
       return res.status(201).json({
-        resident: {
-          id: resident.id,
-          firstName,
-          lastName,
-          birthDate,
-          age: calculateAge(birthDate, today),
-          sex: sex || 'Unclassified',
-          householdId: householdId || null,
-          purok: purok || null,
-          zone,
-          address: address || null,
-          status: 'active',
-          verificationStatus: 'pending',
-          sourceReference: sourceReference || null,
-          sourceFilename: sourceFilename || null,
-        },
+        resident: { id: resident.id, verificationStatus: 'pending' },
         potentialMatches,
         reviewRequired: true,
       })
@@ -377,7 +359,7 @@ export function registerResidentRegistryRoutes(app, { store }) {
       }))
       const auditEntry = makeAuditEntry(actor, 'resident_registry.bulk_imported', 'resident_registry_batch', null, {
         count: records.length,
-        filename: filename.trim(),
+        hasFilename: Boolean(filename.trim()),
         potentialMatchCount: potentialMatches.length,
       })
       await store.insertRegistryResidents(records, auditEntry)
@@ -398,11 +380,11 @@ export function registerResidentRegistryRoutes(app, { store }) {
       const verifiedAt = new Date().toISOString()
       const resident = await store.updateRegistryResidentWithAudit(req.params.id, {
         verificationStatus,
-        verifiedBy: actor.id,
-        verifiedAt,
+        verifiedBy: verificationStatus === 'verified' ? actor.id : null,
+        verifiedAt: verificationStatus === 'verified' ? verifiedAt : null,
       }, makeAuditEntry(actor, `resident_registry.${verificationStatus}`, 'resident_registry', req.params.id))
       if (!resident) return res.status(404).json({ message: 'Resident record not found.' })
-      return res.json({ resident: { id: resident.id, firstName: resident.firstName, lastName: resident.lastName, verificationStatus, verifiedBy: actor.id, verifiedAt } })
+      return res.json({ resident: { id: resident.id, verificationStatus, verifiedBy: verificationStatus === 'verified' ? actor.id : null, verifiedAt: verificationStatus === 'verified' ? verifiedAt : null } })
     } catch (error) {
       console.error('resident verification update failed', error)
       return res.status(500).json({ message: 'Unable to update resident verification.' })
