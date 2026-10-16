@@ -34,5 +34,8 @@ test('PostgreSQL initialization skips admin seeding when a seed identifier alrea
   }
 
   assert.ok(queries.includes('select id from users where email = $1 or mobile = $2 limit 1'))
+  assert.ok(queries.some((sql) => sql.startsWith('create table if not exists resident_registry')))
+  assert.ok(queries.some((sql) => sql.includes('resident_registry_first_name_prefix_idx')))
+  assert.ok(queries.some((sql) => sql.includes('resident_registry_last_name_prefix_idx')))
   assert.equal(queries.some((sql) => sql.startsWith('insert into users')), false)
 })

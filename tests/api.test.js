@@ -10,6 +10,7 @@ import { DB_PATH } from '../server/config.js'
 import { isCaptainPhotoStorageConfigured } from '../server/captain-photo-storage.js'
 import { createHmac, randomUUID } from 'node:crypto'
 import { createTotpSecret, encryptTotpSecret } from '../server/mfa.js'
+import { registryAgeDateRange } from '../server/resident-registry.js'
 
 const testDbPath = DB_PATH
 
@@ -54,6 +55,37 @@ const createTestServer = async () => {
     baseUrl: `http://127.0.0.1:${port}`,
   }
 }
+
+test('registry age bounds include February 29 birthdays under the displayed-age convention', () => {
+  const cases = [
+    { today: '2024-02-28', birthDate: '2000-02-29', age: 23 },
+    { today: '2024-02-29', birthDate: '2000-02-29', age: 24 },
+    { today: '2025-02-28', birthDate: '2000-02-29', age: 24 },
+    { today: '2025-03-01', birthDate: '2000-02-29', age: 25 },
+  ]
+  for (const { today, birthDate, age } of cases) {
+    const { ageStart, ageEnd } = registryAgeDateRange(today, age)
+    assert.ok(birthDate >= ageStart && birthDate <= ageEnd, `${birthDate} should match age ${age} on ${today}`)
+  }
+})
+
+test('registry demographic household totals and labels retain location context', async () => {
+  const db = await jsonDb.readDb()
+  db.residentRegistry = [
+    { id: 'b', firstName: 'Alex', lastName: 'Same', zone: 1, purok: 'Purok 1', householdId: 'H-1', sex: 'Male', status: 'active', verificationStatus: 'verified' },
+    { id: 'a', firstName: 'Alex', lastName: 'Same', zone: 1, purok: 'Purok 1', householdId: 'H-1', sex: 'Female', status: 'active', verificationStatus: 'verified' },
+    { id: 'c', firstName: 'Alex', lastName: 'Same', zone: 2, purok: 'Purok 1', householdId: 'H-1', sex: 'Male', status: 'active', verificationStatus: 'verified' },
+  ]
+  await jsonDb.writeDb(db)
+
+  const demographics = await jsonDb.getResidentDemographics()
+  assert.equal(demographics.overall.households, 2)
+  assert.deepEqual(demographics.byPurok.map((group) => group.label), ['Purok 1 · Zone 1', 'Purok 1 · Zone 2'])
+  assert.equal(demographics.byHousehold.length, 2)
+
+  const page = await jsonDb.listResidentRegistry({ page: 1, pageSize: 1 })
+  assert.equal(page.residents[0].id, 'a')
+})
 
 test('API rate-limit responses retain CORS headers for the frontend origin', async () => {
   const { server, baseUrl } = await createTestServer()
@@ -1869,6 +1901,327 @@ test('reset password request sends a delivery webhook payload when configured', 
     }
     await new Promise((resolve, reject) => {
       deliveryServer.close((error) => (error ? reject(error) : resolve()))
+    })
+  }
+})
+
+test('resident registry imports are staff-only, duplicate-reviewed, pending, and audited', async () => {
+  const { server, baseUrl } = await createTestServer()
+  const staffPassword = 'StaffPass123!'
+  const staff = {
+    id: randomUUID(),
+    firstName: 'Registry',
+    lastName: 'Staff',
+    mobile: `091${Math.floor(10000000 + Math.random() * 90000000)}`,
+    email: `registry.${Date.now()}@example.com`,
+    passwordHash: await hashPassword(staffPassword),
+    role: 'staff',
+    status: 'On Duty',
+    createdAt: new Date().toISOString(),
+  }
+
+  try {
+    await jsonDb.saveUser(staff)
+    const staffLogin = await fetch(`${baseUrl}/api/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ identifier: staff.email, password: staffPassword }),
+    })
+    assert.equal(staffLogin.status, 200)
+    const staffToken = (await staffLogin.json()).token
+    const headers = { Authorization: `Bearer ${staffToken}`, 'Content-Type': 'application/json' }
+    const importBody = {
+      filename: 'family-sheet.csv',
+      residents: [
+        { firstName: 'Ana', lastName: 'Reyes', birthDate: '2000-01-02', sex: 'Female', zone: '2', purok: 'Purok 2' },
+        { firstName: 'Ana', lastName: 'Reyes', birthDate: '2000-01-02', sex: 'Female', zone: '2', purok: 'Purok 2' },
+        { firstName: 'Ana', lastName: 'Reyes', birthDate: '2001-01-02', sex: 'Female', zone: '2', purok: 'Purok 2' },
+        { firstName: 'Ana', lastName: 'Reyes', birthDate: '', sex: 'Female', zone: '2', purok: 'Purok 2' },
+      ],
+    }
+
+    const oversizedFieldResponse = await fetch(`${baseUrl}/api/staff/residents/import`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        filename: 'large-row.csv',
+        residents: [{ firstName: 'Ana', lastName: 'Reyes', address: 'x'.repeat(120_000) }],
+      }),
+    })
+    assert.equal(oversizedFieldResponse.status, 400)
+
+    const duplicateReview = await fetch(`${baseUrl}/api/staff/residents/import`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(importBody),
+    })
+    assert.equal(duplicateReview.status, 409)
+    const reviewData = await duplicateReview.json()
+    assert.equal(reviewData.reviewRequired, true)
+    assert.equal(reviewData.potentialMatches.length, 3)
+    assert.equal(reviewData.potentialMatches[0].records[0].source, 'same import file')
+    assert.equal((await jsonDb.listResidentRegistry({ page: 1, pageSize: 25 })).total, 0)
+
+    const importResponse = await fetch(`${baseUrl}/api/staff/residents/import`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ ...importBody, confirmPotentialMatches: true, reviewedMatches: reviewData.reviewedMatches }),
+    })
+    assert.equal(importResponse.status, 201)
+    assert.deepEqual(await importResponse.json(), {
+      imported: 3,
+      skipped: 1,
+      verificationStatus: 'pending',
+      potentialMatches: reviewData.potentialMatches,
+    })
+
+    const retryReviewResponse = await fetch(`${baseUrl}/api/staff/residents/import`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(importBody),
+    })
+    assert.equal(retryReviewResponse.status, 409)
+    const retryReview = await retryReviewResponse.json()
+    const retryResponse = await fetch(`${baseUrl}/api/staff/residents/import`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        ...importBody,
+        confirmPotentialMatches: true,
+        reviewedMatches: retryReview.reviewedMatches,
+      }),
+    })
+    assert.equal(retryResponse.status, 201)
+    assert.equal((await retryResponse.json()).imported, 0)
+
+    const residentsResponse = await fetch(`${baseUrl}/api/staff/residents?page=1&pageSize=25`, {
+      headers: { Authorization: `Bearer ${staffToken}` },
+    })
+    assert.equal(residentsResponse.status, 200)
+    assert.equal(residentsResponse.headers.get('cache-control'), 'private, no-store')
+    const residentsData = await residentsResponse.json()
+    assert.equal(residentsData.total, 3)
+    assert.ok(residentsData.residents.every((resident) => resident.verificationStatus === 'pending'))
+    assert.ok(residentsData.residents.every((resident) => !Object.hasOwn(resident, 'address')))
+    assert.ok(residentsData.residents.every((resident) => !Object.hasOwn(resident, 'sourceReference')))
+    assert.ok(residentsData.residents.every((resident) => !Object.hasOwn(resident, 'sourceFilename')))
+    const storedResidents = await jsonDb.listResidentRegistry({ page: 1, pageSize: 25 })
+    assert.ok(storedResidents.residents.every((resident) => resident.sourceFilename === importBody.filename))
+
+    const demographicsResponse = await fetch(`${baseUrl}/api/staff/demographics`, {
+      headers: { Authorization: `Bearer ${staffToken}` },
+    })
+    assert.equal(demographicsResponse.status, 200)
+    assert.equal(demographicsResponse.headers.get('cache-control'), 'private, no-store')
+    assert.equal((await demographicsResponse.json()).overall.total, 0)
+
+    const verifyResponse = await fetch(`${baseUrl}/api/staff/residents/${residentsData.residents[0].id}/verify`, {
+      method: 'PATCH',
+      headers,
+      body: JSON.stringify({ verificationStatus: 'verified' }),
+    })
+    assert.equal(verifyResponse.status, 200)
+    const flagReviewResponse = await fetch(`${baseUrl}/api/staff/residents/${residentsData.residents[0].id}/verify`, {
+      method: 'PATCH',
+      headers,
+      body: JSON.stringify({ verificationStatus: 'needs_review' }),
+    })
+    assert.equal(flagReviewResponse.status, 200)
+    assert.equal((await flagReviewResponse.json()).resident.verifiedAt, null)
+    const flaggedDemographics = await fetch(`${baseUrl}/api/staff/demographics`, {
+      headers: { Authorization: `Bearer ${staffToken}` },
+    })
+    assert.equal((await flaggedDemographics.json()).overall.total, 0)
+    const reverifyResponse = await fetch(`${baseUrl}/api/staff/residents/${residentsData.residents[0].id}/verify`, {
+      method: 'PATCH',
+      headers,
+      body: JSON.stringify({ verificationStatus: 'verified' }),
+    })
+    assert.equal(reverifyResponse.status, 200)
+    const verifiedDemographics = await fetch(`${baseUrl}/api/staff/demographics`, {
+      headers: { Authorization: `Bearer ${staffToken}` },
+    })
+    assert.equal((await verifiedDemographics.json()).overall.total, 1)
+
+    const inactiveResponse = await fetch(`${baseUrl}/api/staff/residents/${residentsData.residents[0].id}/status`, {
+      method: 'PATCH',
+      headers,
+      body: JSON.stringify({ status: 'inactive' }),
+    })
+    assert.equal(inactiveResponse.status, 200)
+    const inactiveDemographics = await fetch(`${baseUrl}/api/staff/demographics`, {
+      headers: { Authorization: `Bearer ${staffToken}` },
+    })
+    assert.equal((await inactiveDemographics.json()).overall.total, 0)
+
+    const residentLogin = await fetch(`${baseUrl}/api/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ identifier: 'maria.delacruz@email.com', password: 'ResidentPass123!' }),
+    })
+    const residentToken = (await residentLogin.json()).token
+    const deniedResponse = await fetch(`${baseUrl}/api/staff/residents`, {
+      headers: { Authorization: `Bearer ${residentToken}` },
+    })
+    assert.equal(deniedResponse.status, 403)
+
+    const auditLogs = await jsonDb.listAuditLogs()
+    const importAudit = auditLogs.find((entry) => entry.action === 'resident_registry.bulk_imported')
+    assert.ok(importAudit)
+    assert.equal(importAudit.actorId, staff.id)
+    assert.equal(importAudit.metadata.count, 3)
+    assert.equal(importAudit.metadata.hasFilename, true)
+    assert.equal(JSON.stringify(importAudit).includes(importBody.filename), false)
+    assert.ok(auditLogs.some((entry) => entry.action === 'resident_registry.verified'))
+    assert.ok(auditLogs.some((entry) => entry.action === 'resident_registry.status_changed'))
+  } finally {
+    await new Promise((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()))
+    })
+  }
+})
+
+test('staff can add a manual resident with duplicate review and privacy safeguards', async () => {
+  const { server, baseUrl } = await createTestServer()
+  const staffPassword = 'ManualStaffPass123!'
+  const staff = {
+    id: randomUUID(),
+    firstName: 'Manual',
+    lastName: 'Entry',
+    mobile: `091${Math.floor(10000000 + Math.random() * 90000000)}`,
+    email: `manual-entry.${Date.now()}@example.com`,
+    passwordHash: await hashPassword(staffPassword),
+    role: 'staff',
+    status: 'On Duty',
+    createdAt: new Date().toISOString(),
+  }
+
+  try {
+    await jsonDb.saveUser(staff)
+    const loginResponse = await fetch(`${baseUrl}/api/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ identifier: staff.email, password: staffPassword }),
+    })
+    assert.equal(loginResponse.status, 200)
+    const token = (await loginResponse.json()).token
+    const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
+    const resident = {
+      firstName: 'Luz',
+      lastName: 'Santos',
+      birthDate: '1980-02-03',
+      sex: 'Female',
+      address: 'Sensitive address',
+      sourceFilename: 'confidential-source-sheet.csv',
+    }
+
+    const anonymousResponse = await fetch(`${baseUrl}/api/staff/residents`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(resident),
+    })
+    assert.equal(anonymousResponse.status, 401)
+    assert.equal(anonymousResponse.headers.get('cache-control'), 'private, no-store')
+
+    const createResponse = await fetch(`${baseUrl}/api/staff/residents`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(resident),
+    })
+    assert.equal(createResponse.status, 201)
+    assert.equal(createResponse.headers.get('cache-control'), 'private, no-store')
+    const created = await createResponse.json()
+    assert.equal(created.resident.verificationStatus, 'pending')
+    assert.equal(Object.hasOwn(created.resident, 'firstName'), false)
+    assert.equal(Object.hasOwn(created.resident, 'birthDate'), false)
+    assert.equal(Object.hasOwn(created.resident, 'address'), false)
+    assert.equal(JSON.stringify(created).includes('confidential-source-sheet.csv'), false)
+
+    const duplicateResponse = await fetch(`${baseUrl}/api/staff/residents`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(resident),
+    })
+    assert.equal(duplicateResponse.status, 409)
+    const duplicateReview = await duplicateResponse.json()
+    assert.equal(duplicateReview.reviewRequired, true)
+
+    const concurrentRecords = Array.from({ length: 7 }, (_, index) => ({
+      id: randomUUID(),
+      firstName: resident.firstName,
+      lastName: resident.lastName,
+      birthDate: resident.birthDate,
+      sex: resident.sex,
+      householdId: null,
+      purok: null,
+      zone: null,
+      address: null,
+      status: 'active',
+      recordStatus: 'active',
+      verificationStatus: 'pending',
+      sourceFingerprint: `concurrent-review-test-${index}`,
+      createdBy: staff.id,
+      createdAt: new Date().toISOString(),
+    }))
+    const db = await jsonDb.readDb()
+    db.residentRegistry.push(...concurrentRecords)
+    await jsonDb.writeDb(db)
+
+    const staleConfirmation = await fetch(`${baseUrl}/api/staff/residents`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        ...resident,
+        confirmPotentialMatch: true,
+        reviewedMatches: duplicateReview.reviewedMatches,
+      }),
+    })
+    assert.equal(staleConfirmation.status, 409)
+    const refreshedReview = await staleConfirmation.json()
+    assert.equal(refreshedReview.potentialMatches.length, 8)
+
+    const confirmedResponse = await fetch(`${baseUrl}/api/staff/residents`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        ...resident,
+        confirmPotentialMatch: true,
+        reviewedMatches: refreshedReview.reviewedMatches,
+      }),
+    })
+    assert.equal(confirmedResponse.status, 200)
+    const confirmedData = await confirmedResponse.json()
+    assert.equal(confirmedData.resident.verificationStatus, 'pending')
+    assert.equal(confirmedData.created, false)
+
+    const recordsResponse = await fetch(`${baseUrl}/api/staff/residents?page=1&pageSize=25`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    const records = await recordsResponse.json()
+    assert.equal(records.total, 8)
+    assert.ok(records.residents.every((record) => record.verificationStatus === 'pending'))
+    assert.ok(records.residents.every((record) => !Object.hasOwn(record, 'address')))
+    assert.ok(records.residents.every((record) => !Object.hasOwn(record, 'sourceFilename')))
+
+    const concurrentEntries = ['ConcurrentOne', 'ConcurrentTwo'].map((firstName) => fetch(`${baseUrl}/api/staff/residents`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ firstName, lastName: 'Household' }),
+    }))
+    const concurrentResponses = await Promise.all(concurrentEntries)
+    assert.ok(concurrentResponses.every((response) => response.status === 201))
+    const afterConcurrentWrites = await jsonDb.listResidentRegistry({ page: 1, pageSize: 25 })
+    assert.equal(afterConcurrentWrites.total, 10)
+
+    const auditLogs = await jsonDb.listAuditLogs()
+    const createAudits = auditLogs.filter((entry) => entry.action === 'resident_registry.created')
+    assert.equal(createAudits.length, 3)
+    assert.ok(createAudits.every((entry) => entry.actorId === staff.id))
+    assert.ok(createAudits.every((entry) => !JSON.stringify(entry).includes('Luz')))
+    assert.ok(createAudits.every((entry) => !JSON.stringify(entry).includes('confidential-source-sheet.csv')))
+  } finally {
+    await new Promise((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()))
     })
   }
 })

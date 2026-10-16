@@ -25,6 +25,7 @@ import {
   publishFacebookPost,
   verifyMetaWebhookSignature,
 } from './meta-social.js'
+import { registerResidentRegistryRoutes } from './resident-registry.js'
 import { ADMIN_SEED, CORS_ORIGINS, IS_PRODUCTION, PORT, SHOULD_SKIP_SEED } from './config.js'
 
 let store = process.env.DATABASE_URL ? pgDb : jsonDb
@@ -221,6 +222,12 @@ export function createApp() {
     }
   })
 
+  app.use(['/api/staff/residents', '/api/staff/demographics'], (_req, res, next) => {
+    res.set('Cache-Control', 'private, no-store')
+    res.set('Vary', 'Authorization')
+    next()
+  })
+  app.use('/api/staff/residents/import', express.json({ limit: '2mb' }))
   app.use(express.json({ limit: '100kb' }))
   app.use(express.urlencoded({ extended: true, limit: '100kb' }))
 
@@ -271,6 +278,8 @@ export function createApp() {
       createdAt: new Date().toISOString(),
     })
   }
+
+  registerResidentRegistryRoutes(app, { store })
 
   const authAttempts = new Map()
   const resetTokens = new Map()

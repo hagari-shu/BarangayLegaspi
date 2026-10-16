@@ -1,0 +1,265 @@
+/* Staff-only resident registry */
+.registry-panel {
+  display: grid;
+  gap: 1rem;
+}
+
+.registry-panel-header,
+.registry-pagination,
+.registry-pagination > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.registry-toolbar-actions {
+  flex-wrap: wrap;
+}
+
+.registry-import {
+  display: grid;
+  gap: 0.75rem;
+  padding: 1rem;
+  border: 1px solid #d8e2e8;
+  border-radius: 0.75rem;
+  background: #f8fafb;
+}
+
+.registry-privacy-notice {
+  padding: 0.85rem 1rem;
+  border: 1px solid #b8cbd5;
+  border-left: 0.3rem solid #245b78;
+  border-radius: 0.55rem;
+  background: #f0f6f8;
+  color: #173746;
+}
+
+.registry-privacy-notice p {
+  margin: 0.35rem 0 0;
+}
+
+.registry-import h3,
+.registry-import h4,
+.registry-import p {
+  margin: 0;
+}
+
+.registry-import-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 0.75rem;
+}
+
+.registry-import-controls label {
+  display: grid;
+  gap: 0.35rem;
+  font-weight: 600;
+}
+
+.registry-import-controls input[type="file"] {
+  max-width: min(100%, 25rem);
+  min-height: 2.75rem;
+  padding: 0.45rem;
+  border: 1px solid #8699a4;
+  border-radius: 0.45rem;
+  background: #fff;
+  font: inherit;
+}
+
+.registry-panel-header h2,
+.registry-breakdowns h3 {
+  margin: 0;
+}
+
+.registry-panel-header p,
+.registry-breakdowns p {
+  margin: 0.35rem 0 0;
+  color: var(--muted, #52616b);
+}
+
+.registry-filters,
+.registry-entry-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr));
+  gap: 0.85rem;
+  align-items: end;
+}
+
+.registry-filters label,
+.registry-entry-form label {
+  display: grid;
+  gap: 0.35rem;
+  font-weight: 600;
+}
+
+.registry-entry-form {
+  padding: 1rem;
+  border: 1px solid #d8e2e8;
+  border-radius: 0.75rem;
+  background: #f8fafb;
+}
+
+.registry-entry-form input,
+.registry-entry-form select,
+.registry-filters input,
+.registry-filters select {
+  width: 100%;
+  min-height: 2.75rem;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid #8699a4;
+  border-radius: 0.45rem;
+  background: #fff;
+  color: #14212b;
+  font: inherit;
+}
+
+.registry-entry-form > button {
+  justify-self: start;
+}
+
+.registry-message {
+  margin: 0;
+  padding: 0.7rem 0.85rem;
+  border-radius: 0.5rem;
+  background: #edf5f8;
+}
+
+.registry-message.error {
+  color: #7b1d1d;
+  background: #fff0f0;
+}
+
+.registry-message.warning {
+  color: #633f00;
+  background: #fff7df;
+}
+
+.registry-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+  gap: 0.7rem;
+}
+
+.registry-summary-grid article {
+  display: grid;
+  gap: 0.25rem;
+  padding: 0.9rem;
+  border: 1px solid #d8e2e8;
+  border-radius: 0.65rem;
+  background: #fff;
+}
+
+.registry-summary-grid span {
+  color: #52616b;
+  font-size: 0.9rem;
+}
+
+.registry-summary-grid strong {
+  font-size: 1.45rem;
+  color: #14212b;
+}
+
+.registry-table-wrap {
+  width: 100%;
+  overflow-x: auto;
+  border: 1px solid #d8e2e8;
+  border-radius: 0.65rem;
+  background: #fff;
+}
+
+.registry-table {
+  width: 100%;
+  border-collapse: collapse;
+  color: #14212b;
+}
+
+.registry-table th,
+.registry-table td {
+  padding: 0.7rem;
+  border-bottom: 1px solid #e2e8ec;
+  text-align: left;
+  vertical-align: top;
+}
+
+.registry-table th {
+  background: #f2f6f8;
+  font-size: 0.9rem;
+}
+
+.registry-table td small {
+  display: block;
+  margin-top: 0.2rem;
+  color: #52616b;
+}
+
+.registry-table tr:last-child td {
+  border-bottom: 0;
+}
+
+.registry-status {
+  display: inline-flex;
+  padding: 0.25rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.84rem;
+  font-weight: 700;
+}
+
+.registry-status.is-verified {
+  color: #15532f;
+  background: #e7f5eb;
+}
+
+.registry-status.is-pending {
+  color: #704900;
+  background: #fff3ce;
+}
+
+.registry-status.is-needs_review {
+  color: #762424;
+  background: #ffeded;
+}
+
+.registry-row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.registry-status-select select {
+  min-height: 2.5rem;
+  max-width: 10rem;
+  padding: 0.4rem 0.55rem;
+  border: 1px solid #8699a4;
+  border-radius: 0.45rem;
+  background: #fff;
+  color: #14212b;
+  font: inherit;
+}
+
+.registry-breakdowns {
+  display: grid;
+  gap: 1.25rem;
+}
+
+.registry-breakdowns section {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.registry-pagination {
+  padding: 0.7rem;
+}
+
+@media (max-width: 640px) {
+  .registry-panel-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .registry-pagination {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
