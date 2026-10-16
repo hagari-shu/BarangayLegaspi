@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { verifyToken } from './auth.js'
 
 const validDateKey = (value) => {
@@ -39,7 +39,53 @@ const calculateAge = (birthDate, today) => {
   return todayYear - birthYear - (birthDate.slice(5) > today.slice(5) ? 1 : 0)
 }
 
+export const registryAgeDateRange = (today, age) => ({
+  ageStart: shiftDateKeyByDays(shiftDateKeyByYears(today, -(age + 1)), 1),
+  ageEnd: shiftDateKeyByYears(today, -age),
+})
+
 const cleanText = (value) => String(value || '').replace(/[<>]/g, '').trim()
+const residentFingerprint = (resident) => createHash('sha256').update(JSON.stringify([
+  resident.firstName.trim().toLocaleLowerCase(),
+  resident.lastName.trim().toLocaleLowerCase(),
+  resident.birthDate || null,
+  resident.sex || null,
+  resident.householdId || null,
+  resident.purok || null,
+  resident.zone ?? null,
+  resident.address || null,
+  resident.sourceReference || null,
+])).digest('hex')
+
+const matchIdentity = (resident) => `${resident.firstName.trim().toLocaleLowerCase()}\u0000${resident.lastName.trim().toLocaleLowerCase()}`
+
+const findBatchMatches = (residents, existingMatches) => {
+  const matches = []
+  for (const [index, resident] of residents.entries()) {
+    const records = [...(existingMatches[index] || [])]
+    for (let earlierIndex = 0; earlierIndex < index; earlierIndex += 1) {
+      const earlier = residents[earlierIndex]
+      if (matchIdentity(resident) === matchIdentity(earlier)) {
+        records.push({
+          id: `upload-row-${earlierIndex + 2}`,
+          firstName: earlier.firstName,
+          lastName: earlier.lastName,
+          birthDate: earlier.birthDate,
+          source: 'same import file',
+        })
+      }
+    }
+    if (records.length) matches.push({ row: index + 2, records })
+  }
+  return matches
+}
+
+const savedMatchSnapshot = (matches) => matches.map((match) => ({
+  row: match.row,
+  ids: match.records.filter((record) => record.source !== 'same import file').map((record) => String(record.id)).sort(),
+})).filter((match) => match.ids.length)
+
+const matchSnapshotsEqual = (left, right) => JSON.stringify(left) === JSON.stringify(right)
 
 const makeAuditEntry = (actor, action, targetType, targetId, metadata = {}) => ({
   id: randomUUID(),
@@ -117,8 +163,7 @@ export function registerResidentRegistryRoutes(app, { store }) {
     let ageStart = null
     let ageEnd = null
     if (age !== null) {
-      ageStart = shiftDateKeyByDays(shiftDateKeyByYears(today, -(age + 1)), 1)
-      ageEnd = shiftDateKeyByYears(today, -age)
+      ({ ageStart, ageEnd } = registryAgeDateRange(today, age))
     }
 
     try {
@@ -191,14 +236,23 @@ export function registerResidentRegistryRoutes(app, { store }) {
     if (householdId.length > 100 || purok.length > 100 || address.length > 255 || sourceReference.length > 255 || sourceFilename.length > 255) {
       return res.status(400).json({ message: 'One or more resident fields exceed the allowed length.' })
     }
+    if (req.body?.confirmPotentialMatch !== undefined && typeof req.body.confirmPotentialMatch !== 'boolean') {
+      return res.status(400).json({ message: 'Duplicate confirmation must be true or false.' })
+    }
+    if (req.body?.reviewedMatches !== undefined && !Array.isArray(req.body.reviewedMatches)) {
+      return res.status(400).json({ message: 'Reviewed duplicate matches must be a list.' })
+    }
 
     try {
       requireStorage('findPotentialRegistryMatches', 'insertRegistryResidents')
       const potentialMatches = await store.findPotentialRegistryMatches(firstName, lastName, birthDate)
-      if (potentialMatches.length && req.body?.confirmPotentialMatch !== true) {
+      const reviewedMatches = savedMatchSnapshot([{ row: 1, records: potentialMatches }])
+      const confirmPotentialMatch = req.body?.confirmPotentialMatch === true
+      if (potentialMatches.length && (!confirmPotentialMatch || !matchSnapshotsEqual(reviewedMatches, req.body?.reviewedMatches))) {
         return res.status(409).json({
           message: 'Review the possible matching records before confirming this registration.',
           potentialMatches,
+          reviewedMatches,
           reviewRequired: true,
         })
       }
@@ -225,13 +279,25 @@ export function registerResidentRegistryRoutes(app, { store }) {
         createdAt,
         updatedAt: createdAt,
       }
+      resident.sourceFingerprint = residentFingerprint(resident)
       const auditEntry = makeAuditEntry(actor, 'resident_registry.created', 'resident_registry', resident.id, {
         verificationStatus: 'pending',
         hasSourceReference: Boolean(sourceReference),
       })
-      await store.insertRegistryResidents([resident], auditEntry)
-      return res.status(201).json({
-        resident: { id: resident.id, verificationStatus: 'pending' },
+      const outcome = await store.insertRegistryResidents([resident], auditEntry, {
+        confirmPotentialMatches: confirmPotentialMatch,
+        reviewedMatches,
+        rowOffset: 1,
+      })
+      if (outcome.reviewRequired) return res.status(409).json({
+        message: 'The matching records changed. Review them before confirming this registration.',
+        potentialMatches: outcome.potentialMatches,
+        reviewedMatches: outcome.reviewedMatches,
+        reviewRequired: true,
+      })
+      return res.status(outcome.inserted.length ? 201 : 200).json({
+        resident: { id: outcome.inserted[0]?.id || outcome.existing[0]?.id || resident.id, verificationStatus: 'pending' },
+        created: outcome.inserted.length > 0,
         potentialMatches,
         reviewRequired: true,
       })
@@ -244,7 +310,7 @@ export function registerResidentRegistryRoutes(app, { store }) {
   app.post('/api/staff/residents/import', async (req, res) => {
     const actor = await authorizeStaff(req, res)
     if (!actor) return
-    const { residents, filename, confirmPotentialMatches } = req.body || {}
+    const { residents, filename, confirmPotentialMatches, reviewedMatches } = req.body || {}
     if (!Array.isArray(residents) || residents.length < 1 || residents.length > 500) {
       return res.status(400).json({ message: 'Upload between 1 and 500 resident records.' })
     }
@@ -253,6 +319,9 @@ export function registerResidentRegistryRoutes(app, { store }) {
     }
     if (confirmPotentialMatches !== undefined && typeof confirmPotentialMatches !== 'boolean') {
       return res.status(400).json({ message: 'Duplicate confirmation must be true or false.' })
+    }
+    if (reviewedMatches !== undefined && !Array.isArray(reviewedMatches)) {
+      return res.status(400).json({ message: 'Reviewed duplicate matches must be a list.' })
     }
 
     const today = manilaDateKey()
@@ -311,33 +380,16 @@ export function registerResidentRegistryRoutes(app, { store }) {
     if (validationErrors.length) return res.status(400).json({ message: 'Correct the invalid rows before importing.', validationErrors })
 
     try {
-      requireStorage('findPotentialRegistryMatches', 'insertRegistryResidents')
-      const potentialMatches = []
-      const seenRows = new Map()
-      for (const [index, resident] of normalized.entries()) {
-        const identityKey = `${resident.firstName.toLowerCase()}\u0000${resident.lastName.toLowerCase()}\u0000${resident.birthDate || ''}`
-        const earlierRow = seenRows.get(identityKey)
-        if (earlierRow !== undefined) {
-          potentialMatches.push({
-            row: index + 2,
-            records: [{
-              id: `upload-row-${earlierRow + 2}`,
-              firstName: normalized[earlierRow].firstName,
-              lastName: normalized[earlierRow].lastName,
-              birthDate: normalized[earlierRow].birthDate,
-              source: 'same import file',
-            }],
-          })
-        } else {
-          seenRows.set(identityKey, index)
-        }
-        const existing = await store.findPotentialRegistryMatches(resident.firstName, resident.lastName, resident.birthDate)
-        if (existing.length) potentialMatches.push({ row: index + 2, records: existing })
-      }
-      if (potentialMatches.length && confirmPotentialMatches !== true) {
+      requireStorage('findPotentialRegistryMatchesForResidents', 'insertRegistryResidents')
+      const existingMatches = await store.findPotentialRegistryMatchesForResidents(normalized)
+      const potentialMatches = findBatchMatches(normalized, existingMatches)
+      const currentReviewedMatches = savedMatchSnapshot(potentialMatches)
+      if (potentialMatches.length && (confirmPotentialMatches !== true
+        || !matchSnapshotsEqual(currentReviewedMatches, reviewedMatches))) {
         return res.status(409).json({
           message: 'Review every possible duplicate before confirming the import.',
           potentialMatches,
+          reviewedMatches: currentReviewedMatches,
           reviewRequired: true,
         })
       }
@@ -350,7 +402,7 @@ export function registerResidentRegistryRoutes(app, { store }) {
         recordStatus: 'active',
         verificationStatus: 'pending',
         sourceFilename: filename.trim(),
-        sourceFingerprint: null,
+        sourceFingerprint: residentFingerprint(resident),
         createdBy: actor.id,
         verifiedBy: null,
         verifiedAt: null,
@@ -362,8 +414,22 @@ export function registerResidentRegistryRoutes(app, { store }) {
         hasFilename: Boolean(filename.trim()),
         potentialMatchCount: potentialMatches.length,
       })
-      await store.insertRegistryResidents(records, auditEntry)
-      return res.status(201).json({ imported: records.length, verificationStatus: 'pending', potentialMatches })
+      const outcome = await store.insertRegistryResidents(records, auditEntry, {
+        confirmPotentialMatches: confirmPotentialMatches === true,
+        reviewedMatches: currentReviewedMatches,
+      })
+      if (outcome.reviewRequired) return res.status(409).json({
+        message: 'The matching records changed. Review them before confirming the import.',
+        potentialMatches: outcome.potentialMatches,
+        reviewedMatches: outcome.reviewedMatches,
+        reviewRequired: true,
+      })
+      return res.status(201).json({
+        imported: outcome.inserted.length,
+        skipped: outcome.skipped,
+        verificationStatus: 'pending',
+        potentialMatches,
+      })
     } catch (error) {
       console.error('staff resident registry import failed', error)
       return res.status(500).json({ message: 'Unable to import resident records.' })

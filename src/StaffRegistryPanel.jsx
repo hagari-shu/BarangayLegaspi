@@ -34,6 +34,8 @@ const text = {
     verified: 'Verified',
     pending: 'Pending verification',
     needsReview: 'Needs review',
+    close: 'Close',
+    confirmImport: 'Import after reviewing current possible matches',
     active: 'Active',
     inactive: 'Inactive',
     deceased: 'Deceased',
@@ -62,6 +64,8 @@ const text = {
     cancelAdd: 'Cancel and review',
     saving: 'Saving…',
     saved: 'Saved to the review queue; it is excluded from population counts until verified.',
+    alreadySaved: 'This exact record was already present; no duplicate was added.',
+    skippedDuplicates: 'identical duplicate(s) skipped',
     duplicate: 'Possible matching record(s) found. Review them before verifying this registration.',
     confirmVerify: 'Confirm this record was checked against the source registry?',
     confirmFlag: 'Flag this record for manual review?',
@@ -115,6 +119,8 @@ const text = {
     verified: 'Beripikado',
     pending: 'Naghihintay ng beripikasyon',
     needsReview: 'Kailangang suriin',
+    close: 'Isara',
+    confirmImport: 'I-import matapos suriin ang kasalukuyang mga posibleng tugma',
     active: 'Aktibo',
     inactive: 'Hindi aktibo',
     deceased: 'Pumanaw',
@@ -143,6 +149,8 @@ const text = {
     cancelAdd: 'Kanselahin at suriin',
     saving: 'Sine-save…',
     saved: 'Nasa pila na para suriin; hindi kasama sa bilang hangga’t hindi beripikado.',
+    alreadySaved: 'Nasa talaan na ang eksaktong rekord na ito; walang idinagdag na kopya.',
+    skippedDuplicates: 'magkaparehong duplicate ang nilaktawan',
     duplicate: 'May posibleng katugmang tala. Suriin muna bago beripikahin ang rehistrasyon.',
     confirmVerify: 'Kumpirmahing naikumpara ang tala sa opisyal na sanggunian?',
     confirmFlag: 'I-flag ang talang ito para sa manu-manong pagsusuri?',
@@ -197,11 +205,14 @@ export default function StaffRegistryPanel({ language = 'en' }) {
   const [formMessage, setFormMessage] = useState('')
   const [formError, setFormError] = useState('')
   const [potentialMatches, setPotentialMatches] = useState([])
+  const [reviewedMatches, setReviewedMatches] = useState([])
   const [confirmMatchRequired, setConfirmMatchRequired] = useState(false)
   const [importOpen, setImportOpen] = useState(false)
   const [importFile, setImportFile] = useState(null)
   const [importRows, setImportRows] = useState([])
   const [importMatches, setImportMatches] = useState([])
+  const [importReviewedMatches, setImportReviewedMatches] = useState([])
+  const [importPreviewBusy, setImportPreviewBusy] = useState(false)
   const [importError, setImportError] = useState('')
   const [importMessage, setImportMessage] = useState('')
   const [importBusy, setImportBusy] = useState(false)
@@ -289,18 +300,21 @@ export default function StaffRegistryPanel({ language = 'en' }) {
           sourceReference: form.sourceReference.trim() || null,
           sourceFilename: form.sourceFilename.trim() || null,
           confirmPotentialMatch,
+          reviewedMatches,
         }),
       })
       const data = await response.json().catch(() => ({}))
       if (response.status === 409 && data.reviewRequired && Array.isArray(data.potentialMatches)) {
         setPotentialMatches(data.potentialMatches)
+        setReviewedMatches(data.reviewedMatches || [])
         setConfirmMatchRequired(true)
         return
       }
       if (!response.ok) throw new Error(data.message || labels.loadError)
       setPotentialMatches([])
+      setReviewedMatches([])
       setConfirmMatchRequired(false)
-      setFormMessage(labels.saved)
+      setFormMessage(data.created === false ? labels.alreadySaved : labels.saved)
       setForm({ firstName: '', lastName: '', birthDate: '', sex: '', householdId: '', purok: '', zone: '', address: '', sourceReference: '', sourceFilename: '' })
       setPage(1)
       setRefreshKey((current) => current + 1)
@@ -359,6 +373,7 @@ export default function StaffRegistryPanel({ language = 'en' }) {
     setImportFile(file || null)
     setImportRows([])
     setImportMatches([])
+    setImportReviewedMatches([])
     setImportMessage('')
     setImportError('')
     if (!file) return
@@ -366,11 +381,14 @@ export default function StaffRegistryPanel({ language = 'en' }) {
       setImportError(file.size > 1024 * 1024 ? 'CSV files must be 1 MB or smaller.' : labels.importInvalid)
       return
     }
+    setImportPreviewBusy(true)
     try {
       const rows = parseRegistryCsv(await file.text())
       setImportRows(rows)
     } catch (parseError) {
       setImportError(parseError.message || labels.importInvalid)
+    } finally {
+      setImportPreviewBusy(false)
     }
   }
 
@@ -390,11 +408,13 @@ export default function StaffRegistryPanel({ language = 'en' }) {
           filename: importFile.name,
           residents: importRows,
           confirmPotentialMatches,
+          reviewedMatches: importReviewedMatches,
         }),
       })
       const data = await response.json().catch(() => ({}))
       if (response.status === 409 && data.reviewRequired && Array.isArray(data.potentialMatches)) {
         setImportMatches(data.potentialMatches)
+        setImportReviewedMatches(data.reviewedMatches || [])
         return
       }
       if (!response.ok) {
@@ -405,8 +425,9 @@ export default function StaffRegistryPanel({ language = 'en' }) {
       }
       setImportRows([])
       setImportMatches([])
+      setImportReviewedMatches([])
       setImportFile(null)
-      setImportMessage(`${data.imported} — ${labels.importDone}`)
+      setImportMessage(`${data.imported} ${labels.importDone}${data.skipped ? ` (${data.skipped} ${labels.skippedDuplicates})` : ''}`)
       setPage(1)
       setRefreshKey((current) => current + 1)
     } catch (submitError) {
@@ -438,8 +459,8 @@ export default function StaffRegistryPanel({ language = 'en' }) {
         </div>
         <div className="registry-row-actions registry-toolbar-actions">
           <button type="button" className="secondary-btn small" onClick={() => setImportOpen((open) => !open)}>{labels.importTitle}</button>
-          <button type="button" className="primary-btn small" onClick={() => { setFormOpen((open) => !open); setFormMessage(''); setFormError(''); setPotentialMatches([]); setConfirmMatchRequired(false) }}>
-            {formOpen ? 'Close' : labels.add}
+          <button type="button" className="primary-btn small" onClick={() => { setFormOpen((open) => !open); setFormMessage(''); setFormError(''); setPotentialMatches([]); setReviewedMatches([]); setConfirmMatchRequired(false) }}>
+            {formOpen ? labels.close : labels.add}
           </button>
         </div>
       </div>
@@ -458,7 +479,7 @@ export default function StaffRegistryPanel({ language = 'en' }) {
               const file = event.currentTarget.files?.[0]
               event.currentTarget.value = ''
               previewImport(file)
-            }} /></label>
+            }} disabled={importPreviewBusy || importBusy || importMatches.length > 0} /></label>
             <button type="button" className="secondary-btn small" onClick={downloadImportTemplate}>{labels.importTemplate}</button>
             <button type="button" className="primary-btn small" disabled={!importRows.length || importBusy} onClick={() => submitImport(false)}>{importBusy ? labels.saving : labels.importRecords}</button>
           </div>
@@ -490,8 +511,8 @@ export default function StaffRegistryPanel({ language = 'en' }) {
                 <li key={`${match.row}-${index}`}>{labels.row} {match.row}: {match.records.map((record) => `${record.firstName} ${record.lastName} (${record.birthDate || labels.noDob})`).join(', ')}</li>
               ))}</ul>
               <div className="registry-row-actions">
-                <button type="button" className="primary-btn small" disabled={importBusy} onClick={() => submitImport(true)}>{labels.importRecords}</button>
-                <button type="button" className="secondary-btn small" disabled={importBusy} onClick={() => { setImportMatches([]); setImportRows([]); setImportFile(null) }}>{labels.cancelAdd}</button>
+                <button type="button" className="primary-btn small" disabled={importBusy} onClick={() => submitImport(true)}>{labels.confirmImport}</button>
+                <button type="button" className="secondary-btn small" disabled={importBusy} onClick={() => { setImportMatches([]); setImportReviewedMatches([]); setImportRows([]); setImportFile(null) }}>{labels.cancelAdd}</button>
               </div>
             </div>
           )}
@@ -515,7 +536,7 @@ export default function StaffRegistryPanel({ language = 'en' }) {
           {potentialMatches.length > 0 && (
             <div className="registry-message warning" role="alert">
               <strong>{labels.duplicate}</strong>
-              <ul>{potentialMatches.map((match) => <li key={match.id}>{match.firstName} {match.lastName} · {formatDate(match.birthDate, language) || labels.noDob} · {match.purok || (match.zone ? `Zone ${match.zone}` : labels.unassigned)} · {match.verificationStatus}</li>)}</ul>
+              <ul>{potentialMatches.map((match) => <li key={match.id}>{match.firstName} {match.lastName} · {formatDate(match.birthDate, language) || labels.noDob} · {match.purok || (match.zone ? `Zone ${match.zone}` : labels.unassigned)} · {match.verificationStatus === 'verified' ? labels.verified : match.verificationStatus === 'needs_review' ? labels.needsReview : labels.pending}</li>)}</ul>
               {confirmMatchRequired && <div className="registry-row-actions"><button type="button" className="primary-btn small" disabled={formBusy} onClick={() => saveResident(null, true)}>{labels.confirmAdd}</button><button type="button" className="secondary-btn small" disabled={formBusy} onClick={() => { setConfirmMatchRequired(false); setPotentialMatches([]) }}>{labels.cancelAdd}</button></div>}
             </div>
           )}
@@ -575,7 +596,7 @@ export default function StaffRegistryPanel({ language = 'en' }) {
         <section>
           <h3>{labels.byHousehold}</h3>
           {demographics?.byHousehold?.length ? (
-            <div className="registry-table-wrap"><table className="registry-table"><thead><tr><th>{labels.household}</th><th>{labels.location}</th><th>{labels.total}</th><th>{labels.male}</th><th>{labels.female}</th><th>{labels.unclassified}</th></tr></thead><tbody>{demographics.byHousehold.map((group) => <tr key={`${group.zone ?? 'none'}-${group.purok || 'none'}-${group.householdId}`}><td>{group.householdId}</td><td>{group.purok || (group.zone ? `Zone ${group.zone}` : labels.unassigned)}</td><td>{group.total}</td><td>{group.male}</td><td>{group.female}</td><td>{group.unclassified}</td></tr>)}</tbody></table></div>
+            <div className="registry-table-wrap"><table className="registry-table"><thead><tr><th>{labels.household}</th><th>{labels.location}</th><th>{labels.total}</th><th>{labels.male}</th><th>{labels.female}</th><th>{labels.unclassified}</th></tr></thead><tbody>{demographics.byHousehold.map((group) => <tr key={`${group.zone ?? 'none'}-${group.purok || 'none'}-${group.householdId}`}><td>{group.householdId}</td><td>{group.purok ? `${group.purok}${group.zone ? ` · Zone ${group.zone}` : ''}` : (group.zone ? `Zone ${group.zone}` : labels.unassigned)}</td><td>{group.total}</td><td>{group.male}</td><td>{group.female}</td><td>{group.unclassified}</td></tr>)}</tbody></table></div>
           ) : <p>{labels.noGroup}</p>}
         </section>
       </div>

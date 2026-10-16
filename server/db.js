@@ -4,6 +4,13 @@ import { randomUUID } from 'node:crypto'
 import { DB_PATH } from './config.js'
 
 const dbDir = path.dirname(DB_PATH)
+let registryMutationQueue = Promise.resolve()
+
+const serializeRegistryMutation = (operation) => {
+  const result = registryMutationQueue.then(operation, operation)
+  registryMutationQueue = result.then(() => undefined, () => undefined)
+  return result
+}
 
 async function writeJsonFile(data) {
   await fs.mkdir(dbDir, { recursive: true })
@@ -460,8 +467,9 @@ export async function listResidentRegistry(filters = {}) {
   const db = await readDb()
   const matches = (db.residentRegistry || []).map(normalizeRegistryResident).filter((resident) => {
     const nameParts = String(filters.search || '').toLowerCase().split(/\s+/).filter(Boolean)
-    const fullName = `${resident.firstName} ${resident.lastName}`.toLowerCase()
-    if (nameParts.some((part) => !fullName.includes(part))) return false
+    const firstName = resident.firstName.toLocaleLowerCase()
+    const lastName = resident.lastName.toLocaleLowerCase()
+    if (nameParts.some((part) => !firstName.startsWith(part) && !lastName.startsWith(part))) return false
     if (filters.birthDate && resident.birthDate !== filters.birthDate) return false
     if (filters.ageStart && filters.ageEnd && (!resident.birthDate || resident.birthDate < filters.ageStart || resident.birthDate > filters.ageEnd)) return false
     if (filters.zone && Number(resident.zone) !== Number(filters.zone)) return false
@@ -472,6 +480,7 @@ export async function listResidentRegistry(filters = {}) {
     || String(left.purok || '').localeCompare(String(right.purok || ''))
     || left.lastName.localeCompare(right.lastName)
     || left.firstName.localeCompare(right.firstName)
+    || String(left.id).localeCompare(String(right.id))
   ))
   const offset = (filters.page - 1) * filters.pageSize
   return { residents: matches.slice(offset, offset + filters.pageSize), total: matches.length }
@@ -490,7 +499,9 @@ export async function getResidentDemographics(filters = {}) {
     male: residents.filter((item) => String(item.sex || '').toLowerCase() === 'male').length,
     female: residents.filter((item) => String(item.sex || '').toLowerCase() === 'female').length,
     unclassified: residents.filter((item) => !['male', 'female'].includes(String(item.sex || '').toLowerCase())).length,
-    households: new Set(residents.map((item) => item.householdId).filter(Boolean)).size,
+    households: new Set(residents.filter((item) => item.householdId).map((item) => (
+      `${item.zone || ''}\u0000${item.purok || ''}\u0000${item.householdId}`
+    ))).size,
   })
   const groups = new Map()
   const households = new Map()
@@ -509,7 +520,7 @@ export async function getResidentDemographics(filters = {}) {
     return {
       zone,
       purok: purok || null,
-      label: purok || (zone ? `Zone ${zone}` : 'Unassigned / needs verification'),
+      label: purok ? `${purok}${zone ? ` · Zone ${zone}` : ''}` : (zone ? `Zone ${zone}` : 'Unassigned / needs verification'),
       ...counts,
     }
   }).sort((left, right) => (left.zone || 99) - (right.zone || 99) || String(left.purok || '').localeCompare(String(right.purok || '')))
@@ -540,8 +551,8 @@ export async function findPotentialRegistryMatches(firstName, lastName, birthDat
   return (db.residentRegistry || []).map(normalizeRegistryResident).filter((resident) => (
     resident.firstName.trim().toLowerCase() === firstName.trim().toLowerCase()
     && resident.lastName.trim().toLowerCase() === lastName.trim().toLowerCase()
-    && (!birthDate || resident.birthDate === birthDate)
-  )).slice(0, 5).map((resident) => ({
+    && (!birthDate || !resident.birthDate || resident.birthDate === birthDate)
+  )).map((resident) => ({
     id: resident.id,
     firstName: resident.firstName,
     lastName: resident.lastName,
@@ -553,25 +564,88 @@ export async function findPotentialRegistryMatches(firstName, lastName, birthDat
   }))
 }
 
-export async function insertRegistryResidents(residents, auditEntry) {
+const matchRegistryRows = (residents, registry) => residents.map((resident, index) => ({
+  row: index + 2,
+  records: registry.map(normalizeRegistryResident).filter((candidate) => (
+    candidate.firstName.trim().toLocaleLowerCase() === resident.firstName.trim().toLocaleLowerCase()
+    && candidate.lastName.trim().toLocaleLowerCase() === resident.lastName.trim().toLocaleLowerCase()
+    && (!resident.birthDate || !candidate.birthDate || candidate.birthDate === resident.birthDate)
+  )).map((candidate) => ({
+    id: candidate.id,
+    firstName: candidate.firstName,
+    lastName: candidate.lastName,
+    birthDate: candidate.birthDate,
+    householdId: candidate.householdId,
+    purok: candidate.purok,
+    zone: candidate.zone,
+    verificationStatus: candidate.verificationStatus,
+  })),
+})).filter((match) => match.records.length)
+
+const storedMatchSnapshot = (matches) => matches.map((match) => ({
+  row: match.row,
+  ids: match.records.map((record) => String(record.id)).sort(),
+}))
+
+export async function findPotentialRegistryMatchesForResidents(residents) {
   const db = await readDb()
-  db.residentRegistry = db.residentRegistry || []
-  db.auditLogs = db.auditLogs || []
-  db.residentRegistry.push(...residents)
-  db.auditLogs.push(auditEntry)
-  await writeDb(db)
-  return residents
+  return residents.map((resident) => (db.residentRegistry || []).map(normalizeRegistryResident).filter((candidate) => (
+    candidate.firstName.trim().toLocaleLowerCase() === resident.firstName.trim().toLocaleLowerCase()
+    && candidate.lastName.trim().toLocaleLowerCase() === resident.lastName.trim().toLocaleLowerCase()
+    && (!resident.birthDate || !candidate.birthDate || candidate.birthDate === resident.birthDate)
+  )).map((candidate) => ({
+    id: candidate.id,
+    firstName: candidate.firstName,
+    lastName: candidate.lastName,
+    birthDate: candidate.birthDate,
+    householdId: candidate.householdId,
+    purok: candidate.purok,
+    zone: candidate.zone,
+    verificationStatus: candidate.verificationStatus,
+  })))
+}
+
+export async function insertRegistryResidents(residents, auditEntry, options = {}) {
+  return serializeRegistryMutation(async () => {
+    const db = await readDb()
+    db.residentRegistry = db.residentRegistry || []
+    db.auditLogs = db.auditLogs || []
+    const potentialMatches = matchRegistryRows(residents, db.residentRegistry)
+      .map((match) => ({ ...match, row: match.row - 2 + (options.rowOffset ?? 2) }))
+    const currentReviewedMatches = storedMatchSnapshot(potentialMatches)
+    if ((potentialMatches.length && options.confirmPotentialMatches !== true)
+      || JSON.stringify(currentReviewedMatches) !== JSON.stringify(options.reviewedMatches || [])) {
+      return { inserted: [], skipped: 0, reviewRequired: true, potentialMatches, reviewedMatches: currentReviewedMatches }
+    }
+    const fingerprints = new Set(db.residentRegistry.map((resident) => resident.sourceFingerprint).filter(Boolean))
+    const existing = db.residentRegistry.filter((resident) => (
+      resident.sourceFingerprint && residents.some((candidate) => candidate.sourceFingerprint === resident.sourceFingerprint)
+    )).map((resident) => ({ id: resident.id, sourceFingerprint: resident.sourceFingerprint }))
+    const inserted = residents.filter((resident) => {
+      if (!resident.sourceFingerprint || fingerprints.has(resident.sourceFingerprint)) return !resident.sourceFingerprint
+      fingerprints.add(resident.sourceFingerprint)
+      return true
+    })
+    if (inserted.length) {
+      db.residentRegistry.push(...inserted)
+      db.auditLogs.push({ ...auditEntry, metadata: { ...auditEntry.metadata, count: inserted.length } })
+      await writeDb(db)
+    }
+    return { inserted, existing, skipped: residents.length - inserted.length, reviewRequired: false }
+  })
 }
 
 export async function updateRegistryResidentWithAudit(id, updates, auditEntry) {
-  const db = await readDb()
-  const resident = (db.residentRegistry || []).find((item) => item.id === id)
-  if (!resident) return null
-  Object.assign(resident, updates, updates.status ? { recordStatus: updates.status } : {})
-  db.auditLogs = db.auditLogs || []
-  db.auditLogs.push(auditEntry)
-  await writeDb(db)
-  return normalizeRegistryResident(resident)
+  return serializeRegistryMutation(async () => {
+    const db = await readDb()
+    const resident = (db.residentRegistry || []).find((item) => item.id === id)
+    if (!resident) return null
+    Object.assign(resident, updates, updates.status ? { recordStatus: updates.status } : {})
+    db.auditLogs = db.auditLogs || []
+    db.auditLogs.push(auditEntry)
+    await writeDb(db)
+    return normalizeRegistryResident(resident)
+  })
 }
 
 export async function archiveApprovalsOlderThan(days = 30) {

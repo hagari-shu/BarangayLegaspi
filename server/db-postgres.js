@@ -193,6 +193,8 @@ export async function initDatabase() {
   `)
   await query('CREATE INDEX IF NOT EXISTS resident_registry_location_status_idx ON resident_registry (zone, purok, record_status, verification_status)')
   await query('CREATE INDEX IF NOT EXISTS resident_registry_household_location_idx ON resident_registry (household_id, zone, purok)')
+  await query('CREATE INDEX IF NOT EXISTS resident_registry_first_name_prefix_idx ON resident_registry (LOWER(first_name) text_pattern_ops)')
+  await query('CREATE INDEX IF NOT EXISTS resident_registry_last_name_prefix_idx ON resident_registry (LOWER(last_name) text_pattern_ops)')
 
   await query(`
     CREATE TABLE IF NOT EXISTS announcements (
@@ -725,7 +727,10 @@ const normalizeRegistryResident = (record) => ({
   ...record,
   firstName: record.firstName ?? record.first_name ?? '',
   lastName: record.lastName ?? record.last_name ?? '',
-  birthDate: record.birthDate ?? record.birth_date ?? null,
+  birthDate: (() => {
+    const value = record.birthDate ?? record.birth_date ?? null
+    return value instanceof Date ? value.toISOString().slice(0, 10) : value ? String(value).slice(0, 10) : null
+  })(),
   householdId: record.householdId ?? record.household_id ?? null,
   verificationStatus: record.verificationStatus ?? record.verification_status ?? 'pending',
   sourceReference: record.sourceReference ?? record.source_reference ?? null,
@@ -746,9 +751,9 @@ const registryWhere = (filters = {}) => {
   }
   if (filters.search) {
     for (const term of String(filters.search).toLowerCase().split(/\s+/).filter(Boolean)) {
-      params.push(`%${term}%`)
+      params.push(`${term.replace(/[\\%_]/g, '\\$&')}%`)
       const placeholder = `$${params.length}`
-      clauses.push(`(LOWER(first_name) LIKE ${placeholder} OR LOWER(last_name) LIKE ${placeholder})`)
+      clauses.push(`(LOWER(first_name) LIKE ${placeholder} ESCAPE '\\' OR LOWER(last_name) LIKE ${placeholder} ESCAPE '\\')`)
     }
   }
   if (filters.birthDate) add('birth_date = ?', filters.birthDate)
@@ -763,18 +768,25 @@ const registryWhere = (filters = {}) => {
 
 export async function listResidentRegistry(filters = {}) {
   const where = registryWhere(filters)
-  const countResult = await query(`SELECT COUNT(*)::integer AS total FROM resident_registry ${where.sql}`, where.params)
-  const offset = (filters.page - 1) * filters.pageSize
-  const params = [...where.params, filters.pageSize, offset]
-  const rows = await query(
-    `SELECT * FROM resident_registry ${where.sql}
-     ORDER BY zone NULLS LAST, purok NULLS LAST, last_name, first_name
-     LIMIT $${params.length - 1} OFFSET $${params.length}`,
-    params
-  )
-  return {
-    residents: rows.rows.map(normalizeRegistryResident),
-    total: Number(countResult.rows[0]?.total || 0),
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY')
+    const countResult = await client.query(`SELECT COUNT(*)::integer AS total FROM resident_registry ${where.sql}`, where.params)
+    const offset = (filters.page - 1) * filters.pageSize
+    const params = [...where.params, filters.pageSize, offset]
+    const rows = await client.query(
+      `SELECT * FROM resident_registry ${where.sql}
+       ORDER BY zone NULLS LAST, purok NULLS LAST, last_name, first_name, id
+       LIMIT $${params.length - 1} OFFSET $${params.length}`,
+      params
+    )
+    await client.query('COMMIT')
+    return { residents: rows.rows.map(normalizeRegistryResident), total: Number(countResult.rows[0]?.total || 0) }
+  } catch (error) {
+    await client.query('ROLLBACK')
+    throw error
+  } finally {
+    client.release()
   }
 }
 
@@ -785,34 +797,51 @@ export async function getResidentDemographics(filters = {}) {
     COUNT(*) FILTER (WHERE LOWER(sex) = 'male')::integer AS male,
     COUNT(*) FILTER (WHERE LOWER(sex) = 'female')::integer AS female,
     COUNT(*) FILTER (WHERE sex IS NULL OR BTRIM(sex) = '' OR LOWER(sex) NOT IN ('male', 'female'))::integer AS unclassified,
-    COUNT(DISTINCT NULLIF(BTRIM(household_id), ''))::integer AS households`
-  const overallResult = await query(`SELECT ${counts} FROM resident_registry ${eligibleSql}`, where.params)
-  const groupResult = await query(
-    `SELECT zone, purok, ${counts} FROM resident_registry ${eligibleSql}
-     GROUP BY zone, purok ORDER BY zone NULLS LAST, purok NULLS LAST`,
-    where.params
-  )
+    COUNT(DISTINCT (zone, purok, NULLIF(BTRIM(household_id), '')))
+      FILTER (WHERE NULLIF(BTRIM(household_id), '') IS NOT NULL)::integer AS households`
+  const client = await pool.connect()
+  let overallResult
+  let groupResult
+  let householdResult
+  try {
+    await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY')
+    overallResult = await client.query(
+      `SELECT ${counts} FROM resident_registry ${eligibleSql}`,
+      where.params
+    )
+    groupResult = await client.query(
+      `SELECT zone, purok, ${counts} FROM resident_registry ${eligibleSql}
+       GROUP BY zone, purok ORDER BY zone NULLS LAST, purok NULLS LAST`,
+      where.params
+    )
+    householdResult = await client.query(
+      `SELECT zone, purok, household_id,
+       COUNT(*)::integer AS total,
+       COUNT(*) FILTER (WHERE LOWER(sex) = 'male')::integer AS male,
+       COUNT(*) FILTER (WHERE LOWER(sex) = 'female')::integer AS female,
+       COUNT(*) FILTER (WHERE sex IS NULL OR BTRIM(sex) = '' OR LOWER(sex) NOT IN ('male', 'female'))::integer AS unclassified
+       FROM resident_registry ${eligibleSql}
+       AND NULLIF(BTRIM(household_id), '') IS NOT NULL
+       GROUP BY zone, purok, household_id ORDER BY zone NULLS LAST, purok NULLS LAST, household_id`,
+      where.params
+    )
+    await client.query('COMMIT')
+  } catch (error) {
+    await client.query('ROLLBACK')
+    throw error
+  } finally {
+    client.release()
+  }
   const byPurok = groupResult.rows.map((row) => ({
     zone: row.zone === null ? null : Number(row.zone),
     purok: row.purok,
-    label: row.purok || (row.zone ? `Zone ${row.zone}` : 'Unassigned / needs verification'),
+    label: row.purok ? `${row.purok}${row.zone ? ` · Zone ${row.zone}` : ''}` : (row.zone ? `Zone ${row.zone}` : 'Unassigned / needs verification'),
     total: Number(row.total),
     male: Number(row.male),
     female: Number(row.female),
     unclassified: Number(row.unclassified),
     households: Number(row.households),
   }))
-  const householdResult = await query(
-    `SELECT zone, purok, household_id,
-     COUNT(*)::integer AS total,
-     COUNT(*) FILTER (WHERE LOWER(sex) = 'male')::integer AS male,
-     COUNT(*) FILTER (WHERE LOWER(sex) = 'female')::integer AS female,
-     COUNT(*) FILTER (WHERE sex IS NULL OR BTRIM(sex) = '' OR LOWER(sex) NOT IN ('male', 'female'))::integer AS unclassified
-     FROM resident_registry ${eligibleSql}
-     AND NULLIF(BTRIM(household_id), '') IS NOT NULL
-     GROUP BY zone, purok, household_id ORDER BY zone NULLS LAST, purok NULLS LAST, household_id`,
-    where.params
-  )
   const byHousehold = householdResult.rows.map((row) => ({
     zone: row.zone === null ? null : Number(row.zone),
     purok: row.purok,
@@ -843,47 +872,141 @@ export async function findPotentialRegistryMatches(firstName, lastName, birthDat
     `SELECT id, first_name, last_name, birth_date, household_id, purok, zone, verification_status
      FROM resident_registry
      WHERE LOWER(first_name) = LOWER($1) AND LOWER(last_name) = LOWER($2)
-     AND ($3::date IS NULL OR birth_date = $3::date)
-     ORDER BY created_at LIMIT 5`,
+     AND ($3::date IS NULL OR birth_date = $3::date OR birth_date IS NULL)
+     ORDER BY created_at`,
     [firstName, lastName, birthDate || null]
   )
-  return result.rows.map((row) => ({
-    id: row.id,
-    firstName: row.first_name,
-    lastName: row.last_name,
-    birthDate: row.birth_date,
-    householdId: row.household_id,
-    purok: row.purok,
-    zone: row.zone === null ? null : Number(row.zone),
-    verificationStatus: row.verification_status,
-  }))
+  return result.rows.map((row) => {
+    const resident = normalizeRegistryResident(row)
+    return {
+      id: resident.id,
+      firstName: resident.firstName,
+      lastName: resident.lastName,
+      birthDate: resident.birthDate,
+      householdId: resident.householdId,
+      purok: resident.purok,
+      zone: resident.zone === null ? null : Number(resident.zone),
+      verificationStatus: resident.verificationStatus,
+    }
+  })
 }
 
-export async function insertRegistryResidents(residents, auditEntry) {
+const matchResidentsToRows = (residents, rows, rowOffset = 2) => residents.map((resident, index) => ({
+  row: index + rowOffset,
+  records: rows.filter((row) => (
+    row.firstName.trim().toLocaleLowerCase() === resident.firstName.trim().toLocaleLowerCase()
+    && row.lastName.trim().toLocaleLowerCase() === resident.lastName.trim().toLocaleLowerCase()
+    && (!resident.birthDate || !row.birthDate || resident.birthDate === row.birthDate)
+  )).map((row) => ({
+    id: row.id,
+    firstName: row.firstName,
+    lastName: row.lastName,
+    birthDate: row.birthDate,
+    householdId: row.householdId,
+    purok: row.purok,
+    zone: row.zone === null ? null : Number(row.zone),
+    verificationStatus: row.verificationStatus,
+  })),
+})).filter((match) => match.records.length)
+
+const registryMatchSnapshot = (matches) => matches.map((match) => ({
+  row: match.row,
+  ids: match.records.map((record) => String(record.id)).sort(),
+}))
+
+export async function findPotentialRegistryMatchesForResidents(residents) {
+  if (!residents.length) return []
+  const firstNames = [...new Set(residents.map((resident) => resident.firstName.trim().toLocaleLowerCase()))]
+  const lastNames = [...new Set(residents.map((resident) => resident.lastName.trim().toLocaleLowerCase()))]
+  const result = await query(
+    `SELECT id, first_name, last_name, birth_date, household_id, purok, zone, verification_status
+     FROM resident_registry
+     WHERE LOWER(first_name) = ANY($1::text[]) AND LOWER(last_name) = ANY($2::text[])
+     ORDER BY created_at, id`,
+    [firstNames, lastNames]
+  )
+  return residents.map((resident) => matchResidentsToRows([resident], result.rows.map(normalizeRegistryResident), 0)[0]?.records || [])
+}
+
+export async function insertRegistryResidents(residents, auditEntry, options = {}) {
   const client = await pool.connect()
   try {
     await client.query('BEGIN')
-    for (const resident of residents) {
+    const identityKeys = [...new Set(residents.map((resident) => (
+      `${resident.firstName.trim().toLocaleLowerCase()}\u0000${resident.lastName.trim().toLocaleLowerCase()}`
+    )))].sort()
+    await client.query(
+      `SELECT pg_advisory_xact_lock(hashtextextended(identity_key, 0))
+       FROM unnest($1::text[]) AS identities(identity_key)
+       ORDER BY identity_key`,
+      [identityKeys]
+    )
+    const firstNames = [...new Set(residents.map((resident) => resident.firstName.trim().toLocaleLowerCase()))]
+    const lastNames = [...new Set(residents.map((resident) => resident.lastName.trim().toLocaleLowerCase()))]
+    const existingResult = await client.query(
+      `SELECT id, first_name, last_name, birth_date, household_id, purok, zone, verification_status
+       FROM resident_registry
+       WHERE LOWER(first_name) = ANY($1::text[]) AND LOWER(last_name) = ANY($2::text[])
+       ORDER BY created_at, id`,
+      [firstNames, lastNames]
+    )
+    const existingResidents = existingResult.rows.map(normalizeRegistryResident)
+    const rowOffset = options.rowOffset ?? 2
+    const potentialMatches = matchResidentsToRows(residents, existingResidents, rowOffset)
+    const reviewedMatches = registryMatchSnapshot(potentialMatches)
+    if ((potentialMatches.length && options.confirmPotentialMatches !== true)
+      || JSON.stringify(reviewedMatches) !== JSON.stringify(options.reviewedMatches || [])) {
+      await client.query('ROLLBACK')
+      return { inserted: [], skipped: 0, reviewRequired: true, potentialMatches, reviewedMatches }
+    }
+
+    const columns = [
+      'id', 'first_name', 'last_name', 'birth_date', 'sex', 'household_id', 'purok', 'zone', 'address',
+      'record_status', 'verification_status', 'source_reference', 'source_filename', 'source_fingerprint',
+      'created_by', 'created_at', 'updated_at',
+    ]
+    const values = []
+    const tuples = residents.map((resident, index) => {
+      const row = [
+        resident.id, resident.firstName, resident.lastName, resident.birthDate, resident.sex,
+        resident.householdId, resident.purok, resident.zone, resident.address, 'active', 'pending',
+        resident.sourceReference, resident.sourceFilename, resident.sourceFingerprint, resident.createdBy,
+        resident.createdAt, resident.updatedAt || resident.createdAt,
+      ]
+      values.push(...row)
+      const start = index * columns.length
+      return `(${columns.map((_, columnIndex) => `$${start + columnIndex + 1}`).join(', ')})`
+    })
+    const insertedResult = await client.query(
+      `INSERT INTO resident_registry (${columns.join(', ')})
+       VALUES ${tuples.join(', ')}
+       ON CONFLICT (source_fingerprint) DO NOTHING
+       RETURNING source_fingerprint`,
+      values
+    )
+    const insertedFingerprints = new Set(insertedResult.rows.map((row) => row.source_fingerprint.trim()))
+    const inserted = residents.filter((resident) => insertedFingerprints.has(resident.sourceFingerprint))
+    const existingFingerprintResult = inserted.length === residents.length
+      ? { rows: [] }
+      : await client.query(
+        `SELECT id, source_fingerprint FROM resident_registry
+         WHERE source_fingerprint = ANY($1::char(64)[])`,
+        [residents.map((resident) => resident.sourceFingerprint)]
+      )
+    const existing = existingFingerprintResult.rows.map((row) => ({
+      id: row.id,
+      sourceFingerprint: row.source_fingerprint.trim(),
+    })).filter((record) => !insertedFingerprints.has(record.sourceFingerprint))
+    if (inserted.length) {
       await client.query(
-        `INSERT INTO resident_registry (
-          id, first_name, last_name, birth_date, sex, household_id, purok, zone, address,
-          record_status, verification_status, source_reference, source_filename, created_by, created_at, updated_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'active', 'pending', $10, $11, $12, $13, $13)`,
-        [
-          resident.id, resident.firstName, resident.lastName, resident.birthDate, resident.sex,
-          resident.householdId, resident.purok, resident.zone, resident.address, resident.sourceReference,
-          resident.sourceFilename, resident.createdBy, resident.createdAt,
-        ]
+        `INSERT INTO audit_logs (id, actor_id, actor_role, action, target_type, target_id, metadata)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [auditEntry.id, auditEntry.actorId || null, auditEntry.actorRole || null, auditEntry.action,
+          auditEntry.targetType || null, auditEntry.targetId || null, { ...auditEntry.metadata, count: inserted.length }]
       )
     }
-    await client.query(
-      `INSERT INTO audit_logs (id, actor_id, actor_role, action, target_type, target_id, metadata)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-      [auditEntry.id, auditEntry.actorId || null, auditEntry.actorRole || null, auditEntry.action,
-        auditEntry.targetType || null, auditEntry.targetId || null, auditEntry.metadata || {}]
-    )
     await client.query('COMMIT')
-    return residents
+    return { inserted, existing, skipped: residents.length - inserted.length, reviewRequired: false }
   } catch (error) {
     await client.query('ROLLBACK')
     throw error

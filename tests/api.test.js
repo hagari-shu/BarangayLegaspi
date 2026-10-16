@@ -10,6 +10,7 @@ import { DB_PATH } from '../server/config.js'
 import { isCaptainPhotoStorageConfigured } from '../server/captain-photo-storage.js'
 import { createHmac, randomUUID } from 'node:crypto'
 import { createTotpSecret, encryptTotpSecret } from '../server/mfa.js'
+import { registryAgeDateRange } from '../server/resident-registry.js'
 
 const testDbPath = DB_PATH
 
@@ -54,6 +55,37 @@ const createTestServer = async () => {
     baseUrl: `http://127.0.0.1:${port}`,
   }
 }
+
+test('registry age bounds include February 29 birthdays under the displayed-age convention', () => {
+  const cases = [
+    { today: '2024-02-28', birthDate: '2000-02-29', age: 23 },
+    { today: '2024-02-29', birthDate: '2000-02-29', age: 24 },
+    { today: '2025-02-28', birthDate: '2000-02-29', age: 24 },
+    { today: '2025-03-01', birthDate: '2000-02-29', age: 25 },
+  ]
+  for (const { today, birthDate, age } of cases) {
+    const { ageStart, ageEnd } = registryAgeDateRange(today, age)
+    assert.ok(birthDate >= ageStart && birthDate <= ageEnd, `${birthDate} should match age ${age} on ${today}`)
+  }
+})
+
+test('registry demographic household totals and labels retain location context', async () => {
+  const db = await jsonDb.readDb()
+  db.residentRegistry = [
+    { id: 'b', firstName: 'Alex', lastName: 'Same', zone: 1, purok: 'Purok 1', householdId: 'H-1', sex: 'Male', status: 'active', verificationStatus: 'verified' },
+    { id: 'a', firstName: 'Alex', lastName: 'Same', zone: 1, purok: 'Purok 1', householdId: 'H-1', sex: 'Female', status: 'active', verificationStatus: 'verified' },
+    { id: 'c', firstName: 'Alex', lastName: 'Same', zone: 2, purok: 'Purok 1', householdId: 'H-1', sex: 'Male', status: 'active', verificationStatus: 'verified' },
+  ]
+  await jsonDb.writeDb(db)
+
+  const demographics = await jsonDb.getResidentDemographics()
+  assert.equal(demographics.overall.households, 2)
+  assert.deepEqual(demographics.byPurok.map((group) => group.label), ['Purok 1 · Zone 1', 'Purok 1 · Zone 2'])
+  assert.equal(demographics.byHousehold.length, 2)
+
+  const page = await jsonDb.listResidentRegistry({ page: 1, pageSize: 1 })
+  assert.equal(page.residents[0].id, 'a')
+})
 
 test('API rate-limit responses retain CORS headers for the frontend origin', async () => {
   const { server, baseUrl } = await createTestServer()
@@ -1903,6 +1935,8 @@ test('resident registry imports are staff-only, duplicate-reviewed, pending, and
       residents: [
         { firstName: 'Ana', lastName: 'Reyes', birthDate: '2000-01-02', sex: 'Female', zone: '2', purok: 'Purok 2' },
         { firstName: 'Ana', lastName: 'Reyes', birthDate: '2000-01-02', sex: 'Female', zone: '2', purok: 'Purok 2' },
+        { firstName: 'Ana', lastName: 'Reyes', birthDate: '2001-01-02', sex: 'Female', zone: '2', purok: 'Purok 2' },
+        { firstName: 'Ana', lastName: 'Reyes', birthDate: '', sex: 'Female', zone: '2', purok: 'Purok 2' },
       ],
     }
 
@@ -1924,21 +1958,41 @@ test('resident registry imports are staff-only, duplicate-reviewed, pending, and
     assert.equal(duplicateReview.status, 409)
     const reviewData = await duplicateReview.json()
     assert.equal(reviewData.reviewRequired, true)
-    assert.equal(reviewData.potentialMatches.length, 1)
+    assert.equal(reviewData.potentialMatches.length, 3)
     assert.equal(reviewData.potentialMatches[0].records[0].source, 'same import file')
     assert.equal((await jsonDb.listResidentRegistry({ page: 1, pageSize: 25 })).total, 0)
 
     const importResponse = await fetch(`${baseUrl}/api/staff/residents/import`, {
       method: 'POST',
       headers,
-      body: JSON.stringify({ ...importBody, confirmPotentialMatches: true }),
+      body: JSON.stringify({ ...importBody, confirmPotentialMatches: true, reviewedMatches: reviewData.reviewedMatches }),
     })
     assert.equal(importResponse.status, 201)
     assert.deepEqual(await importResponse.json(), {
-      imported: 2,
+      imported: 3,
+      skipped: 1,
       verificationStatus: 'pending',
       potentialMatches: reviewData.potentialMatches,
     })
+
+    const retryReviewResponse = await fetch(`${baseUrl}/api/staff/residents/import`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(importBody),
+    })
+    assert.equal(retryReviewResponse.status, 409)
+    const retryReview = await retryReviewResponse.json()
+    const retryResponse = await fetch(`${baseUrl}/api/staff/residents/import`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        ...importBody,
+        confirmPotentialMatches: true,
+        reviewedMatches: retryReview.reviewedMatches,
+      }),
+    })
+    assert.equal(retryResponse.status, 201)
+    assert.equal((await retryResponse.json()).imported, 0)
 
     const residentsResponse = await fetch(`${baseUrl}/api/staff/residents?page=1&pageSize=25`, {
       headers: { Authorization: `Bearer ${staffToken}` },
@@ -1946,7 +2000,7 @@ test('resident registry imports are staff-only, duplicate-reviewed, pending, and
     assert.equal(residentsResponse.status, 200)
     assert.equal(residentsResponse.headers.get('cache-control'), 'private, no-store')
     const residentsData = await residentsResponse.json()
-    assert.equal(residentsData.total, 2)
+    assert.equal(residentsData.total, 3)
     assert.ok(residentsData.residents.every((resident) => resident.verificationStatus === 'pending'))
     assert.ok(residentsData.residents.every((resident) => !Object.hasOwn(resident, 'address')))
     assert.ok(residentsData.residents.every((resident) => !Object.hasOwn(resident, 'sourceReference')))
@@ -2015,7 +2069,7 @@ test('resident registry imports are staff-only, duplicate-reviewed, pending, and
     const importAudit = auditLogs.find((entry) => entry.action === 'resident_registry.bulk_imported')
     assert.ok(importAudit)
     assert.equal(importAudit.actorId, staff.id)
-    assert.equal(importAudit.metadata.count, 2)
+    assert.equal(importAudit.metadata.count, 3)
     assert.equal(importAudit.metadata.hasFilename, true)
     assert.equal(JSON.stringify(importAudit).includes(importBody.filename), false)
     assert.ok(auditLogs.some((entry) => entry.action === 'resident_registry.verified'))
@@ -2089,28 +2143,79 @@ test('staff can add a manual resident with duplicate review and privacy safeguar
       body: JSON.stringify(resident),
     })
     assert.equal(duplicateResponse.status, 409)
-    assert.equal((await duplicateResponse.json()).reviewRequired, true)
+    const duplicateReview = await duplicateResponse.json()
+    assert.equal(duplicateReview.reviewRequired, true)
+
+    const concurrentRecords = Array.from({ length: 7 }, (_, index) => ({
+      id: randomUUID(),
+      firstName: resident.firstName,
+      lastName: resident.lastName,
+      birthDate: resident.birthDate,
+      sex: resident.sex,
+      householdId: null,
+      purok: null,
+      zone: null,
+      address: null,
+      status: 'active',
+      recordStatus: 'active',
+      verificationStatus: 'pending',
+      sourceFingerprint: `concurrent-review-test-${index}`,
+      createdBy: staff.id,
+      createdAt: new Date().toISOString(),
+    }))
+    const db = await jsonDb.readDb()
+    db.residentRegistry.push(...concurrentRecords)
+    await jsonDb.writeDb(db)
+
+    const staleConfirmation = await fetch(`${baseUrl}/api/staff/residents`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        ...resident,
+        confirmPotentialMatch: true,
+        reviewedMatches: duplicateReview.reviewedMatches,
+      }),
+    })
+    assert.equal(staleConfirmation.status, 409)
+    const refreshedReview = await staleConfirmation.json()
+    assert.equal(refreshedReview.potentialMatches.length, 8)
 
     const confirmedResponse = await fetch(`${baseUrl}/api/staff/residents`, {
       method: 'POST',
       headers,
-      body: JSON.stringify({ ...resident, confirmPotentialMatch: true }),
+      body: JSON.stringify({
+        ...resident,
+        confirmPotentialMatch: true,
+        reviewedMatches: refreshedReview.reviewedMatches,
+      }),
     })
-    assert.equal(confirmedResponse.status, 201)
-    assert.equal((await confirmedResponse.json()).resident.verificationStatus, 'pending')
+    assert.equal(confirmedResponse.status, 200)
+    const confirmedData = await confirmedResponse.json()
+    assert.equal(confirmedData.resident.verificationStatus, 'pending')
+    assert.equal(confirmedData.created, false)
 
     const recordsResponse = await fetch(`${baseUrl}/api/staff/residents?page=1&pageSize=25`, {
       headers: { Authorization: `Bearer ${token}` },
     })
     const records = await recordsResponse.json()
-    assert.equal(records.total, 2)
+    assert.equal(records.total, 8)
     assert.ok(records.residents.every((record) => record.verificationStatus === 'pending'))
     assert.ok(records.residents.every((record) => !Object.hasOwn(record, 'address')))
     assert.ok(records.residents.every((record) => !Object.hasOwn(record, 'sourceFilename')))
 
+    const concurrentEntries = ['ConcurrentOne', 'ConcurrentTwo'].map((firstName) => fetch(`${baseUrl}/api/staff/residents`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ firstName, lastName: 'Household' }),
+    }))
+    const concurrentResponses = await Promise.all(concurrentEntries)
+    assert.ok(concurrentResponses.every((response) => response.status === 201))
+    const afterConcurrentWrites = await jsonDb.listResidentRegistry({ page: 1, pageSize: 25 })
+    assert.equal(afterConcurrentWrites.total, 10)
+
     const auditLogs = await jsonDb.listAuditLogs()
     const createAudits = auditLogs.filter((entry) => entry.action === 'resident_registry.created')
-    assert.equal(createAudits.length, 2)
+    assert.equal(createAudits.length, 3)
     assert.ok(createAudits.every((entry) => entry.actorId === staff.id))
     assert.ok(createAudits.every((entry) => !JSON.stringify(entry).includes('Luz')))
     assert.ok(createAudits.every((entry) => !JSON.stringify(entry).includes('confidential-source-sheet.csv')))
