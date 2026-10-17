@@ -94,6 +94,33 @@ export async function saveUser(user) {
   return user
 }
 
+export async function registerResident(user, auditEntry) {
+  return serializeProvisioningMutation(async () => {
+    const db = await readDb()
+    const email = String(user.email || '').toLowerCase()
+    if (db.users.some((existing) => (
+      String(existing.email || '').toLowerCase() === email
+      || String(existing.mobile || '') === user.mobile
+    ))) {
+      return { status: 'account_exists' }
+    }
+
+    const hasPendingInvitation = (db.staffInvitations || []).some((invitation) => (
+      String(invitation.email || '').toLowerCase() === email
+      && !invitation.acceptedAt
+      && !invitation.revokedAt
+      && Date.parse(invitation.expiresAt) > Date.parse(user.createdAt)
+    ))
+    if (hasPendingInvitation) return { status: 'invitation_pending' }
+
+    db.users.push(user)
+    db.auditLogs = Array.isArray(db.auditLogs) ? db.auditLogs : []
+    db.auditLogs.push(auditEntry)
+    await writeDb(db)
+    return { status: 'created' }
+  })
+}
+
 export async function saveRequest(request) {
   const db = await readDb()
   db.requests.push(request)
@@ -466,7 +493,7 @@ export async function issueStaffInvitation(invitation, auditEntry) {
         existing.revokedAt = invitation.issuedAt
       }
     }
-    db.staffInvitations.push(invitation)
+    db.staffInvitations.push({ ...invitation, position: invitation.position || 'Staff' })
     db.auditLogs = Array.isArray(db.auditLogs) ? db.auditLogs : []
     db.auditLogs.push(auditEntry)
     await writeDb(db)
@@ -512,7 +539,7 @@ export async function acceptStaffInvitation({ tokenHash, user, acceptedAt, audit
       status: 'On Duty',
       address: 'Barangay Hall, Legaspi',
       zone: 0,
-      position: 'Staff',
+      position: invitation.position || 'Staff',
       availability: 'Available',
       createdAt: acceptedAt,
     })
@@ -536,11 +563,10 @@ export async function promoteExistingUserToAdmin({ email, mobile, auditEntry }) 
     const user = matches[0]
     if (user.role === 'admin') return { status: 'already_admin', userId: user.id }
     if (user.role !== 'resident') return { status: 'role_conflict' }
-    if (['Suspended', 'Disabled'].includes(user.status)) return { status: 'account_disabled' }
+    if (user.status !== 'Active Resident') return { status: 'account_unverified' }
 
     const previousRole = user.role
     user.role = 'admin'
-    user.position = 'Administrator'
     db.auditLogs = Array.isArray(db.auditLogs) ? db.auditLogs : []
     db.auditLogs.push(auditEntry(user.id, previousRole))
     await writeDb(db)

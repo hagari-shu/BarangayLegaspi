@@ -172,6 +172,7 @@ export async function initDatabase() {
     CREATE TABLE IF NOT EXISTS staff_invitations (
       id UUID PRIMARY KEY,
       email VARCHAR(255) NOT NULL,
+      position VARCHAR(120) NOT NULL DEFAULT 'Staff',
       token_hash CHAR(64) NOT NULL UNIQUE,
       issued_at TIMESTAMPTZ NOT NULL,
       expires_at TIMESTAMPTZ NOT NULL,
@@ -179,6 +180,7 @@ export async function initDatabase() {
       revoked_at TIMESTAMPTZ
     );
   `)
+  await query("ALTER TABLE staff_invitations ADD COLUMN IF NOT EXISTS position VARCHAR(120) NOT NULL DEFAULT 'Staff'")
   await query(`CREATE UNIQUE INDEX IF NOT EXISTS staff_invitations_pending_email_idx
     ON staff_invitations (LOWER(email)) WHERE accepted_at IS NULL AND revoked_at IS NULL`)
 
@@ -332,12 +334,78 @@ const writeProvisioningAudit = async (client, entry) => {
   )
 }
 
+const lockAccountEmail = async (client, email) => {
+  const normalizedEmail = String(email).trim().toLowerCase()
+  await client.query(
+    "SELECT pg_advisory_xact_lock(hashtextextended('account-email:' || $1, 0))",
+    [normalizedEmail],
+  )
+}
+
+export async function registerResident(user, auditEntry) {
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+    await lockAccountEmail(client, user.email)
+    const existingUser = await client.query(
+      'SELECT id FROM users WHERE LOWER(email) = $1 OR mobile = $2 LIMIT 1',
+      [user.email.toLowerCase(), user.mobile],
+    )
+    if (existingUser.rows.length) {
+      await client.query('ROLLBACK')
+      return { status: 'account_exists' }
+    }
+
+    const pendingInvitation = await client.query(
+      `SELECT id FROM staff_invitations
+       WHERE LOWER(email) = $1 AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > NOW()
+       LIMIT 1`,
+      [user.email.toLowerCase()],
+    )
+    if (pendingInvitation.rows.length) {
+      await client.query('ROLLBACK')
+      return { status: 'invitation_pending' }
+    }
+
+    await client.query(
+      `INSERT INTO users (id, first_name, last_name, mobile, email, password_hash, role, household_id, family_members, household_members, status, address, zone, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, 'resident', $7, $8, $9::jsonb, $10, $11, $12, $13)`,
+      [
+        user.id,
+        user.firstName,
+        user.lastName,
+        user.mobile,
+        user.email.toLowerCase(),
+        user.passwordHash,
+        user.householdId,
+        user.familyMembers,
+        JSON.stringify(user.householdMembers || []),
+        user.status,
+        user.address,
+        user.zone ?? null,
+        user.createdAt,
+      ],
+    )
+    await writeProvisioningAudit(client, auditEntry)
+    await client.query('COMMIT')
+    return { status: 'created' }
+  } catch (error) {
+    await client.query('ROLLBACK')
+    if (error.code === '23505') return { status: 'account_exists' }
+    console.error('PostgreSQL resident registration failed', error)
+    throw error
+  } finally {
+    client.release()
+  }
+}
+
 export async function issueStaffInvitation(invitation, auditEntry) {
   const client = await pool.connect()
   try {
     await client.query('BEGIN')
+    await lockAccountEmail(client, invitation.email)
     const existingUser = await client.query(
-      'SELECT id FROM users WHERE LOWER(email) = $1 LIMIT 1 FOR UPDATE',
+      'SELECT id FROM users WHERE LOWER(email) = $1 LIMIT 1',
       [invitation.email],
     )
     if (existingUser.rows.length) {
@@ -351,9 +419,9 @@ export async function issueStaffInvitation(invitation, auditEntry) {
       [invitation.email, invitation.issuedAt],
     )
     await client.query(
-      `INSERT INTO staff_invitations (id, email, token_hash, issued_at, expires_at)
-       VALUES ($1, $2, $3, $4, $5)`,
-      [invitation.id, invitation.email, invitation.tokenHash, invitation.issuedAt, invitation.expiresAt],
+      `INSERT INTO staff_invitations (id, email, position, token_hash, issued_at, expires_at)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [invitation.id, invitation.email, invitation.position || 'Staff', invitation.tokenHash, invitation.issuedAt, invitation.expiresAt],
     )
     await writeProvisioningAudit(client, auditEntry)
     await client.query('COMMIT')
@@ -370,7 +438,7 @@ export async function issueStaffInvitation(invitation, auditEntry) {
 
 export async function getStaffInvitationByTokenHash(tokenHash) {
   const result = await query(
-    `SELECT id, email, expires_at AS "expiresAt", accepted_at AS "acceptedAt", revoked_at AS "revokedAt"
+    `SELECT id, email, position, expires_at AS "expiresAt", accepted_at AS "acceptedAt", revoked_at AS "revokedAt"
      FROM staff_invitations WHERE token_hash = $1 LIMIT 1`,
     [tokenHash],
   )
@@ -381,8 +449,17 @@ export async function acceptStaffInvitation({ tokenHash, user, acceptedAt, audit
   const client = await pool.connect()
   try {
     await client.query('BEGIN')
+    const invitationLookup = await client.query(
+      'SELECT email FROM staff_invitations WHERE token_hash = $1 LIMIT 1',
+      [tokenHash],
+    )
+    if (!invitationLookup.rows[0]) {
+      await client.query('ROLLBACK')
+      return { status: 'invalid_invitation' }
+    }
+    await lockAccountEmail(client, invitationLookup.rows[0].email)
     const invitationResult = await client.query(
-      `SELECT id, email, expires_at AS "expiresAt", accepted_at AS "acceptedAt", revoked_at AS "revokedAt"
+      `SELECT id, email, position, expires_at AS "expiresAt", accepted_at AS "acceptedAt", revoked_at AS "revokedAt"
        FROM staff_invitations WHERE token_hash = $1 FOR UPDATE`,
       [tokenHash],
     )
@@ -408,8 +485,8 @@ export async function acceptStaffInvitation({ tokenHash, user, acceptedAt, audit
 
     await client.query(
       `INSERT INTO users (id, first_name, last_name, mobile, email, password_hash, role, household_id, family_members, household_members, status, address, zone, position, availability, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, 'staff', $7, 1, '[]'::jsonb, 'On Duty', 'Barangay Hall, Legaspi', 0, 'Staff', 'Available', $8)`,
-      [user.id, user.firstName, user.lastName, user.mobile, invitation.email, user.passwordHash, user.householdId, acceptedAt],
+       VALUES ($1, $2, $3, $4, $5, $6, 'staff', $7, 1, '[]'::jsonb, 'On Duty', 'Barangay Hall, Legaspi', 0, $8, 'Available', $9)`,
+      [user.id, user.firstName, user.lastName, user.mobile, invitation.email, user.passwordHash, user.householdId, invitation.position || 'Staff', acceptedAt],
     )
     await client.query(
       'UPDATE staff_invitations SET accepted_at = $2 WHERE id = $1',
@@ -452,13 +529,13 @@ export async function promoteExistingUserToAdmin({ email, mobile, auditEntry }) 
       await client.query('ROLLBACK')
       return { status: 'role_conflict' }
     }
-    if (['Suspended', 'Disabled'].includes(user.status)) {
+    if (user.status !== 'Active Resident') {
       await client.query('ROLLBACK')
-      return { status: 'account_disabled' }
+      return { status: 'account_unverified' }
     }
 
     await client.query(
-      "UPDATE users SET role = 'admin', position = 'Administrator' WHERE id = $1",
+      "UPDATE users SET role = 'admin' WHERE id = $1",
       [user.id],
     )
     await writeProvisioningAudit(client, auditEntry(user.id, user.role))

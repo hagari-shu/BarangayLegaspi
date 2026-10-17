@@ -48,15 +48,23 @@ async function run() {
     const messages = {
       not_found: 'No account matched both configured identifiers. No changes made.',
       role_conflict: 'The matching account has a non-resident role. No changes made.',
-      account_disabled: 'The matching account is suspended or disabled. No changes made.',
+      account_unverified: 'The matching resident is not an active, verified resident. No changes made.',
     }
     throw new Error(messages[result.status] || 'Admin promotion did not complete.')
   }
 
   if (command === 'invite-staff') {
     const email = String(getOption('--email') || '').trim().toLowerCase()
+    const position = String(getOption('--position') || 'Staff').trim()
+    const hasControlCharacter = [...position].some((character) => {
+      const codePoint = character.codePointAt(0)
+      return codePoint < 32 || (codePoint >= 127 && codePoint <= 159)
+    })
     const publicAppUrl = String(process.env.PUBLIC_APP_URL || 'https://barangay-legaspi.vercel.app').trim()
     if (!emailPattern.test(email)) throw new Error('Provide a valid recipient email with --email.')
+    if (!position || position.length > 120 || hasControlCharacter || position.includes('<') || position.includes('>')) {
+      throw new Error('Provide a staff position with 1 to 120 printable characters using --position.')
+    }
     if (!publicAppUrl) throw new Error('PUBLIC_APP_URL must be the official HTTPS portal origin.')
     const parsedUrl = new URL(publicAppUrl)
     if (
@@ -69,7 +77,7 @@ async function run() {
     ) {
       throw new Error('PUBLIC_APP_URL must be an HTTPS origin without credentials.')
     }
-    const result = await issueStaffInvitation({ email, publicAppUrl: parsedUrl.origin, store: postgres })
+    const result = await issueStaffInvitation({ email, position, publicAppUrl: parsedUrl.origin, store: postgres })
     if (result.status === 'account_exists') {
       throw new Error('An account already uses that email. No invitation was created.')
     }
@@ -80,7 +88,7 @@ async function run() {
     return
   }
 
-  throw new Error('Usage: node scripts/operator-accounts.js <promote-admin|invite-staff> --confirm [--email recipient]')
+  throw new Error('Usage: node scripts/operator-accounts.js <promote-admin|invite-staff> --confirm [--email recipient] [--position title]')
 }
 
 try {

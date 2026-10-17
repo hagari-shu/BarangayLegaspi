@@ -529,8 +529,22 @@ export function createApp() {
         createdAt: new Date().toISOString(),
       }
 
-      await store.saveUser(user)
-      await writeAudit(null, 'user.registered', 'user', user.id, { status: user.status })
+      const registration = await store.registerResident(user, {
+        id: randomUUID(),
+        actorId: null,
+        actorRole: null,
+        action: 'user.registered',
+        targetType: 'user',
+        targetId: user.id,
+        metadata: { status: user.status },
+        createdAt: user.createdAt,
+      })
+      if (registration.status === 'account_exists') {
+        return res.status(409).json({ message: 'A resident with this mobile number or email already exists.' })
+      }
+      if (registration.status === 'invitation_pending') {
+        return res.status(409).json({ message: 'This email is reserved for an account invitation. Contact the barangay office.' })
+      }
 
       const delivery = await sendDeliveryWebhook({
         event: 'resident_registered',
@@ -2056,7 +2070,6 @@ export function createApp() {
         lastName: nextLastName,
         email: nextEmail,
         mobile: nextMobile,
-        role: nextRole,
         status: nextStatus,
         zone: nextZone,
         position: nextPosition,

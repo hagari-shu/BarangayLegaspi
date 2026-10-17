@@ -4,11 +4,12 @@ export const hashStaffInvitationToken = (token) => createHash('sha256').update(t
 
 export const isValidStaffInvitationToken = (token) => /^[A-Za-z0-9_-]{43}$/.test(String(token || ''))
 
-export async function issueStaffInvitation({ email, publicAppUrl, store, now = new Date() }) {
+export async function issueStaffInvitation({ email, publicAppUrl, position = 'Staff', store, now = new Date() }) {
   const token = randomBytes(32).toString('base64url')
   const invitation = {
     id: randomUUID(),
     email: email.trim().toLowerCase(),
+    position,
     tokenHash: hashStaffInvitationToken(token),
     issuedAt: now.toISOString(),
     expiresAt: new Date(now.getTime() + 12 * 60 * 60 * 1000).toISOString(),
