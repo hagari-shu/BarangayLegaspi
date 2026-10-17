@@ -5,7 +5,7 @@
 
     RewriteEngine On
 
-    RewriteRule ^$ /api/health [L]
+    RewriteRule ^$ https://brgy-legaspi-laravel.onrender.com/api/health [R=302,L]
 
     # Handle Authorization Header
     RewriteCond %{HTTP:Authorization} .
