@@ -17,3 +17,7 @@ export function validateResidentScanFiles(files) {
   if (totalSize > MAX_SCAN_TOTAL_SIZE) return 'The selected images must total 30 MB or less.'
   return ''
 }
+
+export function createCameraScanFile(blob, timestamp = Date.now()) {
+  return new File([blob], `camera-page-${timestamp}.jpg`, { type: 'image/jpeg' })
+}

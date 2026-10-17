@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { MAX_SCAN_FILES, validateResidentScanFiles } from './registry-scan'
+import { createCameraScanFile, MAX_SCAN_FILES, validateResidentScanFiles } from './registry-scan'
 
 const API_BASE = (import.meta.env.VITE_API_BASE || (import.meta.env.DEV ? 'http://localhost:3001/api' : '')).replace(/\/$/, '')
 const OCR_ASSET_BASE = `${(import.meta.env.BASE_URL || '/').replace(/\/$/, '')}/ocr`
@@ -9,6 +9,13 @@ const text = {
     title: 'Scan paper forms on this device',
     privacy: 'Images and OCR text are processed locally in this browser and are not uploaded or saved by the scanner. Resident details you enter are sent to the registry only when you explicitly import checked rows. OCR can be wrong, especially for handwriting; compare every value with the original.',
     choose: 'Choose or photograph pages',
+    openCamera: 'Open camera',
+    capturePage: 'Capture page',
+    stopCamera: 'Close camera',
+    cameraUnavailable: 'Camera access requires a supported browser and a secure HTTPS connection. On your phone, open the secure preview link; localhost is secure only on this device.',
+    cameraDenied: 'Camera permission was denied. Allow camera access in your browser settings and try again.',
+    cameraFailed: 'Unable to start the camera. Check that your device has an available camera and try again.',
+    cameraPreview: 'Live document camera preview',
     scan: 'Read text from selected pages',
     scanning: 'Reading page',
     empty: 'No text was recognized. Enter the details manually after checking the image.',
@@ -46,12 +53,20 @@ const text = {
       fileSize: 'Each image must be 10 MB or smaller.',
       totalSize: 'The selected images must total 30 MB or less.',
       load: 'Unable to load the scanner. Check that the app has finished loading and try again.',
+      capture: 'Unable to capture a page from the camera. Try again or choose an image instead.',
     },
   },
   fil: {
     title: 'I-scan ang mga papel sa device na ito',
     privacy: 'Sa browser na ito lamang pinoproseso ang mga larawan at OCR text, at hindi ito ina-upload o sine-save ng scanner. Ipinapadala lamang sa registry ang mga detalyeng mano-mano mong inilagay kapag tahasan mong ini-import ang mga nasuring tala. Maaaring mali ang OCR, lalo na sa sulat-kamay; ihambing ang bawat detalye sa orihinal.',
     choose: 'Pumili o kunan ng larawan ang mga pahina',
+    openCamera: 'Buksan ang camera',
+    capturePage: 'Kunan ang pahina',
+    stopCamera: 'Isara ang camera',
+    cameraUnavailable: 'Kailangan ng suportadong browser at secure na HTTPS connection para magamit ang camera. Buksan sa iyong phone ang secure preview link; secure lang ang localhost sa mismong device.',
+    cameraDenied: 'Hindi pinayagan ang camera. Payagan ang paggamit nito sa browser settings at subukan muli.',
+    cameraFailed: 'Hindi mabuksan ang camera. Tiyaking may magagamit na camera ang device at subukan muli.',
+    cameraPreview: 'Live na preview ng document camera',
     scan: 'Basahin ang teksto sa mga pahina',
     scanning: 'Binabasa ang pahina',
     empty: 'Walang tekstong nakilala. Ilagay nang mano-mano ang detalye matapos suriin ang larawan.',
@@ -89,6 +104,7 @@ const text = {
       fileSize: 'Dapat 10 MB pababa ang bawat larawan.',
       totalSize: 'Dapat 30 MB pababa ang kabuuang laki ng mga larawan.',
       load: 'Hindi ma-load ang scanner. Hintaying matapos mag-load ang app at subukan muli.',
+      capture: 'Hindi makunan ng larawan mula sa camera. Subukan muli o pumili na lamang ng larawan.',
     },
   },
 }
@@ -131,14 +147,23 @@ export default function ResidentDocumentScanner({ language = 'en' }) {
   const [currentPage, setCurrentPage] = useState(0)
   const [scanning, setScanning] = useState(false)
   const [importing, setImporting] = useState(false)
+  const [cameraActive, setCameraActive] = useState(false)
+  const [cameraStarting, setCameraStarting] = useState(false)
   const [resetKey, setResetKey] = useState(0)
   const workerRef = useRef(null)
   const mountedRef = useRef(true)
+  const cameraStreamRef = useRef(null)
+  const cameraVideoRef = useRef(null)
+  const imageUrlsRef = useRef([])
 
   useEffect(() => {
     mountedRef.current = true
     return () => {
       mountedRef.current = false
+      cameraStreamRef.current?.getTracks().forEach((track) => track.stop())
+      cameraStreamRef.current = null
+      imageUrlsRef.current.forEach((url) => URL.revokeObjectURL(url))
+      imageUrlsRef.current = []
       if (workerRef.current) {
         const worker = workerRef.current
         workerRef.current = null
@@ -149,17 +174,115 @@ export default function ResidentDocumentScanner({ language = 'en' }) {
     }
   }, [])
 
-  useEffect(() => () => imageUrls.forEach((url) => URL.revokeObjectURL(url)), [imageUrls])
+  const replaceImageUrls = (urls) => {
+    imageUrlsRef.current.forEach((url) => URL.revokeObjectURL(url))
+    imageUrlsRef.current = urls
+    setImageUrls(urls)
+  }
+
+  const appendImageUrl = (url) => {
+    imageUrlsRef.current = [...imageUrlsRef.current, url]
+    setImageUrls(imageUrlsRef.current)
+  }
+
+  useEffect(() => {
+    const video = cameraVideoRef.current
+    const stream = cameraActive ? cameraStreamRef.current : null
+    if (!video || !stream) return undefined
+    video.srcObject = stream
+    video.play().catch((playError) => {
+      console.error('play local resident document camera preview failed', playError)
+      if (mountedRef.current) setError(labels.cameraFailed)
+    })
+    return () => {
+      if (video.srcObject === stream) video.srcObject = null
+    }
+  }, [cameraActive, labels])
+
+  const stopCamera = () => {
+    cameraStreamRef.current?.getTracks().forEach((track) => track.stop())
+    cameraStreamRef.current = null
+    setCameraActive(false)
+    setCameraStarting(false)
+  }
+
+  const openCamera = async () => {
+    if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
+      setError(labels.cameraUnavailable)
+      return
+    }
+    setCameraStarting(true)
+    setError('')
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: false,
+        video: { facingMode: { ideal: 'environment' } },
+      })
+      if (!mountedRef.current) {
+        stream.getTracks().forEach((track) => track.stop())
+        return
+      }
+      cameraStreamRef.current = stream
+      setCameraActive(true)
+    } catch (cameraError) {
+      console.error('open local resident document camera failed', cameraError)
+      if (mountedRef.current) {
+        setError(cameraError.name === 'NotAllowedError' || cameraError.name === 'SecurityError'
+          ? labels.cameraDenied
+          : labels.cameraFailed)
+      }
+    } finally {
+      if (mountedRef.current) setCameraStarting(false)
+    }
+  }
+
+  const capturePage = () => {
+    const video = cameraVideoRef.current
+    if (!video?.videoWidth || !video.videoHeight) {
+      setError(labels.errors.capture)
+      return
+    }
+    const canvas = document.createElement('canvas')
+    canvas.width = video.videoWidth
+    canvas.height = video.videoHeight
+    const context = canvas.getContext('2d')
+    if (!context) {
+      setError(labels.errors.capture)
+      return
+    }
+    context.drawImage(video, 0, 0, canvas.width, canvas.height)
+    canvas.toBlob((blob) => {
+      if (!blob) {
+        setError(labels.errors.capture)
+        return
+      }
+      const capturedFile = createCameraScanFile(blob)
+      const nextFiles = [...files, capturedFile]
+      const validationError = userFileError(validateResidentScanFiles(nextFiles), labels)
+      if (validationError) {
+        setError(validationError)
+        return
+      }
+      setError('')
+      setMessage('')
+      setMatches([])
+      setRecognizedPages([])
+      setEntries([])
+      setFiles(nextFiles)
+      appendImageUrl(URL.createObjectURL(capturedFile))
+    }, 'image/jpeg', 0.9)
+  }
 
   const chooseFiles = (event) => {
     const selected = Array.from(event.currentTarget.files || [])
     event.currentTarget.value = ''
+    stopCamera()
     const validationError = userFileError(validateResidentScanFiles(selected), labels)
     setError(validationError)
     setMessage('')
     setMatches([])
     setFiles(validationError ? [] : selected)
-    setImageUrls(validationError ? [] : selected.map((file) => URL.createObjectURL(file)))
+    replaceImageUrls(validationError ? [] : selected.map((file) => URL.createObjectURL(file)))
     setRecognizedPages([])
     setEntries([])
   }
@@ -269,7 +392,7 @@ export default function ResidentDocumentScanner({ language = 'en' }) {
       setMatches([])
       setRecognizedPages([])
       setFiles([])
-      setImageUrls([])
+      replaceImageUrls([])
       setResetKey((key) => key + 1)
       setMessage(`${data.imported || residents.length} ${labels.imported}`)
     } catch (importError) {
@@ -282,8 +405,9 @@ export default function ResidentDocumentScanner({ language = 'en' }) {
 
   const clearScan = () => {
     if (scanning || importing) return
+    stopCamera()
     setFiles([])
-    setImageUrls([])
+    replaceImageUrls([])
     setRecognizedPages([])
     setEntries([])
     setMatches([])
@@ -303,11 +427,18 @@ export default function ResidentDocumentScanner({ language = 'en' }) {
           {labels.choose}
           <input key={resetKey} type="file" accept="image/jpeg,image/png,image/webp" capture="environment" multiple disabled={scanning || importing} onChange={chooseFiles} />
         </label>
+        {!cameraActive
+          ? <button type="button" className="secondary-btn small" disabled={scanning || importing || cameraStarting} onClick={openCamera}>{cameraStarting ? labels.scanning : labels.openCamera}</button>
+          : <>
+            <button type="button" className="primary-btn small" disabled={scanning || importing} onClick={capturePage}>{labels.capturePage}</button>
+            <button type="button" className="secondary-btn small" disabled={scanning || importing} onClick={stopCamera}>{labels.stopCamera}</button>
+          </>}
         <button type="button" className="primary-btn small" disabled={!files.length || scanning || importing} onClick={scanDocuments}>
           {scanning ? `${labels.scanning} ${currentPage}/${files.length} · ${pageProgress}%` : labels.scan}
         </button>
         {files.length > 0 && <button type="button" className="secondary-btn small" disabled={scanning || importing} onClick={clearScan}>{labels.clear}</button>}
       </div>
+      {cameraActive && <video ref={cameraVideoRef} className="registry-scan-camera" autoPlay playsInline muted aria-label={labels.cameraPreview} />}
       {scanning && <progress className="registry-scan-progress" max="100" value={progress} aria-label={`${labels.scanning} ${currentPage}/${files.length}`} />}
       {error && <p className="registry-message error" role="alert">{error}</p>}
       {message && <p className="registry-message" role="status">{message}</p>}

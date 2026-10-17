@@ -1125,7 +1125,7 @@ function RegisterPage({ language, setLanguage }) {
         throw new Error(data.message || 'Registration failed.')
       }
 
-      alert(data.message || 'Account created. Please wait for barangay Staff review before signing in.')
+      alert(t.registrationPendingSuccess)
       navigate('/')
     } catch (error) {
       alert(error.message || 'Registration failed.')
@@ -1250,8 +1250,7 @@ function RegisterPage({ language, setLanguage }) {
             </div>
 
             <p className="approval-notice">
-              After registration, your account will remain pending until a barangay administrator verifies it. This helps keep
-              resident records accurate and ensures only valid barangay residents receive access.
+              {t.accountApprovalNotice}
             </p>
 
             <div className="register-actions">
@@ -1368,7 +1367,7 @@ function DashboardPage({ profile, requests, services, announcements, events, pay
     {
       label: t.approvalStatusReady,
       complete: profile.status === 'Active Resident',
-      detail: profile.status === 'Active Resident' ? t.accountActive : t.waitingForAdminVerification,
+      detail: profile.status === 'Active Resident' ? t.accountActive : t.waitingForStaffReview,
     },
     {
       label: t.recentRequestTracked,

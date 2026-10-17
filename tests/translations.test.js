@@ -8,6 +8,14 @@ test('filipino translation includes resident and admin labels', () => {
 
   assert.deepEqual(Object.keys(fil).sort(), Object.keys(translations.en).sort())
   assert.equal(fil.residentPortal, 'Portal ng Residente')
+  assert.match(translations.en.accountApprovalNotice, /Staff review/)
+  assert.match(fil.accountApprovalNotice, /kawani/)
+  assert.match(translations.en.registrationPendingSuccess, /Staff review/)
+  assert.match(fil.registrationPendingSuccess, /kawani/)
+  assert.equal(translations.en.waitingForStaffReview, 'Waiting for barangay Staff review')
+  assert.equal(fil.waitingForStaffReview, 'Naghihintay ng pagsusuri ng mga kawani ng barangay')
+  assert.match(translations.en.loginAwaitingApproval, /Staff review/)
+  assert.match(fil.loginAwaitingApproval, /pagsusuri ng mga kawani/)
   assert.equal(fil.requestStatusTracker, 'Pagsubaybay sa kalagayan ng kahilingan')
   assert.equal(fil.requestHistory, 'Kasaysayan ng mga kahilingan')
   assert.equal(fil.requestStatusHistory, 'Kasaysayan ng kalagayan')
@@ -60,7 +68,7 @@ test('Filipino resident, staff, and admin dashboard copy is localized', () => {
   const { fil } = translations
 
   assert.equal(fil.residentDetailsComplete, 'Kumpleto na ang mga detalye ng residente')
-  assert.equal(fil.waitingForAdminVerification, 'Naghihintay ng beripikasyon ng administrador')
+  assert.equal(fil.waitingForStaffReview, 'Naghihintay ng pagsusuri ng mga kawani ng barangay')
   assert.equal(fil.noRequestSubmitted, 'Wala pang isinumiteng kahilingan')
   assert.equal(fil.noRequestsMatchFilters, 'Walang kahilingang tumutugma sa mga piniling filter.')
   assert.equal(fil.staffNoteFor, 'Tala ng kawani para sa {service}')

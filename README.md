@@ -7,7 +7,7 @@
 - [Resident, Staff, and Administrator user manual](./docs/user-manual.md)
 - [Database upgrade and cutover manual](./docs/database-upgrade-manual.md)
 
-The staff registry includes CSV batch import and an optional in-browser OCR assistant for JPEG, PNG, and WebP page images. OCR runs using locally served worker/model assets; it does not upload scans to a recognition service or auto-fill/import records. Staff must manually prepare each row, compare it with the source, and explicitly import it as pending. Build and dev scripts prepare the OCR assets from the pinned npm packages. This feature does not change the current production status or authorize real-data entry before encryption and backup controls are verified.
+The staff registry includes CSV batch import and an optional in-browser document scanner for JPEG, PNG, and WebP page images. Staff can choose existing images, use the phone's camera picker, or open a live rear-camera preview and capture pages directly. Live camera access requires HTTPS (or localhost on the same device) and explicit browser permission. OCR runs using locally served worker/model assets; it does not upload scans to a recognition service or auto-fill/import records. Staff must manually prepare each row, compare it with the source, and explicitly import it as pending. Build and dev scripts prepare the OCR assets from the pinned npm packages. This feature does not change the current production status or authorize real-data entry before encryption and backup controls are verified.
 
 ## Role boundaries
 

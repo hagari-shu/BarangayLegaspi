@@ -1,12 +1,22 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
+  createCameraScanFile,
   MAX_SCAN_FILE_SIZE,
   MAX_SCAN_FILES,
   validateResidentScanFiles,
 } from '../src/registry-scan.js'
 
 const image = (size, type = 'image/jpeg') => ({ size, type })
+
+test('camera captures become JPEG scan files with stable timestamps', () => {
+  const captured = createCameraScanFile(new Blob(['captured page'], { type: 'image/jpeg' }), 1234)
+
+  assert.equal(captured.name, 'camera-page-1234.jpg')
+  assert.equal(captured.type, 'image/jpeg')
+  assert.equal(captured.size, 13)
+  assert.equal(validateResidentScanFiles([captured]), '')
+})
 
 test('document scanner accepts supported images within file and batch limits', () => {
   assert.equal(validateResidentScanFiles([image(MAX_SCAN_FILE_SIZE), image(1, 'image/png')]), '')

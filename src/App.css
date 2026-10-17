@@ -8409,6 +8409,18 @@ button.staff-metric-card:focus-visible,
   min-height: 0.65rem;
 }
 
+.registry-scan-camera {
+  display: block;
+  width: min(100%, 48rem);
+  max-height: 65vh;
+  min-height: 12rem;
+  justify-self: center;
+  border: 1px solid #344955;
+  border-radius: 0.6rem;
+  background: #101820;
+  object-fit: contain;
+}
+
 .registry-scan-page,
 .registry-scan-row {
   display: grid;
