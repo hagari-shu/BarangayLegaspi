@@ -20,6 +20,12 @@ class ApiContractTest extends TestCase
             ->assertJsonPath('storage', 'sqlite');
     }
 
+    public function test_root_redirects_to_api_health_instead_of_rendering_a_blade_page(): void
+    {
+        $this->get('/')
+            ->assertRedirect('/api/health');
+    }
+
     public function test_client_error_reports_log_only_allowlisted_metadata(): void
     {
         Log::shouldReceive('warning')
