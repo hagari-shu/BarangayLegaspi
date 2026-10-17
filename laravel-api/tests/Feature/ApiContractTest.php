@@ -753,7 +753,7 @@ class ApiContractTest extends TestCase
                 'firstName' => 'Marco',
                 'lastName' => 'Reyes',
                 'birthDate' => null,
-                'sex' => null,
+                'sex' => 'Male',
                 'household' => 'Household 3A',
                 'zone' => '3',
                 'maritalStatus' => 'Single',
