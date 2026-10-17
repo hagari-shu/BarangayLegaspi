@@ -2485,7 +2485,7 @@ function SettingsPage({ profile, onLogout, language, setLanguage }) {
 
 function StaffPage({ staffMembers = [], announcements = [], currentUser, userRole = 'staff', onProcessRequest, onLogout, language, setLanguage }) {
   const t = translations[language] || translations.en
-  const [activeTab, setActiveTab] = useState('monitor')
+  const [activeTab, setActiveTab] = useState('residents')
   const [openRequestPanel, setOpenRequestPanel] = useState('queue')
   const [queueSearch, setQueueSearch] = useState('')
   const [debouncedQueueSearch, setDebouncedQueueSearch] = useState('')
@@ -2504,7 +2504,6 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
   const [dashboardTotal, setDashboardTotal] = useState(0)
   const [dashboardLoading, setDashboardLoading] = useState(true)
   const [dashboardError, setDashboardError] = useState('')
-  const [dashboardUpdatedAt, setDashboardUpdatedAt] = useState(null)
   const [dashboardRefreshKey, setDashboardRefreshKey] = useState(0)
   const [showQueueFilters, setShowQueueFilters] = useState(false)
   const [reportRefreshKey, setReportRefreshKey] = useState(0)
@@ -2518,13 +2517,14 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
   const [reportExporting, setReportExporting] = useState(false)
   const [reportExportError, setReportExportError] = useState('')
   const [reportValidationError, setReportValidationError] = useState('')
-  const [todayDate] = useState(() => new Date())
   const [requestStatusDrafts, setRequestStatusDrafts] = useState({})
   const [requestStatusNotes, setRequestStatusNotes] = useState({})
   const [selectedUser, setSelectedUser] = useState(null)
   const [archiveFiles, setArchiveFiles] = useState([])
   const [archiveStatus, setArchiveStatus] = useState(null)
   const [archiving, setArchiving] = useState(false)
+  const [restoringArchive, setRestoringArchive] = useState('')
+  const [restoreStatus, setRestoreStatus] = useState('')
   const [activeRecordsPanel, setActiveRecordsPanel] = useState(null)
   const [selectedRequest, setSelectedRequest] = useState(null)
   const [selectedArchive, setSelectedArchive] = useState(null)
@@ -2533,12 +2533,6 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
   const [residentAccountApprovalsLoading, setResidentAccountApprovalsLoading] = useState(false)
   const [residentAccountApprovalsError, setResidentAccountApprovalsError] = useState('')
   const [residentAccountApprovalsRefresh, setResidentAccountApprovalsRefresh] = useState(0)
-  const [monitorRefreshKey, setMonitorRefreshKey] = useState(0)
-  const [monitorData, setMonitorData] = useState({ registry: null, announcements: null, events: null })
-  const [monitorErrors, setMonitorErrors] = useState({})
-  const [monitorLoading, setMonitorLoading] = useState(false)
-  const [monitorUpdatedAt, setMonitorUpdatedAt] = useState(null)
-
   useEffect(() => {
     const timeout = window.setTimeout(() => setDebouncedQueueSearch(queueSearch.trim()), 300)
     return () => window.clearTimeout(timeout)
@@ -2572,56 +2566,9 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
     }
   }, [activeTab, userRole, residentAccountApprovalsRefresh])
 
-  useEffect(() => {
-    if (activeTab !== 'monitor') return undefined
-    const controller = new AbortController()
-    let active = true
-    const loadMonitorData = async () => {
-      setMonitorLoading(true)
-      setMonitorErrors({})
-      const endpoints = {
-        registry: '/staff/demographics',
-        announcements: '/announcements',
-        events: '/events',
-      }
-      const results = await Promise.allSettled(Object.entries(endpoints).map(async ([key, path]) => {
-        const response = await fetch(`${API_BASE}${path}`, { signal: controller.signal })
-        const data = await response.json().catch(() => ({}))
-        if (!response.ok) throw new Error(data.message || t.monitorDataUnavailable)
-        if (key === 'registry' && (!data.overall || typeof data.overall.total !== 'number')) {
-          throw new Error(t.monitorDataUnavailable)
-        }
-        if (key !== 'registry' && !Array.isArray(data[key])) throw new Error(t.monitorDataUnavailable)
-        return [key, key === 'registry' ? data : data[key]]
-      }))
-      if (active) {
-        const nextData = { registry: null, announcements: null, events: null }
-        const nextErrors = {}
-        results.forEach((result, index) => {
-          const key = Object.keys(endpoints)[index]
-          if (result.status === 'fulfilled') {
-            const [resultKey, value] = result.value
-            nextData[resultKey] = value
-          } else if (result.reason.name !== 'AbortError') {
-            console.error(`load staff monitoring ${key} failed`, result.reason)
-            nextErrors[key] = result.reason.message || t.monitorDataUnavailable
-          }
-        })
-        setMonitorData(nextData)
-        setMonitorErrors(nextErrors)
-        setMonitorUpdatedAt(new Date())
-        setMonitorLoading(false)
-      }
-    }
-    loadMonitorData()
-    return () => {
-      active = false
-      controller.abort()
-    }
-  }, [activeTab, monitorRefreshKey, t.monitorDataUnavailable])
-
   const effectiveQueueStatus = activeTab === 'approvals' ? 'Approved' : queueStatus
   useEffect(() => {
+    if (activeTab !== 'queue' && activeTab !== 'approvals') return undefined
     let active = true
     const loadingTimer = window.setTimeout(() => {
       if (active) {
@@ -2651,7 +2598,6 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
           setDashboardSummary(data.summary || { total: 0, pending: 0, inReview: 0, needsInformation: 0, approved: 0, rejected: 0 })
           setDashboardDocumentTypes(Array.isArray(data.documentTypes) ? data.documentTypes : [])
           setDashboardTotal(Number(data.total) || 0)
-          setDashboardUpdatedAt(new Date())
           setDashboardError('')
         }
       } catch (error) {
@@ -2667,7 +2613,7 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
       active = false
       window.clearTimeout(loadingTimer)
     }
-  }, [debouncedQueueSearch, effectiveQueueStatus, queueZone, queueType, queueFrom, queueTo, queueSort, queueDirection, queuePage, queuePageSize, dashboardRefreshKey, t.requestDashboardUnavailable])
+  }, [activeTab, debouncedQueueSearch, effectiveQueueStatus, queueZone, queueType, queueFrom, queueTo, queueSort, queueDirection, queuePage, queuePageSize, dashboardRefreshKey, t.requestDashboardUnavailable])
 
   useEffect(() => {
     if (activeTab !== 'reports' || reportValidationError) return undefined
@@ -2722,13 +2668,6 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
     { value: 'Rejected', label: t.statusRejected, count: Number(dashboardSummary.rejected) || 0 },
     { value: 'all', label: t.allStatuses, count: totalRequests },
   ]
-
-  const setQueueFilter = (status) => {
-    setActiveTab('queue')
-    setQueueStatus(status)
-    setQueuePage(1)
-    setOpenRequestPanel('queue')
-  }
 
   const clearQueueFilters = () => {
     setQueueSearch('')
@@ -2916,14 +2855,16 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
     }
   }, [activeTab])
 
-  const handleArchiveQueue = async (days = 1) => {
+  const handleArchiveQueue = async () => {
+    if (!window.confirm(t.archiveConfirm)) return
     setArchiving(true)
     setArchiveStatus(null)
+    setRestoreStatus('')
     try {
       const response = await fetch(`${API_BASE}/staff/archive-requests`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ days }),
+        body: JSON.stringify({ days: 0 }),
       })
       const data = await response.json().catch(() => ({}))
       if (!response.ok) {
@@ -2936,6 +2877,31 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
       alert(error.message || 'Archive failed')
     } finally {
       setArchiving(false)
+    }
+  }
+
+  const handleRestoreArchive = async (filename) => {
+    const prompt = t.restoreConfirm.replace('{filename}', filename)
+    if (!window.confirm(prompt)) return
+    setRestoringArchive(filename)
+    setRestoreStatus('')
+    try {
+      const response = await fetch(`${API_BASE}/staff/archive-requests/restore`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filename }),
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(data.message || 'Unable to restore archived requests.')
+      setRestoreStatus(t.archiveRestored
+        .replace('{count}', String(data.restore?.restoredCount || 0))
+        .replace('{conflicts}', String(data.restore?.conflictCount || 0)))
+      await loadArchiveFiles()
+    } catch (error) {
+      console.error('staff archive restore error', error)
+      alert(error.message || 'Unable to restore archived requests.')
+    } finally {
+      setRestoringArchive('')
     }
   }
 
@@ -2961,23 +2927,6 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
       <main className="dashboard-main staff-dashboard-main">
         <aside className="sidebar" aria-label={t.staffNavigationLabel}>
           <nav className="sidebar-nav" aria-label={t.staffNavigationLabel}>
-            <span className="staff-navigation-group">{t.staffMonitorGroup}</span>
-            <button
-              type="button"
-              className={`nav-item ${activeTab === 'monitor' ? 'active' : ''}`}
-              aria-current={activeTab === 'monitor' ? 'page' : undefined}
-              onClick={() => setActiveTab('monitor')}
-            >
-              <span className="nav-icon">📡</span><span>{t.staffSystemMonitor}</span>
-            </button>
-            <button
-              type="button"
-              className={`nav-item ${activeTab === 'queue' ? 'active' : ''}`}
-              aria-current={activeTab === 'queue' ? 'page' : undefined}
-              onClick={() => setActiveTab('queue')}
-            >
-              <span className="nav-icon">📄</span><span>{t.staffDashboardTitle}</span>
-            </button>
             <span className="staff-navigation-group">{t.staffResidentGroup}</span>
             <button
               type="button"
@@ -3008,6 +2957,14 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
             <span className="staff-navigation-group">{t.staffServiceGroup}</span>
             <button
               type="button"
+              className={`nav-item ${activeTab === 'queue' ? 'active' : ''}`}
+              aria-current={activeTab === 'queue' ? 'page' : undefined}
+              onClick={() => setActiveTab('queue')}
+            >
+              <span className="nav-icon">📄</span><span>{t.staffDashboardTitle}</span>
+            </button>
+            <button
+              type="button"
               className={`nav-item ${activeTab === 'reports' ? 'active' : ''}`}
               aria-current={activeTab === 'reports' ? 'page' : undefined}
               onClick={() => setActiveTab('reports')}
@@ -3030,10 +2987,6 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
             >
               <span className="nav-icon">👥</span><span>{t.staffDirectory}</span>
             </button>
-            <span className="staff-navigation-group">{t.staffAdminGroup}</span>
-            <Link className="nav-item" to="/admin" aria-label={t.staffAdminAccessNote}>
-              <span className="nav-icon">🔒</span><span>{t.staffAdminPortal}</span>
-            </Link>
           </nav>
         </aside>
 
@@ -3044,141 +2997,21 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
           <div className="welcome-row">
             <div>
               <p className="eyebrow">{t.operations}</p>
-              <h1>{activeTab === 'monitor' ? t.staffSystemMonitor : activeTab === 'queue' ? t.staffDashboardTitle : activeTab === 'reports' ? t.serviceReports : activeTab === 'announcements' ? t.announcements : activeTab === 'staff' ? t.staffDirectory : activeTab === 'residents' ? (language === 'fil' ? 'Talaan ng residente' : 'Resident registry') : activeTab === 'account-approvals' ? t.residentAccountApprovals : t.approvalsManagement}</h1>
-              {activeTab === 'monitor' && <p className="staff-dashboard-subtitle">{t.staffMonitorSubtitle}</p>}
-              {activeTab === 'queue' && <p className="staff-dashboard-subtitle">{t.staffDashboardSubtitle}</p>}
+              <h1>{activeTab === 'queue' ? t.staffDashboardTitle : activeTab === 'reports' ? t.serviceReports : activeTab === 'announcements' ? t.announcements : activeTab === 'staff' ? t.staffDirectory : activeTab === 'residents' ? (language === 'fil' ? 'Talaan ng residente' : 'Resident registry') : activeTab === 'account-approvals' ? t.residentAccountApprovals : t.approvalsManagement}</h1>
             </div>
-            {activeTab === 'monitor' ? (
-              <div className="staff-dashboard-meta">
-                <span>{t.monitorCheckedAt}: {monitorUpdatedAt ? new Intl.DateTimeFormat(language === 'fil' ? 'fil-PH' : 'en-PH', { hour: 'numeric', minute: '2-digit', timeZone: 'Asia/Manila' }).format(monitorUpdatedAt) : '—'}</span>
-                <button className="secondary-btn small" type="button" disabled={monitorLoading} onClick={() => { setMonitorRefreshKey((current) => current + 1); setDashboardRefreshKey((current) => current + 1) }}>
-                  {monitorLoading ? t.working : t.refreshMonitor}
-                </button>
-              </div>
-            ) : activeTab === 'queue' ? (
-              <div className="staff-dashboard-meta">
-                <span>{new Intl.DateTimeFormat(language === 'fil' ? 'fil-PH' : 'en-PH', { dateStyle: 'full', timeZone: 'Asia/Manila' }).format(todayDate)}</span>
-                <span>{t.lastUpdated}: {dashboardUpdatedAt ? new Intl.DateTimeFormat(language === 'fil' ? 'fil-PH' : 'en-PH', { hour: 'numeric', minute: '2-digit', timeZone: 'Asia/Manila' }).format(dashboardUpdatedAt) : '—'}</span>
-                <button className="secondary-btn small" type="button" disabled={dashboardLoading} onClick={() => setDashboardRefreshKey((current) => current + 1)}>
-                  {dashboardLoading ? t.loadingRequests : t.refreshRequests}
-                </button>
-              </div>
-            ) : <span className="counter-pill">
-              {activeTab === 'reports'
-                ? reportLoading ? t.working : Number(reportData?.summary.received || 0)
-                : activeTab === 'account-approvals' ? residentAccountApprovals.length
-                  : activeTab === 'approvals' ? approvedCount : totalRequests}
-              {' '}{activeTab === 'account-approvals' ? t.residentAccountApprovals : activeTab === 'approvals' ? t.processed : t.requests}
-            </span>}
+            {(activeTab === 'queue' || activeTab === 'approvals') && (
+              <span className="counter-pill">
+                {activeTab === 'approvals' ? approvedCount : totalRequests}
+                {' '}{activeTab === 'approvals' ? t.processed : t.requests}
+              </span>
+            )}
           </div>
-
-          {activeTab === 'queue' && <div className="stats-grid staff-dashboard-metrics" aria-label={t.staffSummaryLabel}>
-            <button className="stat-card staff-metric-card accent" type="button" onClick={() => setQueueFilter('Pending')}>
-              <span className="label">{t.pendingReviewMetric}</span>
-              <span className="stat-number">{pendingCount}</span>
-              <span className="staff-metric-description">{t.pendingReviewDescription}</span>
-            </button>
-            <button className="stat-card staff-metric-card" type="button" onClick={() => setQueueFilter('In Review')}>
-              <span className="label">{t.inProcessingMetric}</span>
-              <span className="stat-number">{inReviewCount}</span>
-              <span className="staff-metric-description">{t.inProcessingDescription}</span>
-            </button>
-            <article className="stat-card staff-metric-card unavailable">
-              <span className="label">{t.readyForReleaseMetric}</span>
-              <span className="stat-number" aria-label={t.systemUnknown}>—</span>
-              <span className="staff-metric-description">{t.releaseStageNotTracked}</span>
-            </article>
-            <article className="stat-card staff-metric-card unavailable">
-              <span className="label">{t.overdueRequestsMetric}</span>
-              <span className="stat-number" aria-label={t.systemUnknown}>—</span>
-              <span className="staff-metric-description">{t.deadlinesNotTracked}</span>
-            </article>
-          </div>}
 
           <div className="dashboard-body">
             <div className="main-column">
-              {activeTab === 'monitor' && (
-                <section className="staff-monitor" aria-label={t.staffSystemMonitor} aria-busy={monitorLoading}>
-                  <p className="staff-monitor-privacy">{t.staffMonitorPrivacy}</p>
-                  <div className="staff-monitor-grid">
-                    <article className="panel-card staff-monitor-card">
-                      <div className="panel-header"><h2>{t.monitorRequests}</h2></div>
-                      {dashboardError ? <p className="registry-message error" role="alert">{dashboardError}</p> : dashboardLoading ? <p role="status">{t.loadingRequests}</p> : (
-                        <>
-                          <dl className="staff-monitor-counts">
-                            <div><dt>{t.pendingReviewMetric}</dt><dd>{pendingCount.toLocaleString()}</dd></div>
-                            <div><dt>{t.inProcessingMetric}</dt><dd>{inReviewCount.toLocaleString()}</dd></div>
-                            <div><dt>{t.statusNeedsInformation}</dt><dd>{needsInformationCount.toLocaleString()}</dd></div>
-                            <div><dt>{t.requests}</dt><dd>{totalRequests.toLocaleString()}</dd></div>
-                          </dl>
-                          <button type="button" className="secondary-btn small" onClick={() => setActiveTab('queue')}>{t.openRequestQueue}</button>
-                        </>
-                      )}
-                    </article>
-                    <article className="panel-card staff-monitor-card">
-                      <div className="panel-header"><h2>{t.monitorRegistry}</h2></div>
-                      {monitorErrors.registry ? <p className="registry-message error" role="alert">{monitorErrors.registry}</p> : monitorData.registry ? (
-                        <>
-                          <p className="staff-monitor-primary-count">{monitorData.registry.overall.total.toLocaleString()}</p>
-                          <p>{t.monitorVerifiedPopulation}</p>
-                          <p className="soft-label">{monitorData.registry.eligibility}</p>
-                          <button type="button" className="secondary-btn small" onClick={() => setActiveTab('residents')}>{t.openRegistry}</button>
-                        </>
-                      ) : <p role="status">{monitorLoading ? t.working : t.monitorNoData}</p>}
-                    </article>
-                    <article className="panel-card staff-monitor-card">
-                      <div className="panel-header"><h2>{t.announcements}</h2></div>
-                      {monitorErrors.announcements ? <p className="registry-message error" role="alert">{monitorErrors.announcements}</p> : monitorData.announcements ? (
-                        <>
-                          <p className="staff-monitor-primary-count">{monitorData.announcements.length.toLocaleString()}</p>
-                          <p>{t.monitorAnnouncementsCount}</p>
-                          <button type="button" className="secondary-btn small" onClick={() => setActiveTab('announcements')}>{t.openAnnouncements}</button>
-                        </>
-                      ) : <p role="status">{monitorLoading ? t.working : t.monitorNoData}</p>}
-                    </article>
-                    <article className="panel-card staff-monitor-card">
-                      <div className="panel-header"><h2>{t.monitorEvents}</h2></div>
-                      {monitorErrors.events ? <p className="registry-message error" role="alert">{monitorErrors.events}</p> : monitorData.events ? (
-                        <>
-                          <p className="staff-monitor-primary-count">{monitorData.events.length.toLocaleString()}</p>
-                          <p>{t.monitorEventsCount}</p>
-                          {monitorData.events.length === 0 && <p className="soft-label">{t.monitorNoEvents}</p>}
-                        </>
-                      ) : <p role="status">{monitorLoading ? t.working : t.monitorNoData}</p>}
-                    </article>
-                  </div>
-                </section>
-              )}
               {activeTab === 'residents' && <StaffRegistryPanel language={language} />}
               {activeTab === 'queue' && (
                 <>
-                <section className="panel-card needs-attention" aria-labelledby="needs-attention-title">
-                  <div className="panel-header left-align">
-                    <h2 id="needs-attention-title">{t.needsAttention}</h2>
-                  </div>
-                  <div className="attention-items">
-                    {pendingCount > 0 && (
-                      <button type="button" onClick={() => setQueueFilter('Pending')}>
-                        <strong>{pendingCount}</strong><span>{t.pendingReviewMetric}</span><small>{t.pendingAttentionDescription}</small>
-                      </button>
-                    )}
-                    {inReviewCount > 0 && (
-                      <button type="button" onClick={() => setQueueFilter('In Review')}>
-                        <strong>{inReviewCount}</strong><span>{t.inProcessingMetric}</span><small>{t.reviewAttentionDescription}</small>
-                      </button>
-                    )}
-                    {needsInformationCount > 0 && (
-                      <button type="button" onClick={() => setQueueFilter('Needs Information')}>
-                        <strong>{needsInformationCount}</strong><span>{t.statusNeedsInformation}</span><small>{t.informationAttentionDescription}</small>
-                      </button>
-                    )}
-                    {!dashboardLoading && !dashboardError && pendingCount + inReviewCount + needsInformationCount === 0 && (
-                      <p className="attention-empty">{t.attentionEmpty}</p>
-                    )}
-                  </div>
-                  <p className="workflow-limit-notice">{t.noReleaseOrDeadlineTracking}</p>
-                </section>
-
                 <article className="panel-card" id="staff-request-queue">
                   <button
                     type="button"
@@ -3692,7 +3525,7 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
               )}
             </div>
 
-            <aside className="side-column" hidden={activeTab === 'monitor' || activeTab === 'residents' || activeTab === 'reports' || activeTab === 'announcements' || activeTab === 'staff' || activeTab === 'account-approvals'}>
+            <aside className="side-column" hidden={activeTab === 'residents' || activeTab === 'reports' || activeTab === 'announcements' || activeTab === 'staff' || activeTab === 'account-approvals'}>
               <article className="panel-card stack-card records-panel">
                 <div className="panel-header left-align">
                   <h2>{t.records}</h2>
@@ -3747,12 +3580,12 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
                     <div className="record-dedicated-space">
                       <div className="record-details archive-record-details">
                         <div className="archive-inline-actions">
-                          <button type="button" className="secondary-btn small" onClick={() => handleArchiveQueue(1)} disabled={archiving}>{t.archiveLastDay}</button>
-                          <button type="button" className="primary-btn small" onClick={() => handleArchiveQueue(0)} disabled={archiving}>{t.storeToday}</button>
+                          <button type="button" className="primary-btn small" onClick={handleArchiveQueue} disabled={archiving}>{t.storeToday}</button>
                         </div>
                         {archiveStatus && (
-                          <p className="archive-note">{t.archiveSummary.replace('{count}', String(archiveStatus.count || 0)).replace('{date}', new Date(archiveStatus.archivedAt || Date.now()).toLocaleDateString(language === 'fil' ? 'fil-PH' : 'en-PH'))}</p>
+                          <p className="archive-note">{t.archiveSummary.replace('{count}', String(archiveStatus.count || 0)).replace('{remaining}', String(archiveStatus.remaining || 0)).replace('{date}', new Date(archiveStatus.archivedAt || Date.now()).toLocaleDateString(language === 'fil' ? 'fil-PH' : 'en-PH'))}</p>
                         )}
+                        {restoreStatus && <p className="archive-note" role="status">{restoreStatus}</p>}
                         <div className="archive-list">
                           {archiveFiles.length > 0 ? archiveFiles.map((file) => (
                             <div key={file.name} className="archive-item">
@@ -3763,6 +3596,7 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
                               <div className="archive-actions">
                                   <button type="button" className="small-action secondary" onClick={() => handleArchiveFile(file.name)}>View</button>
                                   <button type="button" className="small-action success" onClick={() => handleArchiveFile(file.name, true)}>Download</button>
+                                  {file.name.startsWith('queue-approvals-') && <button type="button" className="small-action secondary" onClick={() => handleRestoreArchive(file.name)} disabled={Boolean(restoringArchive) || archiving}>{restoringArchive === file.name ? t.restoringArchive : t.restoreArchive}</button>}
                               </div>
                             </div>
                           )) : (

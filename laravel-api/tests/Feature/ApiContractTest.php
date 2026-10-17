@@ -539,6 +539,13 @@ class ApiContractTest extends TestCase
             'password' => 'Resident!2026Pass',
         ])->assertOk();
 
+        $this->withToken($staff->json('token'))
+            ->postJson('/api/staff/residents', ['firstName' => 'Unknown', 'lastName' => 'Sex', 'sex' => 'Unclassified'])
+            ->assertBadRequest();
+        $this->withToken($staff->json('token'))
+            ->postJson('/api/staff/residents', ['firstName' => 'Missing', 'lastName' => 'Sex'])
+            ->assertBadRequest();
+
         DB::table('resident_registry')->insert([
             $this->encryptedRegistryFixture(
                 '00000000-0000-4000-8000-000000000101',
@@ -595,7 +602,7 @@ class ApiContractTest extends TestCase
             ->assertJsonPath('overall.total', 2)
             ->assertJsonPath('overall.male', 1)
             ->assertJsonPath('overall.female', 1)
-            ->assertJsonPath('overall.unclassified', 0)
+            ->assertJsonMissingPath('overall.unclassified')
             ->assertJsonPath('overall.households', 1)
             ->assertJsonPath('byPurok.0.label', 'Purok 3 Daya')
             ->assertJsonPath('byPurok.0.total', 2)
@@ -630,14 +637,40 @@ class ApiContractTest extends TestCase
             'lastName' => 'Reyes',
             'birthDate' => '1990-04-12',
             'sex' => 'Female',
-            'householdId' => 'HH-5',
+            'household' => 'Household 5',
+            'householdId' => 'Legacy household value',
+            'maritalStatus' => 'Married',
+            'occupation' => 'Teacher',
             'purok' => 'Purok 5',
             'zone' => 5,
             'sourceReference' => 'Register page 4 row 2',
         ])->assertCreated()
             ->assertJsonPath('resident.verificationStatus', 'pending')
+            ->assertJsonPath('resident.household', 'Household 5')
+            ->assertJsonPath('resident.maritalStatus', 'Married')
+            ->assertJsonPath('resident.occupation', 'Teacher')
             ->assertJsonPath('reviewRequired', true);
         $id = $created->json('resident.id');
+
+        $storedResident = DB::table('resident_registry')->where('id', $id)->first();
+        $this->assertStringNotContainsString('Household 5', $storedResident->encrypted_data);
+        $this->assertStringNotContainsString('Married', $storedResident->encrypted_data);
+        $this->assertStringNotContainsString('Teacher', $storedResident->encrypted_data);
+        $this->withToken($token)->patchJson('/api/staff/residents/'.$id, [
+            'household' => 'Household 6',
+            'householdId' => 'Ignored legacy value',
+            'maritalStatus' => 'Single',
+            'occupation' => 'Nurse',
+        ])->assertOk()
+            ->assertJsonPath('resident.household', 'Household 6')
+            ->assertJsonPath('resident.householdId', 'Household 6')
+            ->assertJsonPath('resident.maritalStatus', 'Single')
+            ->assertJsonPath('resident.occupation', 'Nurse');
+
+        $storedResident = DB::table('resident_registry')->where('id', $id)->first();
+        $this->assertStringNotContainsString('Household 6', $storedResident->encrypted_data);
+        $this->assertStringNotContainsString('Single', $storedResident->encrypted_data);
+        $this->assertStringNotContainsString('Nurse', $storedResident->encrypted_data);
 
         $this->withToken($token)->getJson('/api/staff/demographics?zone=5')->assertOk()->assertJsonPath('overall.total', 0);
         $this->withToken($token)->patchJson('/api/staff/residents/'.$id.'/verify', ['verificationStatus' => 'verified'])
@@ -710,9 +743,10 @@ class ApiContractTest extends TestCase
                 'lastName' => 'Reyes',
                 'birthDate' => '1988-02-29',
                 'sex' => 'Female',
-                'householdId' => 'HH-03-01',
+                'household' => 'Household 3A',
                 'zone' => '3',
-                'purok' => 'Purok 3 Daya',
+                'maritalStatus' => 'Married',
+                'occupation' => 'Teacher',
                 'sourceReference' => 'Page 1 row 2',
             ],
             [
@@ -720,9 +754,10 @@ class ApiContractTest extends TestCase
                 'lastName' => 'Reyes',
                 'birthDate' => null,
                 'sex' => null,
-                'householdId' => 'HH-03-01',
+                'household' => 'Household 3A',
                 'zone' => '3',
-                'purok' => 'Purok 3 Daya',
+                'maritalStatus' => 'Single',
+                'occupation' => 'Farmer',
                 'sourceReference' => 'Page 1 row 3',
             ],
         ];
@@ -749,7 +784,16 @@ class ApiContractTest extends TestCase
         $this->assertSame('pending', $storedResident->verification_status);
         $this->assertStringNotContainsString('Lina', $storedResident->encrypted_data);
         $this->assertSame('Lina', ResidentRegistryData::decrypt($storedResident)['firstName']);
+        $this->assertSame('Household 3A', ResidentRegistryData::decrypt($storedResident)['householdId']);
+        $this->assertSame('Married', ResidentRegistryData::decrypt($storedResident)['maritalStatus']);
+        $this->assertSame('Teacher', ResidentRegistryData::decrypt($storedResident)['occupation']);
         $this->assertSame('purok-3-roster.csv', ResidentRegistryData::decrypt($storedResident)['sourceFilename']);
+        $this->withToken($token)->getJson('/api/staff/residents?maritalStatus=Married&occupation=Teacher')
+            ->assertOk()
+            ->assertJsonPath('total', 1)
+            ->assertJsonPath('residents.0.household', 'Household 3A')
+            ->assertJsonPath('residents.0.maritalStatus', 'Married')
+            ->assertJsonPath('residents.0.occupation', 'Teacher');
 
         $duplicate = $this->withToken($token)->postJson('/api/staff/residents/import', [
             'filename' => 'purok-3-roster.csv',
@@ -765,6 +809,30 @@ class ApiContractTest extends TestCase
         ])->assertCreated()
             ->assertJsonPath('imported', 1);
         $this->assertDatabaseCount('resident_registry', 3);
+
+        $this->withToken($token)->postJson('/api/staff/residents/export-audit', [
+            'count' => 3,
+            'format' => 'csv',
+            'grouping' => 'zone_household_name',
+            'filters' => [
+                'hasSearch' => false,
+                'hasBirthDate' => false,
+                'hasAge' => false,
+                'hasZone' => true,
+                'hasMaritalStatusFilter' => false,
+                'hasOccupationFilter' => false,
+            ],
+        ])->assertOk()->assertJsonPath('success', true);
+        $exportLog = DB::table('audit_logs')->where('action', 'resident_registry.exported')->first();
+        $this->assertNotNull($exportLog);
+        $this->assertStringNotContainsString('Lina', $exportLog->metadata);
+        $this->assertStringNotContainsString('Household 3A', $exportLog->metadata);
+        $this->withToken($token)->postJson('/api/staff/residents/export-audit', [
+            'count' => 1,
+            'format' => 'csv',
+            'grouping' => 'name',
+            'filters' => [],
+        ])->assertBadRequest();
 
         $this->withToken($token)->postJson('/api/staff/residents/print-audit', [
             'count' => 3,

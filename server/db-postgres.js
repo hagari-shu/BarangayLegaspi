@@ -2,7 +2,14 @@ import { randomUUID } from 'node:crypto'
 import pg from 'pg'
 import { hashPassword } from './auth.js'
 import { ADMIN_SEED, IS_PRODUCTION, SHOULD_SKIP_SEED } from './config.js'
-import { decryptResidentPrivateData, encryptResidentPrivateData } from './resident-registry-crypto.js'
+import {
+  createResidentNameSearchTokens,
+  decryptResidentPrivateData,
+  encryptResidentPrivateData,
+  residentNameSearchCandidates,
+  residentNameSearchKeyIds,
+  residentNameSearchTokensNeedRefresh,
+} from './resident-registry-crypto.js'
 
 const { Pool } = pg
 const databaseUrl = process.env.DATABASE_URL?.replace(/[?&]sslmode=[^&]*/i, '')
@@ -261,6 +268,38 @@ export async function initDatabase() {
   await query('CREATE INDEX IF NOT EXISTS resident_registry_location_status_idx ON resident_registry (zone, purok, record_status, verification_status)')
   await query('ALTER TABLE resident_registry ADD COLUMN IF NOT EXISTS encrypted_data TEXT')
   await migrateResidentRegistryPrivateData()
+  await query('ALTER TABLE resident_registry ADD COLUMN IF NOT EXISTS name_search_tokens TEXT[]')
+  await query(`
+    CREATE TABLE IF NOT EXISTS resident_registry_search_key_state (
+      id SMALLINT PRIMARY KEY CHECK (id = 1),
+      key_ids TEXT[] NOT NULL
+    )
+  `)
+  const activeSearchKeyIds = residentNameSearchKeyIds()
+  const searchKeyState = await query('SELECT key_ids FROM resident_registry_search_key_state WHERE id = 1')
+  const searchKeysChanged = !searchKeyState.rows[0]
+    || JSON.stringify(searchKeyState.rows[0].key_ids) !== JSON.stringify(activeSearchKeyIds)
+  const residentsMissingNameTokens = await query(
+    `SELECT id, encrypted_data, name_search_tokens FROM resident_registry
+     WHERE encrypted_data IS NOT NULL${searchKeysChanged ? '' : ' AND name_search_tokens IS NULL'}`
+  )
+  for (const resident of residentsMissingNameTokens.rows) {
+    if (!searchKeysChanged && !residentNameSearchTokensNeedRefresh(resident.name_search_tokens)) continue
+    const privateData = decryptResidentPrivateData(resident.encrypted_data, resident.id)
+    await query(
+      'UPDATE resident_registry SET name_search_tokens = $1 WHERE id = $2',
+      [createResidentNameSearchTokens(privateData.firstName, privateData.lastName), resident.id]
+    )
+  }
+  await query("UPDATE resident_registry SET name_search_tokens = '{}'::text[] WHERE name_search_tokens IS NULL")
+  await query('ALTER TABLE resident_registry ALTER COLUMN name_search_tokens SET DEFAULT \'{}\'::text[]')
+  await query('ALTER TABLE resident_registry ALTER COLUMN name_search_tokens SET NOT NULL')
+  await query('CREATE INDEX IF NOT EXISTS resident_registry_name_search_idx ON resident_registry USING GIN (name_search_tokens)')
+  await query(
+    `INSERT INTO resident_registry_search_key_state (id, key_ids) VALUES (1, $1)
+     ON CONFLICT (id) DO UPDATE SET key_ids = EXCLUDED.key_ids`,
+    [activeSearchKeyIds]
+  )
   await query('DROP INDEX IF EXISTS resident_registry_household_location_idx')
   await query(`
     CREATE TABLE IF NOT EXISTS registry_source_reviews (
@@ -929,44 +968,108 @@ export async function archiveApprovalsOlderThan(days = 30) {
   }
 }
 
-export async function archiveProcessedRequestsOlderThan(days = 1) {
-  const daysValue = Math.max(0, Number(days) || 0)
+export async function archiveProcessedRequestsOlderThan() {
   const client = await pool.connect()
   try {
     await client.query('BEGIN')
     const result = await client.query(
       `SELECT * FROM requests
        WHERE status IN ('Approved', 'Rejected')
-         AND ($1 = 0 OR COALESCE(updated_at, created_at) <= NOW() - ($1 * INTERVAL '1 day'))
        ORDER BY created_at
-       FOR UPDATE`,
-      [daysValue]
+       LIMIT 500
+       FOR UPDATE SKIP LOCKED`
     )
     const records = result.rows.map(normalizeRequest)
     if (records.length === 0) {
+      const remaining = await client.query("SELECT COUNT(*)::int AS total FROM requests WHERE status IN ('Approved', 'Rejected')")
       await client.query('COMMIT')
-      return { count: 0, filename: null, archivedAt: null }
+      return { count: 0, filename: null, archivedAt: null, remaining: Number(remaining.rows[0]?.total) || 0 }
     }
     const archivedAt = new Date().toISOString()
-    const filename = `queue-approvals-${archivedAt.slice(0, 10)}.json`
+    const filename = `queue-approvals-${archivedAt.replace(/[:.]/g, '-')}-${randomUUID()}.json`
     const payload = {
       archivedAt,
-      archivedFor: daysValue === 0 ? 'manual' : `${daysValue} day(s)`,
+      archivedFor: 'manual',
       total: records.length,
       records,
     }
     await client.query(
       `INSERT INTO archives (id, name, category, contents, created_at)
-       VALUES ($1, $2, 'queue-approvals', $3, $4)
-       ON CONFLICT (name) DO UPDATE SET contents = EXCLUDED.contents, created_at = EXCLUDED.created_at`,
+       VALUES ($1, $2, 'queue-approvals', $3, $4)`,
       [randomUUID(), filename, JSON.stringify(payload), archivedAt]
     )
     await client.query('DELETE FROM requests WHERE id = ANY($1::uuid[])', [records.map((request) => request.id)])
+    const remaining = await client.query("SELECT COUNT(*)::int AS total FROM requests WHERE status IN ('Approved', 'Rejected')")
     await client.query('COMMIT')
-    return { count: records.length, filename, archivedAt }
+    return { count: records.length, filename, archivedAt, remaining: Number(remaining.rows[0]?.total) || 0 }
   } catch (error) {
     await client.query('ROLLBACK')
     console.error('PostgreSQL processed request archival failed', error)
+    throw error
+  } finally {
+    client.release()
+  }
+}
+
+export async function restoreArchivedRequests(filename) {
+  if (typeof filename !== 'string' || !/^queue-approvals-[\w.-]+\.json$/.test(filename)) {
+    throw new TypeError('Only queue-approval archives can be restored.')
+  }
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+    const result = await client.query(
+      `SELECT contents FROM archives
+       WHERE name = $1 AND category = 'queue-approvals'
+       FOR UPDATE`,
+      [filename]
+    )
+    const archive = result.rows[0]?.contents
+    if (!archive) {
+      await client.query('ROLLBACK')
+      return null
+    }
+    if (!Array.isArray(archive.records)
+      || archive.records.some((record) => !record || typeof record.id !== 'string'
+        || typeof record.userId !== 'string' || !['Approved', 'Rejected'].includes(record.status))) {
+      throw new TypeError('The selected archive is invalid or does not contain closed requests.')
+    }
+
+    let restoredCount = 0
+    let conflictCount = 0
+    for (const request of archive.records) {
+      const inserted = await client.query(
+        `INSERT INTO requests (
+          id, user_id, type, purpose, notes, status, delivery_method, delivery_note,
+          follow_ups, status_history, created_at, updated_at
+        )
+        SELECT $1, users.id, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11, $12
+        FROM users WHERE users.id = $2
+        ON CONFLICT (id) DO NOTHING
+        RETURNING id`,
+        [
+          request.id,
+          request.userId,
+          request.type,
+          request.purpose,
+          request.notes || '',
+          request.status,
+          request.deliveryMethod || 'online',
+          request.deliveryNote || '',
+          JSON.stringify(request.followUps || []),
+          JSON.stringify(request.statusHistory || []),
+          request.date || request.createdAt || new Date().toISOString(),
+          request.updatedAt || null,
+        ]
+      )
+      if (inserted.rowCount) restoredCount += 1
+      else conflictCount += 1
+    }
+    await client.query('COMMIT')
+    return { restoredCount, conflictCount }
+  } catch (error) {
+    await client.query('ROLLBACK')
+    console.error('PostgreSQL processed request restore failed', error)
     throw error
   } finally {
     client.release()
@@ -1011,8 +1114,11 @@ const normalizeRegistryResident = (record = null) => {
     lastName: privateData.lastName,
     birthDate: privateData.birthDate,
     age: null,
-    sex: privateData.sex || 'Unclassified',
+    sex: privateData.sex || null,
     householdId: privateData.householdId,
+    household: privateData.household ?? privateData.householdId ?? null,
+    maritalStatus: privateData.maritalStatus ?? null,
+    occupation: privateData.occupation ?? null,
     purok: record.purok,
     zone: record.zone === null ? null : Number(record.zone),
     address: privateData.address,
@@ -1037,32 +1143,50 @@ const registryWhere = (filters = {}) => {
   }
   if (filters.zone) add('zone = ?', Number(filters.zone))
   if (filters.purok) add('purok = ?', filters.purok)
+  for (const candidates of residentNameSearchCandidates(filters.search)) {
+    params.push(candidates)
+    clauses.push(`name_search_tokens && $${params.length}::text[]`)
+  }
   return { sql: clauses.length ? `WHERE ${clauses.join(' AND ')}` : '', params }
 }
 
 export async function listResidentRegistry(filters = {}) {
   const where = registryWhere(filters)
-  const result = await query(`SELECT * FROM resident_registry ${where.sql}`, where.params)
-  const terms = String(filters.search || '').toLowerCase().split(/\s+/).filter(Boolean)
-  const residents = result.rows.map(normalizeRegistryResident).filter((resident) => {
-    const fullName = `${resident.firstName} ${resident.lastName}`.toLowerCase()
-    if (terms.some((term) => !fullName.includes(term))) return false
-    if (filters.birthDate && resident.birthDate !== filters.birthDate) return false
-    if (filters.ageStart && filters.ageEnd
-      && (!resident.birthDate || resident.birthDate < filters.ageStart || resident.birthDate > filters.ageEnd)) return false
+  const hasPrivateFieldFilters = Boolean(filters.birthDate || filters.ageStart || filters.ageEnd || filters.maritalStatus || filters.occupation)
+  if (hasPrivateFieldFilters) {
+    const result = await query(`SELECT * FROM resident_registry ${where.sql}`, where.params)
+    const matches = result.rows.map(normalizeRegistryResident).filter((resident) => {
+      if (filters.birthDate && resident.birthDate !== filters.birthDate) return false
+      if (filters.ageStart && filters.ageEnd
+        && (!resident.birthDate || resident.birthDate < filters.ageStart || resident.birthDate > filters.ageEnd)) return false
+      if (filters.maritalStatus && String(resident.maritalStatus || '').trim().toLocaleLowerCase('en') !== filters.maritalStatus.trim().toLocaleLowerCase('en')) return false
+      if (filters.occupation && String(resident.occupation || '').trim().toLocaleLowerCase('en') !== filters.occupation.trim().toLocaleLowerCase('en')) return false
+      return true
+    }).sort((left, right) => (
+      (Number(left.zone ?? 99) - Number(right.zone ?? 99))
+      || String(left.purok || '').localeCompare(String(right.purok || ''))
+      || String(left.lastName || '').localeCompare(String(right.lastName || ''))
+      || String(left.firstName || '').localeCompare(String(right.firstName || ''))
+    ))
+    const offset = (filters.page - 1) * filters.pageSize
+    return {
+      residents: matches.slice(offset, offset + filters.pageSize),
+      total: matches.length,
+    }
+  }
 
-    return true
-  }).sort((left, right) => (
-    (Number(left.zone ?? 99) - Number(right.zone ?? 99))
-    || String(left.purok || '').localeCompare(String(right.purok || ''))
-    || String(left.lastName || '').localeCompare(String(right.lastName || ''))
-    || String(left.firstName || '').localeCompare(String(right.firstName || ''))
-  ))
-  const offset = (filters.page - 1) * filters.pageSize
-
+  const [countResult, result] = await Promise.all([
+    query(`SELECT COUNT(*)::int AS total FROM resident_registry ${where.sql}`, where.params),
+    query(
+      `SELECT * FROM resident_registry ${where.sql}
+       ORDER BY zone NULLS LAST, purok NULLS LAST, id
+       LIMIT $${where.params.length + 1} OFFSET $${where.params.length + 2}`,
+      [...where.params, filters.pageSize, (filters.page - 1) * filters.pageSize]
+    ),
+  ])
   return {
-    residents: residents.slice(offset, offset + filters.pageSize),
-    total: residents.length,
+    residents: result.rows.map(normalizeRegistryResident),
+    total: Number(countResult.rows[0]?.total) || 0,
   }
 }
 
@@ -1078,7 +1202,6 @@ export async function getResidentDemographics(filters = {}, includeHouseholds = 
     total: records.length,
     male: records.filter((item) => String(item.sex || '').toLowerCase() === 'male').length,
     female: records.filter((item) => String(item.sex || '').toLowerCase() === 'female').length,
-    unclassified: records.filter((item) => !['male', 'female'].includes(String(item.sex || '').toLowerCase())).length,
     households: new Set(records.map((item) => item.householdId).filter((id) => id)).size,
   })
   const groups = new Map()
@@ -1103,7 +1226,6 @@ export async function getResidentDemographics(filters = {}, includeHouseholds = 
       total: counts.total,
       male: counts.male,
       female: counts.female,
-      unclassified: counts.unclassified,
       households: counts.households,
     }
   }).sort((left, right) => (left.zone ?? 99) - (right.zone ?? 99) || String(left.purok || '').localeCompare(String(right.purok || '')))
@@ -1117,14 +1239,13 @@ export async function getResidentDemographics(filters = {}, includeHouseholds = 
       total: counts.total,
       male: counts.male,
       female: counts.female,
-      unclassified: counts.unclassified,
     }
   }).sort((left, right) => (left.zone ?? 99) - (right.zone ?? 99)
     || String(left.purok || '').localeCompare(String(right.purok || ''))
     || String(left.householdId || '').localeCompare(String(right.householdId || ''))) : undefined
 
   return {
-    eligibility: 'Active records with verified household/resident status; unclassified sex is reported separately.',
+    eligibility: 'Active records with verified household/resident status.',
     overall: count(eligible),
     byPurok,
     ...(includeHouseholds ? { byHousehold } : {}),
@@ -1159,8 +1280,8 @@ export async function insertRegistryResident(resident) {
   const result = await query(
     `INSERT INTO resident_registry (
       id, first_name, last_name, birth_date, sex, household_id, purok, zone, address,
-      record_status, verification_status, source_reference, source_filename, created_by, created_at, updated_at, encrypted_data
-    ) VALUES ($1, '', '', NULL, NULL, NULL, $2, $3, NULL, 'active', 'pending', NULL, NULL, $4, $5, $5, $6)
+      record_status, verification_status, source_reference, source_filename, created_by, created_at, updated_at, encrypted_data, name_search_tokens
+    ) VALUES ($1, '', '', NULL, NULL, NULL, $2, $3, NULL, 'active', 'pending', NULL, NULL, $4, $5, $5, $6, $7)
     RETURNING *`,
     [
       resident.id,
@@ -1174,10 +1295,13 @@ export async function insertRegistryResident(resident) {
         birthDate: resident.birthDate,
         sex: resident.sex,
         householdId: resident.householdId,
+        maritalStatus: resident.maritalStatus,
+        occupation: resident.occupation,
         address: resident.address,
         sourceReference: resident.sourceReference,
         sourceFilename: resident.sourceFilename,
       }, resident.id),
+      createResidentNameSearchTokens(resident.firstName, resident.lastName),
     ]
   )
   return normalizeRegistryResident(result.rows[0])
@@ -1191,8 +1315,8 @@ export async function insertRegistryResidents(residents, auditEntry) {
       await client.query(
         `INSERT INTO resident_registry (
           id, first_name, last_name, birth_date, sex, household_id, purok, zone, address,
-          record_status, verification_status, source_reference, source_filename, created_by, created_at, updated_at, encrypted_data
-        ) VALUES ($1, '', '', NULL, NULL, NULL, $2, $3, NULL, 'active', 'pending', NULL, NULL, $4, $5, $5, $6)`,
+          record_status, verification_status, source_reference, source_filename, created_by, created_at, updated_at, encrypted_data, name_search_tokens
+        ) VALUES ($1, '', '', NULL, NULL, NULL, $2, $3, NULL, 'active', 'pending', NULL, NULL, $4, $5, $5, $6, $7)`,
         [
           resident.id,
           resident.purok,
@@ -1205,10 +1329,13 @@ export async function insertRegistryResidents(residents, auditEntry) {
             birthDate: resident.birthDate,
             sex: resident.sex,
             householdId: resident.householdId,
+            maritalStatus: resident.maritalStatus,
+            occupation: resident.occupation,
             address: resident.address,
             sourceReference: resident.sourceReference,
             sourceFilename: resident.sourceFilename,
           }, resident.id),
+          createResidentNameSearchTokens(resident.firstName, resident.lastName),
         ]
       )
     }
@@ -1229,23 +1356,57 @@ export async function insertRegistryResidents(residents, auditEntry) {
 }
 
 export async function updateRegistryResident(id, updates) {
+  const privateFields = ['firstName', 'lastName', 'birthDate', 'sex', 'householdId', 'maritalStatus', 'occupation', 'address', 'sourceReference', 'sourceFilename']
   const columns = {
+    purok: 'purok',
+    zone: 'zone',
     verificationStatus: 'verification_status',
     verifiedBy: 'verified_by',
     verifiedAt: 'verified_at',
     status: 'record_status',
   }
-  const entries = Object.entries(updates).filter(([key]) => columns[key])
+  const entries = Object.entries(updates).filter(([key]) => privateFields.includes(key) || columns[key])
   if (!entries.length) return null
-  const values = entries.map(([, value]) => value)
-  const assignments = entries.map(([key], index) => `${columns[key]} = $${index + 1}`)
-  values.push(id)
-  const result = await query(
-    `UPDATE resident_registry SET ${assignments.join(', ')}, updated_at = NOW()
-     WHERE id = $${values.length} RETURNING *`,
-    values
-  )
-  return normalizeRegistryResident(result.rows[0] || null)
+
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+    const existing = await client.query('SELECT * FROM resident_registry WHERE id = $1 FOR UPDATE', [id])
+    if (!existing.rows[0]) {
+      await client.query('COMMIT')
+      return null
+    }
+    const row = existing.rows[0]
+    const privateData = {
+      ...decryptResidentPrivateData(row.encrypted_data, row.id),
+      ...Object.fromEntries(entries.filter(([key]) => privateFields.includes(key))),
+    }
+    const assignments = ['encrypted_data = $1']
+    const values = [encryptResidentPrivateData(privateData, row.id)]
+    const nextFields = Object.fromEntries(entries)
+    if (Object.prototype.hasOwnProperty.call(nextFields, 'firstName') || Object.prototype.hasOwnProperty.call(nextFields, 'lastName')) {
+      assignments.push(`name_search_tokens = $${values.length + 1}`)
+      values.push(createResidentNameSearchTokens(privateData.firstName, privateData.lastName))
+    }
+    for (const [key, value] of entries) {
+      if (!columns[key]) continue
+      assignments.push(`${columns[key]} = $${values.length + 1}`)
+      values.push(value)
+    }
+    values.push(id)
+    const result = await client.query(
+      `UPDATE resident_registry SET ${assignments.join(', ')}, updated_at = NOW()
+       WHERE id = $${values.length} RETURNING *`,
+      values
+    )
+    await client.query('COMMIT')
+    return normalizeRegistryResident(result.rows[0] || null)
+  } catch (error) {
+    await client.query('ROLLBACK')
+    throw error
+  } finally {
+    client.release()
+  }
 }
 
 export async function getActiveEmergencyAccessGrant() {

@@ -38,13 +38,14 @@ test('Filipino role dashboards have translated controls and accessible navigatio
   assert.equal(fil.quickAccessLabel, 'Mabilisang mga link')
   assert.equal(fil.staffNavigationLabel, 'Mga pahina ng kawani')
   assert.equal(fil.adminNavigationLabel, 'Mga pahina ng administrador')
-  assert.equal(fil.staffDashboardTitle, 'Dashboard ng Kawani')
-  assert.equal(translations.en.staffDashboardTitle, 'Staff Dashboard')
+  assert.equal(fil.staffDashboardTitle, 'Mga Kahilingan')
+  assert.equal(translations.en.staffDashboardTitle, 'Requests')
   assert.equal(fil.approvals, 'Mga pag-apruba')
   assert.equal(fil.needsReview, 'Kailangang suriin')
   assert.equal(fil.averageTurnaround, 'Karaniwang tagal ng pagproseso')
   assert.equal(fil.requestQueueSearch, 'Maghanap ayon sa residente, serbisyo, o layunin')
-  assert.equal(fil.archiveLastDay, 'I-archive ang nakalipas na 24 oras')
+  assert.equal(fil.storeToday, 'I-archive ang hanggang 500 saradong kahilingan')
+  assert.ok(fil.restoreArchive)
 })
 
 test('Admin accessibility labels are available in both supported languages', () => {

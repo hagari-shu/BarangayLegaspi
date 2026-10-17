@@ -21,7 +21,7 @@ export function inspectResidentRoster(source) {
   })
   const today = manilaDateKey()
   const sexCounts = { Male: 0, Female: 0 }
-  const incompleteCounts = { birthDate: 0, householdId: 0, zone: 0, purok: 0, address: 0, sourceReference: 0 }
+  const incompleteCounts = { birthDate: 0, household: 0, zone: 0, maritalStatus: 0, occupation: 0, sourceReference: 0 }
   const validationErrors = []
   const seenRecords = new Set()
   let exactDuplicateRows = 0
@@ -49,16 +49,16 @@ export function inspectResidentRoster(source) {
       incompleteCounts.zone += 1
     }
 
-    if ((resident.householdId || '').length > 100
-      || (resident.purok || '').length > 100
-      || (resident.address || '').length > 255
+    if ((resident.household || '').length > 100
+      || (resident.maritalStatus || '').length > 100
+      || (resident.occupation || '').length > 255
       || (resident.sourceReference || '').length > 255) {
       validationErrors.push({ row, field: 'length' })
     }
 
-    if (!resident.householdId) incompleteCounts.householdId += 1
-    if (!resident.purok) incompleteCounts.purok += 1
-    if (!resident.address) incompleteCounts.address += 1
+    if (!resident.household) incompleteCounts.household += 1
+    if (!resident.maritalStatus) incompleteCounts.maritalStatus += 1
+    if (!resident.occupation) incompleteCounts.occupation += 1
     if (!resident.sourceReference) incompleteCounts.sourceReference += 1
 
     sexCounts[resident.sex] += 1

@@ -35,12 +35,15 @@ Route::middleware(['auth.api', 'admin.readonly'])->group(function () {
     Route::post('/staff/residents', [ApiController::class, 'createRegistryResident'])->middleware('staff.emergency:resident-registry.manage');
     Route::post('/staff/residents/import', [ApiController::class, 'importRegistryResidents'])->middleware('staff.emergency:resident-registry.manage');
     Route::post('/staff/residents/print-audit', [ApiController::class, 'auditRegistryPrint'])->middleware('staff.emergency:resident-registry.read');
+    Route::post('/staff/residents/export-audit', [ApiController::class, 'auditRegistryExport'])->middleware('staff.emergency:resident-registry.read');
+    Route::patch('/staff/residents/{id}', [ApiController::class, 'updateRegistryResident'])->middleware('staff.emergency:resident-registry.manage');
     Route::patch('/staff/residents/{id}/verify', [ApiController::class, 'verifyRegistryResident'])->middleware('staff.emergency:resident-registry.manage');
     Route::patch('/staff/residents/{id}/status', [ApiController::class, 'updateRegistryResidentStatus'])->middleware('staff.emergency:resident-registry.manage');
     Route::get('/staff/members', [ApiController::class, 'staffMembers'])->middleware('role:staff,admin');
     Route::post('/staff/members', [ApiController::class, 'createStaff'])->middleware('role:admin');
     Route::delete('/staff/members/{id}', [ApiController::class, 'deleteStaff'])->middleware('role:admin');
     Route::post('/staff/archive-requests', [ApiController::class, 'archiveRequests'])->middleware('staff.emergency:request-processing');
+    Route::post('/staff/archive-requests/restore', [ApiController::class, 'restoreArchivedRequests'])->middleware('staff.emergency:request-processing');
     Route::get('/staff/archives', [ApiController::class, 'staffArchives'])->middleware('staff.emergency:request-processing');
     Route::get('/staff/archive-file', [ApiController::class, 'staffArchiveFile'])->middleware('staff.emergency:request-processing');
     Route::delete('/staff/archive-file', [ApiController::class, 'deleteStaffArchive'])->middleware('staff.emergency:request-processing');

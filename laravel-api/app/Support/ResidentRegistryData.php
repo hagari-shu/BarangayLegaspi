@@ -13,6 +13,8 @@ class ResidentRegistryData
         'birthDate',
         'sex',
         'householdId',
+        'maritalStatus',
+        'occupation',
         'address',
         'sourceReference',
         'sourceFilename',
@@ -42,7 +44,9 @@ class ResidentRegistryData
         }
 
         foreach (self::FIELDS as $field) {
-            if (!array_key_exists($field, $privateData)) {
+            if (!array_key_exists($field, $privateData) && in_array($field, ['maritalStatus', 'occupation'], true)) {
+                $privateData[$field] = null;
+            } elseif (!array_key_exists($field, $privateData)) {
                 throw new UnexpectedValueException('Resident private data is incomplete.');
             }
         }

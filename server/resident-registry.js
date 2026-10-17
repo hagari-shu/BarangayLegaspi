@@ -254,7 +254,7 @@ export function registerResidentRegistryRoutes(app, { store, sourceReviewsOnly =
         lastName: resident.lastName || resident.last_name,
         birthDate: resident.birthDate || resident.birth_date || null,
         age: calculateAge(resident.birthDate || resident.birth_date, today),
-        sex: resident.sex || 'Unclassified',
+        sex: resident.sex || null,
         householdId: resident.householdId || resident.household_id || null,
         purok: resident.purok || null,
         zone: resident.zone === null || resident.zone === undefined ? null : Number(resident.zone),
@@ -290,7 +290,7 @@ export function registerResidentRegistryRoutes(app, { store, sourceReviewsOnly =
     const firstName = cleanText(req.body?.firstName)
     const lastName = cleanText(req.body?.lastName)
     const birthDate = req.body?.birthDate || null
-    const sex = req.body?.sex || null
+    const sex = req.body?.sex
     const householdId = cleanText(req.body?.householdId || '')
     const purok = cleanText(req.body?.purok || '')
     const address = cleanText(req.body?.address || '')
@@ -306,8 +306,8 @@ export function registerResidentRegistryRoutes(app, { store, sourceReviewsOnly =
     if (birthDate && (typeof birthDate !== 'string' || !validDateKey(birthDate) || birthDate > today)) {
       return res.status(400).json({ message: 'Enter a valid birthdate that is not in the future.' })
     }
-    if (sex !== null && !['Male', 'Female', 'Unclassified'].includes(sex)) {
-      return res.status(400).json({ message: 'Choose Male, Female, or Unclassified for sex.' })
+    if (!['Male', 'Female'].includes(sex)) {
+      return res.status(400).json({ message: 'Choose Male or Female for sex.' })
     }
     if (zone !== null && (!Number.isInteger(zone) || zone < 1 || zone > 7)) {
       return res.status(400).json({ message: 'Choose a valid zone from 1 to 7.' })
@@ -435,8 +435,8 @@ export function registerResidentRegistryRoutes(app, { store, sourceReviewsOnly =
       if (birthDate && (!validDateKey(birthDate) || birthDate > today)) {
         validationErrors.push({ row: index + 2, field: 'birthDate', message: 'Birthdate must be a valid date no later than today.' })
       }
-      if (sex && !['Male', 'Female', 'Unclassified'].includes(sex)) {
-        validationErrors.push({ row: index + 2, field: 'sex', message: 'Use Male, Female, or Unclassified.' })
+      if (!['Male', 'Female'].includes(sex)) {
+        validationErrors.push({ row: index + 2, field: 'sex', message: 'Use Male or Female.' })
       }
       if (zoneText && (!Number.isInteger(zone) || zone < 1 || zone > 7)) {
         validationErrors.push({ row: index + 2, field: 'zone', message: 'Zone must be a whole number from 1 to 7.' })
@@ -448,7 +448,7 @@ export function registerResidentRegistryRoutes(app, { store, sourceReviewsOnly =
         firstName,
         lastName,
         birthDate: birthDate || null,
-        sex: sex || null,
+        sex,
         householdId: householdId || null,
         purok: purok || null,
         zone,

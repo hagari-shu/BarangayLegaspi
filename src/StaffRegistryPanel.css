@@ -210,8 +210,145 @@
   font: inherit;
 }
 
+.registry-zone-help {
+  margin: 0;
+  color: #52616b;
+}
+
+.registry-zone-cards {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.registry-zone-card {
+  display: grid;
+  align-content: center;
+  justify-items: start;
+  gap: 0.2rem;
+  min-width: min(100%, 9.5rem);
+  min-height: 7rem;
+  padding: 1rem;
+  border: 1px solid #b8cbd5;
+  border-radius: 0.7rem;
+  background: #f0f6f8;
+  color: #173746;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.registry-zone-card:hover {
+  border-color: #245b78;
+  background: #e3eff3;
+}
+
+.registry-zone-card strong {
+  font-size: 1.1rem;
+}
+
+.registry-zone-card span {
+  color: #14212b;
+  font-size: 1.6rem;
+  font-weight: 800;
+}
+
+.registry-zone-card small {
+  color: #52616b;
+  font-size: 0.78rem;
+}
+
+.registry-zone-card:focus-visible {
+  outline: 3px solid #e3a008;
+  outline-offset: 2px;
+}
+
+.registry-zone-card.is-active {
+  border-color: #245b78;
+  background: #245b78;
+  color: #fff;
+}
+
+.registry-zone-card.is-active span,
+.registry-zone-card.is-active small {
+  color: #fff;
+}
+
+.registry-zone-card.is-search-match {
+  border: 3px solid #9a6700;
+  background: #fff4d6;
+  box-shadow: 0 0 0 3px rgb(227 160 8 / 28%);
+}
+
+.registry-zone-match-label {
+  color: #633f00 !important;
+  font-weight: 800;
+}
+
+.registry-search-results {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.registry-search-results h3,
+.registry-search-results p {
+  margin: 0;
+}
+
+.registry-search-results-table td:first-child {
+  font-weight: 700;
+}
+
 .registry-entry-form > button {
   justify-self: start;
+}
+
+.registry-field-help {
+  grid-column: 1 / -1;
+  margin: -0.45rem 0 0;
+  color: #52616b;
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+.registry-resident-quick-view {
+  display: grid;
+  gap: 0.75rem;
+  padding: 1rem;
+  border: 2px solid #245b78;
+  border-radius: 0.75rem;
+  background: #f0f6f8;
+  color: #173746;
+}
+
+.registry-resident-quick-view h3,
+.registry-resident-quick-view p {
+  margin: 0;
+}
+
+.registry-resident-quick-view dl {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 10rem), 1fr));
+  gap: 0.65rem;
+  margin: 0;
+}
+
+.registry-resident-quick-view dl > div {
+  display: grid;
+  gap: 0.2rem;
+  padding: 0.7rem;
+  border-radius: 0.5rem;
+  background: #fff;
+}
+
+.registry-resident-quick-view dt {
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.registry-resident-quick-view dd {
+  margin: 0;
+  overflow-wrap: anywhere;
 }
 
 .registry-message {
@@ -283,6 +420,30 @@
   font-size: 0.9rem;
 }
 
+.registry-table .registry-zone-heading th {
+  padding-block: 0.55rem;
+  background: #e7eff3;
+  color: #173746;
+}
+
+.registry-resident-link {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #155b80;
+  font: inherit;
+  font-weight: 700;
+  text-align: left;
+  text-decoration: underline;
+  text-underline-offset: 0.15em;
+  cursor: pointer;
+}
+
+.registry-resident-link:focus-visible {
+  outline: 3px solid #e3a008;
+  outline-offset: 2px;
+}
+
 .registry-table td small {
   display: block;
   margin-top: 0.2rem;
@@ -347,6 +508,112 @@
   padding: 0.7rem;
 }
 
+.registry-resident-modal {
+  position: fixed;
+  inset: 0;
+  margin: auto;
+  display: grid;
+  gap: 1rem;
+  width: min(100%, 56rem);
+  max-height: min(90vh, 52rem);
+  overflow-y: auto;
+  padding: clamp(1rem, 3vw, 1.5rem);
+  border: 1px solid #b9cbd4;
+  border-radius: 0.85rem;
+  background: #fff;
+  box-shadow: 0 1.5rem 4rem rgb(0 0 0 / 28%);
+}
+
+.registry-resident-modal::backdrop {
+  background: rgb(10 24 33 / 68%);
+}
+
+.registry-resident-modal-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.registry-resident-modal-heading h3,
+.registry-resident-modal-heading p {
+  margin: 0;
+}
+
+.registry-resident-modal-heading p {
+  margin-top: 0.3rem;
+  color: #52616b;
+  font-size: 1.1rem;
+  font-weight: 700;
+}
+
+.registry-resident-modal-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 14rem), 1fr));
+  gap: 0.65rem;
+  margin: 0;
+}
+
+.registry-resident-modal-grid > div {
+  min-width: 0;
+  padding: 0.75rem;
+  border: 1px solid #e2e8ec;
+  border-radius: 0.55rem;
+  background: #f8fafb;
+}
+
+.registry-resident-modal-grid dt {
+  margin-bottom: 0.25rem;
+  color: #52616b;
+  font-size: 0.88rem;
+  font-weight: 600;
+}
+
+.registry-resident-modal-grid dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: #14212b;
+  font-weight: 600;
+}
+
+.registry-zone-modal {
+  width: min(100%, 48rem);
+}
+
+.registry-zone-resident-list {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.registry-zone-resident {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.75rem;
+  border: 1px solid #e2e8ec;
+  border-radius: 0.55rem;
+  background: #f8fafb;
+}
+
+.registry-zone-resident > div {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.registry-zone-resident span {
+  color: #52616b;
+}
+
+.registry-edit-form {
+  max-height: 65vh;
+  overflow-y: auto;
+}
+
+.registry-edit-actions {
+  grid-column: 1 / -1;
+}
+
 @media (max-width: 640px) {
   .registry-panel-header {
     align-items: flex-start;
@@ -354,6 +621,29 @@
   }
 
   .registry-pagination {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .registry-resident-modal-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .registry-resident-modal {
+    max-height: 94vh;
+  }
+
+  .registry-zone-cards {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .registry-zone-card {
+    min-width: 0;
+  }
+
+  .registry-zone-resident {
     align-items: flex-start;
     flex-direction: column;
   }

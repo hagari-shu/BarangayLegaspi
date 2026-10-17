@@ -307,7 +307,9 @@ export function createApp() {
       ['/api/staff/residents', ['POST']],
       ['/api/staff/residents/import', ['POST']],
       ['/api/staff/residents/print-audit', ['POST']],
+      ['/api/staff/residents/export-audit', ['POST']],
       ['/api/staff/archive-requests', ['POST']],
+      ['/api/staff/archive-requests/restore', ['POST']],
       ['/api/staff/archive-file', ['DELETE']],
     ])
     const scopedStaffOperation = (
@@ -1416,11 +1418,15 @@ export function createApp() {
     const zoneRaw = req.query.zone
     const zone = zoneRaw === undefined || zoneRaw === '' ? null : Number(zoneRaw)
     const purok = String(req.query.purok || '').trim()
+    const maritalStatus = String(req.query.maritalStatus || '').trim()
+    const occupation = String(req.query.occupation || '').trim()
     const page = Math.max(1, Number.parseInt(req.query.page, 10) || 1)
     const pageSize = Math.min(100, Math.max(1, Number.parseInt(req.query.pageSize, 10) || 25))
     const today = getManilaDateKey()
 
-    if (search.length > 120 || purok.length > 100) return res.status(400).json({ message: 'Search filters are too long.' })
+    if (search.length > 120 || purok.length > 100 || maritalStatus.length > 100 || occupation.length > 255) {
+      return res.status(400).json({ message: 'Search filters are too long.' })
+    }
     if (birthDate && (!isValidDateKey(birthDate) || birthDate > today)) return res.status(400).json({ message: 'Enter a valid birthdate that is not in the future.' })
     if (age !== null && (!Number.isInteger(age) || age < 0 || age > 130)) return res.status(400).json({ message: 'Age must be a whole number from 0 to 130.' })
     if (zone !== null && (!Number.isInteger(zone) || zone < 1 || zone > 7)) return res.status(400).json({ message: 'Choose a valid zone from 1 to 7.' })
@@ -1433,15 +1439,20 @@ export function createApp() {
     }
     try {
       if (typeof store.listResidentRegistry !== 'function') throw new Error('Resident registry storage is unavailable.')
-      const result = await store.listResidentRegistry({ search, birthDate, ageStart, ageEnd, zone, purok, page, pageSize })
+      const result = await store.listResidentRegistry({
+        search, birthDate, ageStart, ageEnd, zone, purok, maritalStatus, occupation, page, pageSize,
+      })
       const residents = result.residents.map((resident) => ({
         id: resident.id,
         firstName: resident.firstName || resident.first_name,
         lastName: resident.lastName || resident.last_name,
         birthDate: resident.birthDate || resident.birth_date || null,
         age: calculateAge(resident.birthDate || resident.birth_date, today),
-        sex: resident.sex || 'Unclassified',
+        sex: resident.sex || null,
+        household: resident.household || resident.householdId || resident.household_id || null,
         householdId: resident.householdId || resident.household_id || null,
+        maritalStatus: resident.maritalStatus || null,
+        occupation: resident.occupation || null,
         purok: resident.purok || null,
         zone: resident.zone === null || resident.zone === undefined ? null : Number(resident.zone),
         address: resident.address || null,
@@ -1457,6 +1468,8 @@ export function createApp() {
         filters: {
           zone,
           hasPurokFilter: purok !== '',
+          hasMaritalStatusFilter: maritalStatus !== '',
+          hasOccupationFilter: occupation !== '',
           hasSearch: search !== '',
           hasBirthDate: birthDate !== '',
           hasAge: age !== null,
@@ -1467,7 +1480,7 @@ export function createApp() {
         total: result.total,
         page,
         pageSize,
-        filters: { search, birthDate, age, zone, purok },
+        filters: { search, birthDate, age, zone, purok, maritalStatus, occupation },
       })
     } catch (error) {
       console.error('staff resident registry query failed', error)
@@ -1525,10 +1538,10 @@ export function createApp() {
     const firstName = sanitizeText(req.body?.firstName)
     const lastName = sanitizeText(req.body?.lastName)
     const birthDate = req.body?.birthDate || null
-    const sex = req.body?.sex || null
-    const householdId = sanitizeText(req.body?.householdId || '')
-    const purok = sanitizeText(req.body?.purok || '')
-    const address = sanitizeText(req.body?.address || '')
+    const sex = req.body?.sex
+    const householdId = sanitizeText(req.body?.household ?? req.body?.householdId ?? '')
+    const maritalStatus = sanitizeText(req.body?.maritalStatus || '')
+    const occupation = sanitizeText(req.body?.occupation || '')
     const sourceReference = sanitizeText(req.body?.sourceReference || '')
     const sourceFilename = sanitizeText(req.body?.sourceFilename || '')
     const zoneValue = req.body?.zone
@@ -1541,13 +1554,13 @@ export function createApp() {
     if (birthDate && (typeof birthDate !== 'string' || !isValidDateKey(birthDate) || birthDate > today)) {
       return res.status(400).json({ message: 'Enter a valid birthdate that is not in the future.' })
     }
-    if (sex !== null && !['Male', 'Female', 'Unclassified'].includes(sex)) {
-      return res.status(400).json({ message: 'Choose Male, Female, or Unclassified for sex.' })
+    if (!['Male', 'Female'].includes(sex)) {
+      return res.status(400).json({ message: 'Choose Male or Female for sex.' })
     }
     if (zone !== null && (!Number.isInteger(zone) || zone < 1 || zone > 7)) {
       return res.status(400).json({ message: 'Choose a valid zone from 1 to 7.' })
     }
-    if (householdId.length > 100 || purok.length > 100 || address.length > 255 || sourceReference.length > 255 || sourceFilename.length > 255) {
+    if (householdId.length > 100 || maritalStatus.length > 100 || occupation.length > 255 || sourceReference.length > 255 || sourceFilename.length > 255) {
       return res.status(400).json({ message: 'One or more resident fields exceed the allowed length.' })
     }
 
@@ -1570,9 +1583,11 @@ export function createApp() {
         birthDate,
         sex,
         householdId: householdId || null,
-        purok: purok || null,
+        maritalStatus: maritalStatus || null,
+        occupation: occupation || null,
         zone,
-        address: address || null,
+        purok: null,
+        address: null,
         status: 'active',
         recordStatus: 'active',
         verificationStatus: 'pending',
@@ -1597,11 +1612,14 @@ export function createApp() {
           lastName,
           birthDate,
           age: calculateAge(birthDate, today),
-          sex: sex || 'Unclassified',
+          sex,
+          household: householdId || null,
           householdId: householdId || null,
-          purok: purok || null,
+          maritalStatus: maritalStatus || null,
+          occupation: occupation || null,
+          purok: null,
           zone,
-          address: address || null,
+          address: null,
           status: 'active',
           verificationStatus: 'pending',
           sourceReference: sourceReference || null,
@@ -1649,9 +1667,11 @@ export function createApp() {
       const lastName = rawString('lastName')
       const birthDate = rawString('birthDate')
       const sex = rawString('sex')
-      const householdId = rawString('householdId')
-      const purok = rawString('purok')
-      const address = rawString('address')
+      const household = rawString('household') || rawString('householdId')
+      const maritalStatus = rawString('maritalStatus')
+      const occupation = rawString('occupation')
+      const legacyPurok = rawString('legacyPurok') || rawString('purok')
+      const legacyAddress = rawString('legacyAddress') || rawString('address')
       const sourceReference = rawString('sourceReference')
       const zoneText = rawString('zone')
       const zone = zoneText ? Number(zoneText) : null
@@ -1662,24 +1682,27 @@ export function createApp() {
       if (birthDate && (!isValidDateKey(birthDate) || birthDate > today)) {
         validationErrors.push({ row: index + 2, field: 'birthDate', message: 'Birthdate must be a valid date no later than today.' })
       }
-      if (sex && !['Male', 'Female', 'Unclassified'].includes(sex)) {
-        validationErrors.push({ row: index + 2, field: 'sex', message: 'Use Male, Female, or Unclassified.' })
+      if (!['Male', 'Female'].includes(sex)) {
+        validationErrors.push({ row: index + 2, field: 'sex', message: 'Use Male or Female.' })
       }
       if (zoneText && (!Number.isInteger(zone) || zone < 1 || zone > 7)) {
         validationErrors.push({ row: index + 2, field: 'zone', message: 'Zone must be a whole number from 1 to 7.' })
       }
-      if (householdId.length > 100 || purok.length > 100 || address.length > 255 || sourceReference.length > 255) {
+      if (household.length > 100 || maritalStatus.length > 100 || occupation.length > 255
+        || legacyPurok.length > 100 || legacyAddress.length > 255 || sourceReference.length > 255) {
         validationErrors.push({ row: index + 2, field: 'length', message: 'A field exceeds its maximum length.' })
       }
       return {
         firstName,
         lastName,
         birthDate: birthDate || null,
-        sex: sex || null,
-        householdId: householdId || null,
-        purok: purok || null,
+        sex,
+        household: household || null,
         zone,
-        address: address || null,
+        maritalStatus: maritalStatus || null,
+        occupation: occupation || null,
+        legacyPurok: legacyPurok || null,
+        legacyAddress: legacyAddress || null,
         sourceReference: sourceReference || null,
       }
     })
@@ -1716,8 +1739,11 @@ export function createApp() {
       }
 
       const createdAt = new Date().toISOString()
-      const records = normalized.map((resident) => ({
+      const records = normalized.map(({ household, legacyPurok, legacyAddress, ...resident }) => ({
         ...resident,
+        householdId: household,
+        purok: legacyPurok,
+        address: legacyAddress,
         id: randomUUID(),
         status: 'active',
         recordStatus: 'active',
@@ -1779,6 +1805,33 @@ export function createApp() {
     }
   })
 
+  app.post('/api/staff/residents/export-audit', async (req, res) => {
+    const actor = await authorizeCurrentActor(req, res, ['staff', 'admin'], 'resident-registry.read')
+    if (!actor) return
+    const { count: recordCount, format, grouping, filters } = req.body || {}
+    const filterKeys = ['hasSearch', 'hasBirthDate', 'hasAge', 'hasZone', 'hasMaritalStatusFilter', 'hasOccupationFilter']
+    if (!Number.isInteger(recordCount) || recordCount < 1 || recordCount > 10000
+      || format !== 'csv' || grouping !== 'zone_household_name'
+      || !filters || typeof filters !== 'object' || Array.isArray(filters)
+      || Object.keys(filters).some((key) => !filterKeys.includes(key))
+      || filterKeys.some((key) => typeof filters[key] !== 'boolean')) {
+      return res.status(400).json({ message: 'Spreadsheet export details are invalid.' })
+    }
+    try {
+      await writeAudit(actor, 'resident_registry.exported', 'resident_registry', null, {
+        recordCount,
+        format,
+        grouping,
+        filters,
+        dataFields: ['zone', 'household', 'name', 'birthDate', 'age', 'sex', 'maritalStatus', 'occupation', 'recordStatus', 'verificationStatus'],
+      })
+      return res.json({ success: true })
+    } catch (error) {
+      console.error('resident registry spreadsheet audit failed', error)
+      return res.status(500).json({ message: 'Unable to record the spreadsheet export. No file was downloaded.' })
+    }
+  })
+
   app.patch('/api/staff/residents/:id/verify', async (req, res) => {
     const actor = await authorizeCurrentActor(req, res, ['staff', 'admin'], 'resident-registry.manage')
     if (!actor) return
@@ -1813,6 +1866,107 @@ export function createApp() {
     } catch (error) {
       console.error('resident record status update failed', error)
       return res.status(500).json({ message: 'Unable to update resident record status.' })
+    }
+  })
+
+  app.patch('/api/staff/residents/:id', async (req, res) => {
+    const actor = await authorizeCurrentActor(req, res, ['staff', 'admin'], 'resident-registry.manage')
+    if (!actor) return
+    const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {}
+    const editableFields = [
+      'firstName', 'lastName', 'birthDate', 'sex', 'household', 'householdId',
+      'maritalStatus', 'occupation', 'purok', 'zone', 'address', 'sourceReference',
+      'sourceFilename', 'status', 'verificationStatus',
+    ]
+    const changedFields = editableFields.filter((field) => Object.prototype.hasOwnProperty.call(body, field))
+    if (!changedFields.length) return res.status(400).json({ message: 'Provide at least one resident field to update.' })
+
+    const updates = {}
+    const stringFields = {
+      firstName: 100,
+      lastName: 100,
+      household: 100,
+      householdId: 100,
+      maritalStatus: 100,
+      purok: 100,
+      address: 255,
+      occupation: 255,
+      sourceReference: 255,
+      sourceFilename: 255,
+    }
+    for (const [field, maxLength] of Object.entries(stringFields)) {
+      if (!Object.prototype.hasOwnProperty.call(body, field)) continue
+      if (typeof body[field] !== 'string') return res.status(400).json({ message: `Enter a valid ${field} value.` })
+      const value = sanitizeText(body[field])
+      if (value.length > maxLength || (['firstName', 'lastName'].includes(field) && !value)) {
+        return res.status(400).json({ message: `Enter a valid ${field} (up to ${maxLength} characters).` })
+      }
+      updates[field] = value || null
+    }
+    if (Object.prototype.hasOwnProperty.call(updates, 'household')) {
+      updates.householdId = updates.household
+      delete updates.household
+    }
+
+    if (Object.prototype.hasOwnProperty.call(body, 'birthDate')) {
+      const today = getManilaDateKey()
+      if (body.birthDate !== null && body.birthDate !== '' && (typeof body.birthDate !== 'string' || !isValidDateKey(body.birthDate) || body.birthDate > today)) {
+        return res.status(400).json({ message: 'Enter a valid birthdate that is not in the future.' })
+      }
+      updates.birthDate = body.birthDate || null
+    }
+    if (Object.prototype.hasOwnProperty.call(body, 'sex')) {
+      if (!['Male', 'Female'].includes(body.sex)) return res.status(400).json({ message: 'Choose Male or Female for sex.' })
+      updates.sex = body.sex
+    }
+    if (Object.prototype.hasOwnProperty.call(body, 'zone')) {
+      const zone = body.zone === null || body.zone === '' ? null : Number(body.zone)
+      if (zone !== null && (!Number.isInteger(zone) || zone < 1 || zone > 7)) return res.status(400).json({ message: 'Choose a valid zone from 1 to 7.' })
+      updates.zone = zone
+    }
+    if (Object.prototype.hasOwnProperty.call(body, 'status')) {
+      if (!['active', 'inactive', 'deceased', 'archived'].includes(body.status)) return res.status(400).json({ message: 'Choose a valid resident record status.' })
+      updates.status = body.status
+    }
+    if (Object.prototype.hasOwnProperty.call(body, 'verificationStatus')) {
+      if (!['pending', 'verified', 'needs_review'].includes(body.verificationStatus)) return res.status(400).json({ message: 'Choose a valid verification status.' })
+      updates.verificationStatus = body.verificationStatus
+      updates.verifiedBy = body.verificationStatus === 'verified' ? actor.id : null
+      updates.verifiedAt = body.verificationStatus === 'verified' ? new Date().toISOString() : null
+    }
+
+    try {
+      if (typeof store.updateRegistryResident !== 'function') throw new Error('Resident registry updates are unavailable.')
+      const resident = await store.updateRegistryResident(req.params.id, updates)
+      if (!resident) return res.status(404).json({ message: 'Resident record not found.' })
+      await writeAudit(actor, 'resident_registry.record_updated', 'resident_registry', resident.id, {
+        changedFields,
+      })
+      const today = getManilaDateKey()
+      return res.json({
+        resident: {
+          id: resident.id,
+          firstName: resident.firstName,
+          lastName: resident.lastName,
+          birthDate: resident.birthDate,
+          age: calculateAge(resident.birthDate, today),
+          sex: resident.sex,
+          household: resident.household || resident.householdId,
+          householdId: resident.householdId,
+          maritalStatus: resident.maritalStatus,
+          occupation: resident.occupation,
+          purok: resident.purok,
+          zone: resident.zone,
+          address: resident.address,
+          status: resident.status || resident.recordStatus,
+          verificationStatus: resident.verificationStatus,
+          sourceReference: resident.sourceReference,
+          sourceFilename: resident.sourceFilename,
+        },
+      })
+    } catch (error) {
+      console.error('resident registry record update failed', error)
+      return res.status(500).json({ message: 'Unable to update resident record.' })
     }
   })
 
@@ -2252,13 +2406,44 @@ export function createApp() {
       if (!actor) return
 
       const rawDays = req.body?.days
-      const parsedDays = rawDays === undefined || rawDays === null || rawDays === '' ? 1 : Number(rawDays)
-      const days = Number.isFinite(parsedDays) ? Math.max(0, parsedDays) : 1
-      const result = await store.archiveProcessedRequestsOlderThan?.(days)
+      if (rawDays !== undefined && rawDays !== null && rawDays !== '' && ![0, '0'].includes(rawDays)) {
+        return res.status(400).json({ message: 'Only manual archiving of closed requests is supported.' })
+      }
+      const result = await store.archiveProcessedRequestsOlderThan?.()
+      if (!result) throw new Error('Request archive storage is unavailable.')
+      await writeAudit(actor, 'requests.archive.created', 'request_archive', result.filename, {
+        archivedCount: result.count,
+        remainingClosedCount: result.remaining,
+      })
       return res.json({ archive: result || null })
     } catch (e) {
       console.error('archive-requests error', e)
       return res.status(500).json({ message: 'Failed to archive queue and approval records.' })
+    }
+  })
+
+  app.post('/api/staff/archive-requests/restore', async (req, res) => {
+    try {
+      const actor = await authorizeCurrentActor(req, res, ['staff', 'admin'], 'request-processing')
+      if (!actor) return
+      const filename = req.body?.filename
+      if (typeof filename !== 'string' || !/^queue-approvals-[\w.-]+\.json$/.test(filename)) {
+        return res.status(400).json({ message: 'Choose a valid closed-request archive.' })
+      }
+      if (typeof store.restoreArchivedRequests !== 'function') {
+        throw new Error('Request archive restore storage is unavailable.')
+      }
+      const result = await store.restoreArchivedRequests(filename)
+      if (!result) return res.status(404).json({ message: 'Closed-request archive not found.' })
+      await writeAudit(actor, 'requests.archive.restored', 'request_archive', filename, {
+        restoredCount: result.restoredCount,
+        conflictCount: result.conflictCount,
+      })
+      return res.json({ restore: result })
+    } catch (error) {
+      console.error('restore request archive failed', error)
+      if (error instanceof TypeError) return res.status(400).json({ message: error.message })
+      return res.status(500).json({ message: 'Failed to restore closed requests.' })
     }
   })
 
@@ -2870,9 +3055,7 @@ export function createApp() {
         }
         try {
           await store.addApproval?.(approval)
-          const archived = await store.archiveApprovalsOlderThan?.(7)
-          // return archive info optionally
-          return res.json({ request: updated, approval, archive: archived || null })
+          return res.json({ request: updated, approval })
         } catch (err) {
           console.error('approval log error', err)
           return res.json({ request: updated, approval: null })

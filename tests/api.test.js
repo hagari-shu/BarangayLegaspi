@@ -9,7 +9,12 @@ import * as jsonDb from '../server/db.js'
 import { ADMIN_SEED, DB_PATH } from '../server/config.js'
 import { isCaptainPhotoStorageConfigured } from '../server/captain-photo-storage.js'
 import { registryAgeDateRange } from '../server/resident-registry.js'
-import { decryptResidentPrivateData, encryptResidentPrivateData } from '../server/resident-registry-crypto.js'
+import {
+  createResidentNameSearchTokens,
+  decryptResidentPrivateData,
+  encryptResidentPrivateData,
+  residentNameSearchCandidates,
+} from '../server/resident-registry-crypto.js'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 
 const testDbPath = DB_PATH
@@ -130,6 +135,14 @@ test('resident registry encryption authenticates ciphertext and binds it to its 
   assert.throws(() => decryptResidentPrivateData(tampered, recordId))
 })
 
+test('name search tokens support normalized multiword prefixes without storing plaintext names', () => {
+  const tokens = createResidentNameSearchTokens('Ana-María', 'Reyes')
+  const terms = residentNameSearchCandidates('  ana,  rey ')
+  assert.equal(terms.length, 2)
+  assert.ok(terms.every((candidates) => candidates.some((token) => tokens.includes(token))))
+  assert.ok(tokens.every((token) => /^[0-9a-f]{16}:[A-Za-z0-9_-]+$/.test(token)))
+})
+
 test('JSON storage encrypts legacy resident entries on first read', async () => {
   await fs.writeFile(testDbPath, JSON.stringify({
     users: [],
@@ -153,7 +166,43 @@ test('JSON storage encrypts legacy resident entries on first read', async () => 
   const persisted = JSON.parse(await fs.readFile(testDbPath, 'utf8'))
   assert.ok(persisted.residentRegistry[0].encryptedData)
   assert.equal(JSON.stringify(persisted.residentRegistry[0]).includes('Legacy'), false)
+})
+
+test('JSON registry refreshes stale keyed name tokens before searching', async () => {
+  const residentId = randomUUID()
+  await fs.writeFile(testDbPath, JSON.stringify({
+    users: [],
+    requests: [],
+    residentRegistry: [{
+      id: residentId,
+      encryptedData: encryptResidentPrivateData({ firstName: 'Rekeyed', lastName: 'Resident' }, residentId),
+      nameSearchTokens: ['retired-key:stale-token'],
+    }],
+  }), 'utf8')
+
+  const results = await jsonDb.listResidentRegistry({ search: 'Rekey Res', page: 1, pageSize: 10 })
+  assert.equal(results.total, 1)
+  assert.equal(results.residents[0].firstName, 'Rekeyed')
+  const persisted = JSON.parse(await fs.readFile(testDbPath, 'utf8'))
+  assert.notDeepEqual(persisted.residentRegistry[0].nameSearchTokens, ['retired-key:stale-token'])
+  assert.equal(JSON.stringify(persisted.residentRegistry[0]).includes('Rekeyed'), false)
   assert.equal(JSON.stringify(persisted.residentRegistry[0]).includes('HH-LEGACY'), false)
+})
+
+test('JSON registry search reads current name tokens without decrypting every resident', async () => {
+  await fs.writeFile(testDbPath, JSON.stringify({
+    users: [],
+    requests: [],
+    residentRegistry: [{
+      id: 'unrelated-resident',
+      encryptedData: 'not-decrypted-during-search-prefilter',
+      nameSearchTokens: createResidentNameSearchTokens('Unrelated', 'Resident'),
+    }],
+  }), 'utf8')
+
+  const database = await jsonDb.readDb({ decryptRegistry: false })
+  assert.equal(database.residentRegistry[0].id, 'unrelated-resident')
+  assert.equal(database.residentRegistry[0].encryptedData, 'not-decrypted-during-search-prefilter')
 })
 
 test('staff request dashboard returns authorized, filtered, paginated records and real totals', async () => {
@@ -1617,6 +1666,19 @@ test('staff resident registry keeps pending records out of verified totals and r
     const { token } = await loginResponse.json()
     const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
 
+    const missingSexResponse = await fetch(`${baseUrl}/api/staff/residents`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ firstName: 'Unknown', lastName: 'Value' }),
+    })
+    assert.equal(missingSexResponse.status, 400)
+    const unclassifiedResponse = await fetch(`${baseUrl}/api/staff/residents`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ firstName: 'Unknown', lastName: 'Value', sex: 'Unclassified' }),
+    })
+    assert.equal(unclassifiedResponse.status, 400)
+
     const createResponse = await fetch(`${baseUrl}/api/staff/residents`, {
       method: 'POST',
       headers,
@@ -1625,8 +1687,10 @@ test('staff resident registry keeps pending records out of verified totals and r
         lastName: 'Santos',
         birthDate: '2000-05-20',
         sex: 'Female',
-        householdId: 'HH-001',
-        purok: 'Purok 3 Daya',
+        household: 'Household A',
+        householdId: 'Legacy household value',
+        maritalStatus: 'Married',
+        occupation: 'Teacher',
         zone: 3,
         sourceReference: 'Roster page 1',
       }),
@@ -1644,11 +1708,26 @@ test('staff resident registry keeps pending records out of verified totals and r
     assert.ok(storedResident.encryptedData)
     assert.equal(JSON.stringify(storedResident).includes('Ana'), false)
     assert.equal(JSON.stringify(storedResident).includes('Santos'), false)
-    assert.equal(JSON.stringify(storedResident).includes('HH-001'), false)
+    assert.equal(JSON.stringify(storedResident).includes('Household A'), false)
+    assert.equal(JSON.stringify(storedResident).includes('Married'), false)
+    assert.equal(JSON.stringify(storedResident).includes('Teacher'), false)
 
-    const registryResponse = await fetch(`${baseUrl}/api/staff/residents?search=Ana`, { headers })
+    const registryResponse = await fetch(`${baseUrl}/api/staff/residents?search=Ana%20Santos`, { headers })
     assert.equal(registryResponse.status, 200)
-    assert.equal((await registryResponse.json()).residents[0].firstName, 'Ana')
+    const registryData = await registryResponse.json()
+    assert.equal(registryData.residents[0].firstName, 'Ana')
+    assert.equal(registryData.residents[0].birthDate, '2000-05-20')
+    assert.equal(registryData.residents[0].age, expectedAge)
+    assert.equal(registryData.residents[0].zone, 3)
+    assert.equal(registryData.residents[0].household, 'Household A')
+    assert.equal(registryData.residents[0].householdId, 'Household A')
+    assert.equal(registryData.residents[0].maritalStatus, 'Married')
+    assert.equal(registryData.residents[0].occupation, 'Teacher')
+    assert.equal(registryData.residents[0].purok, null)
+    const newFieldFilterResponse = await fetch(`${baseUrl}/api/staff/residents?maritalStatus=married&occupation=teacher`, { headers })
+    assert.equal((await newFieldFilterResponse.json()).total, 1)
+    const punctuatedSearchResponse = await fetch(`${baseUrl}/api/staff/residents?search=Ana%2C%20Sant`, { headers })
+    assert.equal((await punctuatedSearchResponse.json()).total, 1)
     const readAudit = (await jsonDb.listAuditLogs(10)).find((entry) => entry.action === 'resident_registry.read')
     assert.ok(readAudit)
     assert.equal(JSON.stringify(readAudit).includes('Ana'), false)
@@ -1662,15 +1741,16 @@ test('staff resident registry keeps pending records out of verified totals and r
         lastName: 'Santos',
         birthDate: '2000-05-20',
         sex: 'Female',
-        householdId: 'HH-001',
-        purok: 'Purok 3 Daya',
+        household: 'Household A',
+        maritalStatus: 'Married',
+        occupation: 'Teacher',
         zone: 3,
       }),
     })
     assert.equal(duplicateResponse.status, 409)
     assert.equal((await duplicateResponse.json()).potentialMatches.length, 1)
 
-    const pendingTotalsResponse = await fetch(`${baseUrl}/api/staff/demographics?zone=3&purok=Purok%203%20Daya`, { headers })
+    const pendingTotalsResponse = await fetch(`${baseUrl}/api/staff/demographics?zone=3`, { headers })
     assert.equal(pendingTotalsResponse.status, 200)
     assert.equal((await pendingTotalsResponse.json()).overall.total, 0)
 
@@ -1681,12 +1761,51 @@ test('staff resident registry keeps pending records out of verified totals and r
     })
     assert.equal(verifyResponse.status, 200)
 
-    const verifiedTotalsResponse = await fetch(`${baseUrl}/api/staff/demographics?zone=3&purok=Purok%203%20Daya`, { headers })
+    const verifiedTotalsResponse = await fetch(`${baseUrl}/api/staff/demographics?zone=3`, { headers })
     const verifiedTotals = await verifiedTotalsResponse.json()
     assert.equal(verifiedTotals.overall.total, 1)
     assert.equal(verifiedTotals.overall.female, 1)
-    assert.equal(verifiedTotals.byPurok[0].purok, 'Purok 3 Daya')
-    assert.equal(verifiedTotals.byHousehold[0].householdId, 'HH-001')
+    assert.equal(verifiedTotals.byPurok[0].label, 'Zone 3')
+    assert.equal(verifiedTotals.byHousehold[0].householdId, 'Household A')
+
+    const editResponse = await fetch(`${baseUrl}/api/staff/residents/${created.resident.id}`, {
+      method: 'PATCH',
+      headers,
+      body: JSON.stringify({
+        firstName: 'Ana Maria',
+        birthDate: '2001-06-21',
+        zone: 2,
+        household: 'Household B',
+        maritalStatus: 'Divorced',
+        occupation: 'Nurse',
+        sourceReference: 'Roster page 2',
+        verificationStatus: 'needs_review',
+      }),
+    })
+    assert.equal(editResponse.status, 200)
+    const edited = await editResponse.json()
+    assert.equal(edited.resident.firstName, 'Ana Maria')
+    assert.equal(edited.resident.lastName, 'Santos')
+    assert.equal(edited.resident.birthDate, '2001-06-21')
+    assert.equal(edited.resident.zone, 2)
+    assert.equal(edited.resident.household, 'Household B')
+    assert.equal(edited.resident.maritalStatus, 'Divorced')
+    assert.equal(edited.resident.occupation, 'Nurse')
+    assert.equal(edited.resident.verificationStatus, 'needs_review')
+    const renamedSearch = await fetch(`${baseUrl}/api/staff/residents?search=Ana%20Maria`, { headers })
+    assert.equal((await renamedSearch.json()).total, 1)
+    const editAudit = (await jsonDb.listAuditLogs(10)).find((entry) => entry.action === 'resident_registry.record_updated')
+    assert.deepEqual(editAudit.metadata.changedFields.sort(), ['birthDate', 'firstName', 'household', 'maritalStatus', 'occupation', 'sourceReference', 'verificationStatus', 'zone'].sort())
+    assert.equal(JSON.stringify(editAudit).includes('Ana Maria'), false)
+    assert.equal(JSON.stringify(editAudit).includes('Divorced'), false)
+    assert.equal(JSON.stringify(editAudit).includes('Nurse'), false)
+
+    const invalidEditResponse = await fetch(`${baseUrl}/api/staff/residents/${created.resident.id}`, {
+      method: 'PATCH',
+      headers,
+      body: JSON.stringify({ birthDate: '2999-01-01' }),
+    })
+    assert.equal(invalidEditResponse.status, 400)
 
     const invalidZone = await fetch(`${baseUrl}/api/staff/residents?zone=8`, { headers })
     assert.equal(invalidZone.status, 400)
@@ -1894,8 +2013,8 @@ test('registry CSV import validates every row, pauses on duplicates, and audits 
     const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
     const file = 'purok-3-roster.csv'
     const residents = [
-      { firstName: 'Lina', lastName: 'Reyes', birthDate: '1988-02-29', sex: 'Female', householdId: 'HH-03-01', zone: '3', purok: 'Purok 3 Daya', sourceReference: 'Page 1 row 2' },
-      { firstName: 'Marco', lastName: 'Reyes', birthDate: null, sex: null, householdId: 'HH-03-01', zone: '3', purok: 'Purok 3 Daya', sourceReference: 'Page 1 row 3' },
+      { firstName: 'Lina', lastName: 'Reyes', birthDate: '1988-02-29', sex: 'Female', household: 'Household 3A', maritalStatus: 'Married', occupation: 'Teacher', zone: '3', sourceReference: 'Page 1 row 2' },
+      { firstName: 'Marco', lastName: 'Reyes', birthDate: null, sex: 'Male', household: 'Household 3A', maritalStatus: 'Single', occupation: 'Farmer', zone: '3', sourceReference: 'Page 1 row 3' },
     ]
 
     const invalidResponse = await fetch(`${baseUrl}/api/staff/residents/import`, {
@@ -1906,6 +2025,15 @@ test('registry CSV import validates every row, pauses on duplicates, and audits 
     assert.equal(invalidResponse.status, 400)
     assert.equal(((await jsonDb.readDb()).residentRegistry || []).length, 0)
 
+    for (const sex of ['', 'Unclassified']) {
+      const invalidSexResponse = await fetch(`${baseUrl}/api/staff/residents/import`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ filename: file, residents: [{ ...residents[0], sex }] }),
+      })
+      assert.equal(invalidSexResponse.status, 400)
+    }
+
     const importResponse = await fetch(`${baseUrl}/api/staff/residents/import`, {
       method: 'POST',
       headers,
@@ -1915,6 +2043,12 @@ test('registry CSV import validates every row, pauses on duplicates, and audits 
     const imported = await importResponse.json()
     assert.equal(imported.imported, 2)
     assert.equal(imported.verificationStatus, 'pending')
+    const importedSearch = await fetch(`${baseUrl}/api/staff/residents?maritalStatus=Married&occupation=Teacher`, { headers })
+    const importedRegistry = await importedSearch.json()
+    assert.equal(importedRegistry.total, 1)
+    assert.equal(importedRegistry.residents[0].household, 'Household 3A')
+    assert.equal(importedRegistry.residents[0].maritalStatus, 'Married')
+    assert.equal(importedRegistry.residents[0].occupation, 'Teacher')
 
     const duplicateResponse = await fetch(`${baseUrl}/api/staff/residents/import`, {
       method: 'POST',
@@ -1935,6 +2069,25 @@ test('registry CSV import validates every row, pauses on duplicates, and audits 
     assert.equal(confirmedResponse.status, 201)
     assert.equal(((await jsonDb.readDb()).residentRegistry || []).length, 3)
 
+    const exportAuditResponse = await fetch(`${baseUrl}/api/staff/residents/export-audit`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        count: 3,
+        format: 'csv',
+        grouping: 'zone_household_name',
+        filters: {
+          hasSearch: false,
+          hasBirthDate: false,
+          hasAge: false,
+          hasZone: true,
+          hasMaritalStatusFilter: false,
+          hasOccupationFilter: false,
+        },
+      }),
+    })
+    assert.equal(exportAuditResponse.status, 200)
+
     const printAudit = await fetch(`${baseUrl}/api/staff/residents/print-audit`, {
       method: 'POST',
       headers,
@@ -1944,13 +2097,113 @@ test('registry CSV import validates every row, pauses on duplicates, and audits 
     const logs = await jsonDb.listAuditLogs(10)
     const importLogs = logs.filter((entry) => entry.action === 'resident_registry.bulk_imported')
     const printLog = logs.find((entry) => entry.action === 'resident_registry.print.blocked')
+    const exportLog = logs.find((entry) => entry.action === 'resident_registry.exported')
     assert.ok(importLogs.some((entry) => entry.metadata.count === 2))
     assert.ok(importLogs.every((entry) => !JSON.stringify(entry).includes('Lina')))
     assert.ok(importLogs.every((entry) => !JSON.stringify(entry).includes(file)))
     assert.equal(printLog.metadata.recordCount, 3)
     assert.equal(JSON.stringify(printLog).includes('Lina'), false)
     assert.equal(JSON.stringify(printLog).includes('Purok 3 Daya'), false)
+    assert.equal(exportLog.metadata.recordCount, 3)
+    assert.equal(exportLog.metadata.grouping, 'zone_household_name')
+    assert.equal(JSON.stringify(exportLog).includes('Lina'), false)
+    assert.equal(JSON.stringify(exportLog).includes('Household 3A'), false)
+
+    const invalidExportAudit = await fetch(`${baseUrl}/api/staff/residents/export-audit`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        count: 1,
+        format: 'csv',
+        grouping: 'name',
+        filters: { hasSearch: false },
+      }),
+    })
+    assert.equal(invalidExportAudit.status, 400)
   } finally {
+    await new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())))
+  }
+})
+
+test('staff can manually archive bounded closed-request batches and restore without replacing conflicts', async () => {
+  const { server, baseUrl } = await createTestServer()
+  const staff = {
+    id: randomUUID(),
+    firstName: 'Archive',
+    lastName: 'Staff',
+    mobile: `092${Math.floor(10000000 + Math.random() * 90000000)}`,
+    email: `archive.staff.${Date.now()}@example.com`,
+    passwordHash: await hashPassword('RegistryPass123!'),
+    role: 'staff',
+    status: 'On Duty',
+    zone: 1,
+  }
+  let archiveFilename = null
+
+  try {
+    await jsonDb.saveUser(staff)
+    const login = await fetch(`${baseUrl}/api/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ identifier: staff.email, password: 'RegistryPass123!' }),
+    })
+    const { token } = await login.json()
+    const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
+    const database = await jsonDb.readDb()
+    database.requests = [
+      ...Array.from({ length: 501 }, (_, index) => ({
+        id: randomUUID(),
+        userId: randomUUID(),
+        type: 'Certificate',
+        purpose: 'Archive batch test',
+        status: index % 2 ? 'Approved' : 'Rejected',
+        date: new Date().toISOString(),
+      })),
+      { id: randomUUID(), userId: randomUUID(), type: 'Certificate', purpose: 'Keep active', status: 'Pending', date: new Date().toISOString() },
+    ]
+    await jsonDb.writeDb(database)
+
+    const scheduledArchiveResponse = await fetch(`${baseUrl}/api/staff/archive-requests`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ days: 1 }),
+    })
+    assert.equal(scheduledArchiveResponse.status, 400)
+
+    const archiveResponse = await fetch(`${baseUrl}/api/staff/archive-requests`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ days: 0 }),
+    })
+    assert.equal(archiveResponse.status, 200)
+    const { archive } = await archiveResponse.json()
+    archiveFilename = path.basename(archive.filename)
+    assert.equal(archive.count, 500)
+    assert.equal(archive.remaining, 1)
+    assert.match(archiveFilename, /^queue-approvals-.*\.json$/)
+    assert.equal((await jsonDb.getArchive(archiveFilename)).records.length, 500)
+
+    const firstRestore = await fetch(`${baseUrl}/api/staff/archive-requests/restore`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ filename: archiveFilename }),
+    })
+    assert.equal(firstRestore.status, 200)
+    assert.deepEqual((await firstRestore.json()).restore, { restoredCount: 500, conflictCount: 0 })
+
+    const secondRestore = await fetch(`${baseUrl}/api/staff/archive-requests/restore`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ filename: archiveFilename }),
+    })
+    assert.equal(secondRestore.status, 200)
+    assert.deepEqual((await secondRestore.json()).restore, { restoredCount: 0, conflictCount: 500 })
+    assert.ok(await jsonDb.getArchive(archiveFilename))
+    const activeRequests = (await jsonDb.readDb()).requests
+    assert.equal(activeRequests.filter((request) => ['Approved', 'Rejected'].includes(request.status)).length, 501)
+    assert.equal(activeRequests.filter((request) => request.status === 'Pending').length, 1)
+  } finally {
+    if (archiveFilename) await jsonDb.deleteArchive(archiveFilename)
     await new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())))
   }
 })

@@ -832,9 +832,8 @@ class ApiController extends Controller
                 'date_approved' => now(),
                 'request_snapshot' => json_encode($requestData),
             ]);
-            $archived = $this->archiveApprovalsBefore(7);
 
-            return response()->json(['request' => $requestData, 'approval' => $approval, 'archive' => $archived]);
+            return response()->json(['request' => $requestData, 'approval' => $approval]);
         });
     }
 
@@ -953,10 +952,13 @@ class ApiController extends Controller
         $ageValue = $request->query('age');
         $zoneValue = $request->query('zone');
         $purok = trim((string) $request->query('purok', ''));
+        $maritalStatus = trim((string) $request->query('maritalStatus', ''));
+        $occupation = trim((string) $request->query('occupation', ''));
         $page = max(1, (int) $request->query('page', 1));
         $pageSize = min(100, max(1, (int) $request->query('pageSize', 25)));
 
-        if (mb_strlen($search) > 120 || mb_strlen($purok) > 100) {
+        if (mb_strlen($search) > 120 || mb_strlen($purok) > 100
+            || mb_strlen($maritalStatus) > 100 || mb_strlen($occupation) > 255) {
             return response()->json(['message' => 'Search filters are too long.'], 400);
         }
         if ($birthDate !== '' && (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $birthDate)
@@ -981,7 +983,7 @@ class ApiController extends Controller
         $terms = $search === '' ? [] : preg_split('/\s+/', mb_strtolower($search));
         $filtered = $query->get()
             ->map(fn ($resident) => ['row' => $resident, 'private' => ResidentRegistryData::decrypt($resident)])
-            ->filter(function ($entry) use ($terms, $birthDate, $ageValue) {
+            ->filter(function ($entry) use ($terms, $birthDate, $ageValue, $maritalStatus, $occupation) {
                 $private = $entry['private'];
                 if ($terms !== []) {
                     $firstName = mb_strtolower($private['firstName']);
@@ -1002,6 +1004,12 @@ class ApiController extends Controller
                     if ($actualAge !== (int) $ageValue) {
                         return false;
                     }
+                }
+                if ($maritalStatus !== '' && mb_strtolower(trim((string) ($private['maritalStatus'] ?? ''))) !== mb_strtolower($maritalStatus)) {
+                    return false;
+                }
+                if ($occupation !== '' && mb_strtolower(trim((string) ($private['occupation'] ?? ''))) !== mb_strtolower($occupation)) {
+                    return false;
                 }
 
                 return true;
@@ -1036,8 +1044,11 @@ class ApiController extends Controller
                 'age' => $entry['private']['birthDate']
                     ? \Illuminate\Support\Carbon::parse($entry['private']['birthDate'], 'Asia/Manila')->age
                     : null,
-                'sex' => $entry['private']['sex'] ?: 'Unclassified',
+                'sex' => $entry['private']['sex'],
+                'household' => $entry['private']['householdId'],
                 'householdId' => $entry['private']['householdId'],
+                'maritalStatus' => $entry['private']['maritalStatus'],
+                'occupation' => $entry['private']['occupation'],
                 'purok' => $entry['row']->purok,
                 'zone' => $entry['row']->zone,
                 'address' => $entry['private']['address'],
@@ -1054,6 +1065,8 @@ class ApiController extends Controller
             'filters' => [
                 'zone' => $zoneValue === null || $zoneValue === '' ? null : (int) $zoneValue,
                 'hasPurokFilter' => $purok !== '',
+                'hasMaritalStatusFilter' => $maritalStatus !== '',
+                'hasOccupationFilter' => $occupation !== '',
                 'hasSearch' => $search !== '',
                 'hasBirthDate' => $birthDate !== '',
                 'hasAge' => $ageValue !== null && $ageValue !== '',
@@ -1071,6 +1084,8 @@ class ApiController extends Controller
                 'age' => $ageValue === null || $ageValue === '' ? null : (int) $ageValue,
                 'zone' => $zoneValue === null || $zoneValue === '' ? null : (int) $zoneValue,
                 'purok' => $purok,
+                'maritalStatus' => $maritalStatus,
+                'occupation' => $occupation,
             ],
         ]);
     }
@@ -1096,7 +1111,7 @@ class ApiController extends Controller
             $base->where('purok', $purok);
         }
 
-        $overall = ['total' => 0, 'male' => 0, 'female' => 0, 'unclassified' => 0, 'households' => []];
+        $overall = ['total' => 0, 'male' => 0, 'female' => 0, 'households' => []];
         $purokGroups = [];
         $householdGroups = [];
         $records = $base->get();
@@ -1106,8 +1121,6 @@ class ApiController extends Controller
                 $counts['male']++;
             } elseif (mb_strtolower((string) $sex) === 'female') {
                 $counts['female']++;
-            } else {
-                $counts['unclassified']++;
             }
             if ($householdId !== null && trim($householdId) !== '') {
                 $counts['households'][$householdId] = true;
@@ -1122,7 +1135,7 @@ class ApiController extends Controller
                 $purokGroups[$purokKey] = [
                     'zone' => $resident->zone,
                     'purok' => $resident->purok,
-                    'counts' => ['total' => 0, 'male' => 0, 'female' => 0, 'unclassified' => 0, 'households' => []],
+                    'counts' => ['total' => 0, 'male' => 0, 'female' => 0, 'households' => []],
                 ];
             }
             $increment($overall, $private['sex'], $householdId);
@@ -1135,7 +1148,7 @@ class ApiController extends Controller
                         'zone' => $resident->zone,
                         'purok' => $resident->purok,
                         'householdId' => $householdId,
-                        'counts' => ['total' => 0, 'male' => 0, 'female' => 0, 'unclassified' => 0, 'households' => []],
+                        'counts' => ['total' => 0, 'male' => 0, 'female' => 0, 'households' => []],
                     ];
                 }
                 $increment($householdGroups[$householdKey]['counts'], $private['sex'], null);
@@ -1147,7 +1160,6 @@ class ApiController extends Controller
                 'total' => $counts['total'],
                 'male' => $counts['male'],
                 'female' => $counts['female'],
-                'unclassified' => $counts['unclassified'],
                 'households' => count($counts['households']),
             ];
         };
@@ -1172,7 +1184,6 @@ class ApiController extends Controller
                 'total' => $group['counts']['total'],
                 'male' => $group['counts']['male'],
                 'female' => $group['counts']['female'],
-                'unclassified' => $group['counts']['unclassified'],
             ])->values();
 
         $this->writeAudit($request->attributes->get('actor'), 'resident_registry.demographics_read', 'resident_registry', null, [
@@ -1184,7 +1195,7 @@ class ApiController extends Controller
         ]);
 
         return response()->json([
-            'eligibility' => 'Active records with verified household/resident status; unclassified sex is reported separately.',
+            'eligibility' => 'Active records with verified household/resident status.',
             'overall' => $overall,
             'byPurok' => $byPurok,
             'byHousehold' => $byHousehold,
@@ -1210,10 +1221,10 @@ class ApiController extends Controller
         $lastName = $this->clean($request->input('lastName'));
         $birthDate = $request->input('birthDate');
         $sex = $request->input('sex');
-        $householdId = $this->clean($request->input('householdId', ''));
-        $purok = $this->clean($request->input('purok', ''));
+        $householdId = $this->clean($request->input('household', $request->input('householdId', '')));
+        $maritalStatus = $this->clean($request->input('maritalStatus', ''));
+        $occupation = $this->clean($request->input('occupation', ''));
         $zone = $request->input('zone');
-        $address = $this->clean($request->input('address', ''));
         $sourceReference = $this->clean($request->input('sourceReference', ''));
         $sourceFilename = $this->clean($request->input('sourceFilename', ''));
         $actor = $request->attributes->get('actor');
@@ -1227,13 +1238,13 @@ class ApiController extends Controller
             || $birthDate > now('Asia/Manila')->toDateString())) {
             return response()->json(['message' => 'Enter a valid birthdate that is not in the future.'], 400);
         }
-        if ($sex !== null && $sex !== '' && !in_array($sex, ['Male', 'Female', 'Unclassified'], true)) {
-            return response()->json(['message' => 'Choose Male, Female, or Unclassified for sex.'], 400);
+        if (!in_array($sex, ['Male', 'Female'], true)) {
+            return response()->json(['message' => 'Choose Male or Female for sex.'], 400);
         }
         if ($zone !== null && $zone !== '' && (!filter_var($zone, FILTER_VALIDATE_INT) || (int) $zone < 1 || (int) $zone > 7)) {
             return response()->json(['message' => 'Choose a valid zone from 1 to 7.'], 400);
         }
-        if (mb_strlen($householdId) > 100 || mb_strlen($purok) > 100 || mb_strlen($address) > 255
+        if (mb_strlen($householdId) > 100 || mb_strlen($maritalStatus) > 100 || mb_strlen($occupation) > 255
             || mb_strlen($sourceReference) > 255 || mb_strlen($sourceFilename) > 255) {
             return response()->json(['message' => 'One or more resident fields exceed the allowed length.'], 400);
         }
@@ -1256,7 +1267,7 @@ class ApiController extends Controller
             'birth_date' => null,
             'sex' => null,
             'household_id' => null,
-            'purok' => $purok ?: null,
+            'purok' => null,
             'zone' => $zone === null || $zone === '' ? null : (int) $zone,
             'address' => null,
             'record_status' => 'active',
@@ -1269,7 +1280,9 @@ class ApiController extends Controller
                 'birthDate' => $birthDate ?: null,
                 'sex' => $sex ?: null,
                 'householdId' => $householdId ?: null,
-                'address' => $address ?: null,
+                'maritalStatus' => $maritalStatus ?: null,
+                'occupation' => $occupation ?: null,
+                'address' => null,
                 'sourceReference' => $sourceReference ?: null,
                 'sourceFilename' => $sourceFilename ?: null,
             ], $id),
@@ -1289,11 +1302,14 @@ class ApiController extends Controller
                 'lastName' => $lastName,
                 'birthDate' => $birthDate ?: null,
                 'age' => $birthDate ? \Illuminate\Support\Carbon::parse($birthDate, 'Asia/Manila')->age : null,
-                'sex' => $sex ?: 'Unclassified',
+                'sex' => $sex,
+                'household' => $householdId ?: null,
                 'householdId' => $householdId ?: null,
-                'purok' => $purok ?: null,
+                'maritalStatus' => $maritalStatus ?: null,
+                'occupation' => $occupation ?: null,
+                'purok' => null,
                 'zone' => $zone === null || $zone === '' ? null : (int) $zone,
-                'address' => $address ?: null,
+                'address' => null,
                 'status' => 'active',
                 'verificationStatus' => 'pending',
                 'sourceReference' => $sourceReference ?: null,
@@ -1328,8 +1344,20 @@ class ApiController extends Controller
                 continue;
             }
             $fields = [];
-            foreach (['firstName', 'lastName', 'birthDate', 'sex', 'householdId', 'zone', 'purok', 'address', 'sourceReference'] as $field) {
-                $value = $resident[$field] ?? '';
+            $fieldInputs = [
+                'firstName' => $resident['firstName'] ?? '',
+                'lastName' => $resident['lastName'] ?? '',
+                'birthDate' => $resident['birthDate'] ?? '',
+                'sex' => $resident['sex'] ?? '',
+                'household' => $resident['household'] ?? $resident['householdId'] ?? '',
+                'zone' => $resident['zone'] ?? '',
+                'maritalStatus' => $resident['maritalStatus'] ?? '',
+                'occupation' => $resident['occupation'] ?? '',
+                'sourceReference' => $resident['sourceReference'] ?? '',
+                'legacyPurok' => $resident['legacyPurok'] ?? $resident['purok'] ?? '',
+                'legacyAddress' => $resident['legacyAddress'] ?? $resident['address'] ?? '',
+            ];
+            foreach ($fieldInputs as $field => $value) {
                 if (!is_string($value) && !is_int($value)) {
                     $validationErrors[] = ['row' => $row, 'field' => $field, 'message' => 'Must be text.'];
                     $fields[$field] = '';
@@ -1352,14 +1380,15 @@ class ApiController extends Controller
                 || $birthDate > $today)) {
                 $validationErrors[] = ['row' => $row, 'field' => 'birthDate', 'message' => 'Birthdate must be a valid date no later than today.'];
             }
-            if ($sex !== '' && !in_array($sex, ['Male', 'Female', 'Unclassified'], true)) {
-                $validationErrors[] = ['row' => $row, 'field' => 'sex', 'message' => 'Use Male, Female, or Unclassified.'];
+            if (!in_array($sex, ['Male', 'Female'], true)) {
+                $validationErrors[] = ['row' => $row, 'field' => 'sex', 'message' => 'Use Male or Female.'];
             }
             if ($zoneText !== '' && ($zone === false || $zone < 1 || $zone > 7)) {
                 $validationErrors[] = ['row' => $row, 'field' => 'zone', 'message' => 'Zone must be a whole number from 1 to 7.'];
             }
-            if (mb_strlen($fields['householdId']) > 100 || mb_strlen($fields['purok']) > 100
-                || mb_strlen($fields['address']) > 255 || mb_strlen($fields['sourceReference']) > 255) {
+            if (mb_strlen($fields['household']) > 100 || mb_strlen($fields['maritalStatus']) > 100
+                || mb_strlen($fields['occupation']) > 255 || mb_strlen($fields['legacyPurok']) > 100
+                || mb_strlen($fields['legacyAddress']) > 255 || mb_strlen($fields['sourceReference']) > 255) {
                 $validationErrors[] = ['row' => $row, 'field' => 'length', 'message' => 'A field exceeds its maximum length.'];
             }
             $normalized[] = [
@@ -1367,10 +1396,12 @@ class ApiController extends Controller
                 'lastName' => $lastName,
                 'birthDate' => $birthDate !== '' ? $birthDate : null,
                 'sex' => $sex !== '' ? $sex : null,
-                'householdId' => $fields['householdId'] !== '' ? $fields['householdId'] : null,
+                'householdId' => $fields['household'] !== '' ? $fields['household'] : null,
                 'zone' => $zone === false || $zone === null ? null : (int) $zone,
-                'purok' => $fields['purok'] !== '' ? $fields['purok'] : null,
-                'address' => $fields['address'] !== '' ? $fields['address'] : null,
+                'maritalStatus' => $fields['maritalStatus'] !== '' ? $fields['maritalStatus'] : null,
+                'occupation' => $fields['occupation'] !== '' ? $fields['occupation'] : null,
+                'purok' => $fields['legacyPurok'] !== '' ? $fields['legacyPurok'] : null,
+                'address' => $fields['legacyAddress'] !== '' ? $fields['legacyAddress'] : null,
                 'sourceReference' => $fields['sourceReference'] !== '' ? $fields['sourceReference'] : null,
             ];
         }
@@ -1484,6 +1515,182 @@ class ApiController extends Controller
         return response()->json([
             'message' => 'Managed office printing is not configured. No print job was started.',
         ], 503);
+    }
+
+    public function auditRegistryExport(Request $request): JsonResponse
+    {
+        $count = $request->input('count');
+        $filters = $request->input('filters');
+        $filterKeys = ['hasSearch', 'hasBirthDate', 'hasAge', 'hasZone', 'hasMaritalStatusFilter', 'hasOccupationFilter'];
+        if (!is_int($count) || $count < 1 || $count > 10000
+            || $request->input('format') !== 'csv'
+            || $request->input('grouping') !== 'zone_household_name'
+            || !is_array($filters)
+            || array_diff(array_keys($filters), $filterKeys) !== []
+            || count($filters) !== count($filterKeys)) {
+            return response()->json(['message' => 'Spreadsheet export details are invalid.'], 400);
+        }
+        foreach ($filterKeys as $key) {
+            if (!array_key_exists($key, $filters) || !is_bool($filters[$key])) {
+                return response()->json(['message' => 'Spreadsheet export details are invalid.'], 400);
+            }
+        }
+
+        $this->writeAudit($request->attributes->get('actor'), 'resident_registry.exported', 'resident_registry', null, [
+            'recordCount' => $count,
+            'format' => 'csv',
+            'grouping' => 'zone_household_name',
+            'filters' => $filters,
+            'dataFields' => ['zone', 'household', 'name', 'birthDate', 'age', 'sex', 'maritalStatus', 'occupation', 'recordStatus', 'verificationStatus'],
+        ]);
+
+        return response()->json(['success' => true]);
+    }
+
+    public function updateRegistryResident(Request $request, string $id): JsonResponse
+    {
+        if (!Str::isUuid($id)) {
+            return response()->json(['message' => 'Choose a valid resident record.'], 400);
+        }
+
+        $body = $request->all();
+        $editableFields = [
+            'firstName', 'lastName', 'birthDate', 'sex', 'household', 'householdId',
+            'maritalStatus', 'occupation', 'purok', 'zone', 'address', 'sourceReference',
+            'sourceFilename', 'status', 'verificationStatus',
+        ];
+        $changedFields = array_values(array_intersect($editableFields, array_keys($body)));
+        if ($changedFields === []) {
+            return response()->json(['message' => 'Provide at least one resident field to update.'], 400);
+        }
+
+        $privateUpdates = [];
+        $stringLimits = [
+            'firstName' => 100,
+            'lastName' => 100,
+            'household' => 100,
+            'householdId' => 100,
+            'maritalStatus' => 100,
+            'occupation' => 255,
+            'address' => 255,
+            'sourceReference' => 255,
+            'sourceFilename' => 255,
+        ];
+        foreach ($stringLimits as $field => $maxLength) {
+            if (!array_key_exists($field, $body)) {
+                continue;
+            }
+            if ($field === 'householdId' && array_key_exists('household', $body)) {
+                continue;
+            }
+            if (!is_string($body[$field])) {
+                return response()->json(['message' => "Enter a valid {$field} value."], 400);
+            }
+            $value = $this->clean($body[$field]);
+            if (mb_strlen($value) > $maxLength || (in_array($field, ['firstName', 'lastName'], true) && $value === '')) {
+                return response()->json(['message' => "Enter a valid {$field} (up to {$maxLength} characters)."], 400);
+            }
+            $privateUpdates[$field === 'household' ? 'householdId' : $field] = $value !== '' ? $value : null;
+        }
+
+        if (array_key_exists('birthDate', $body)) {
+            $birthDate = $body['birthDate'];
+            if ($birthDate !== null && $birthDate !== ''
+                && (!is_string($birthDate) || !preg_match('/^\d{4}-\d{2}-\d{2}$/', $birthDate)
+                    || !checkdate((int) substr($birthDate, 5, 2), (int) substr($birthDate, 8, 2), (int) substr($birthDate, 0, 4))
+                    || $birthDate > now('Asia/Manila')->toDateString())) {
+                return response()->json(['message' => 'Enter a valid birthdate that is not in the future.'], 400);
+            }
+            $privateUpdates['birthDate'] = $birthDate ?: null;
+        }
+        if (array_key_exists('sex', $body)) {
+            if (!in_array($body['sex'], ['Male', 'Female'], true)) {
+                return response()->json(['message' => 'Choose Male or Female for sex.'], 400);
+            }
+            $privateUpdates['sex'] = $body['sex'];
+        }
+
+        $columns = [];
+        if (array_key_exists('zone', $body)) {
+            $zone = $body['zone'] === null || $body['zone'] === '' ? null : filter_var($body['zone'], FILTER_VALIDATE_INT);
+            if ($zone !== null && ($zone === false || $zone < 1 || $zone > 7)) {
+                return response()->json(['message' => 'Choose a valid zone from 1 to 7.'], 400);
+            }
+            $columns['zone'] = $zone;
+        }
+        if (array_key_exists('purok', $body)) {
+            if (!is_string($body['purok']) || mb_strlen($this->clean($body['purok'])) > 100) {
+                return response()->json(['message' => 'Enter a valid legacy location value.'], 400);
+            }
+            $columns['purok'] = $this->clean($body['purok']) ?: null;
+        }
+        if (array_key_exists('status', $body)) {
+            if (!in_array($body['status'], ['active', 'inactive', 'deceased', 'archived'], true)) {
+                return response()->json(['message' => 'Choose a valid resident record status.'], 400);
+            }
+            $columns['record_status'] = $body['status'];
+        }
+        if (array_key_exists('verificationStatus', $body)) {
+            if (!in_array($body['verificationStatus'], ['pending', 'verified', 'needs_review'], true)) {
+                return response()->json(['message' => 'Choose a valid verification status.'], 400);
+            }
+            $columns['verification_status'] = $body['verificationStatus'];
+            $columns['verified_by'] = $body['verificationStatus'] === 'verified'
+                ? $request->attributes->get('actor')->id
+                : null;
+            $columns['verified_at'] = $body['verificationStatus'] === 'verified' ? now() : null;
+        }
+
+        $actor = $request->attributes->get('actor');
+        $updated = DB::transaction(function () use ($id, $privateUpdates, $columns) {
+            $resident = DB::table('resident_registry')->where('id', $id)->lockForUpdate()->first();
+            if (!$resident) {
+                return null;
+            }
+            $private = array_merge(ResidentRegistryData::decrypt($resident), $privateUpdates);
+            DB::table('resident_registry')->where('id', $id)->update([
+                ...$columns,
+                'encrypted_data' => ResidentRegistryData::encrypt($private, $id),
+                'updated_at' => now(),
+            ]);
+
+            return ['row' => $resident, 'private' => $private];
+        });
+        if (!$updated) {
+            return response()->json(['message' => 'Resident record not found.'], 404);
+        }
+
+        $this->writeAudit($actor, 'resident_registry.record_updated', 'resident_registry', $id, [
+            'changedFields' => $changedFields,
+        ]);
+        $private = $updated['private'];
+        $row = $updated['row'];
+        $verificationStatus = $columns['verification_status'] ?? $row->verification_status;
+        $recordStatus = $columns['record_status'] ?? $row->record_status;
+        $zone = array_key_exists('zone', $columns) ? $columns['zone'] : $row->zone;
+        $purok = array_key_exists('purok', $columns) ? $columns['purok'] : $row->purok;
+
+        return response()->json([
+            'resident' => [
+                'id' => $id,
+                'firstName' => $private['firstName'],
+                'lastName' => $private['lastName'],
+                'birthDate' => $private['birthDate'],
+                'age' => $private['birthDate'] ? \Illuminate\Support\Carbon::parse($private['birthDate'], 'Asia/Manila')->age : null,
+                'sex' => $private['sex'],
+                'household' => $private['householdId'],
+                'householdId' => $private['householdId'],
+                'maritalStatus' => $private['maritalStatus'],
+                'occupation' => $private['occupation'],
+                'purok' => $purok,
+                'zone' => $zone,
+                'address' => $private['address'],
+                'status' => $recordStatus,
+                'verificationStatus' => $verificationStatus,
+                'sourceReference' => $private['sourceReference'],
+                'sourceFilename' => $private['sourceFilename'],
+            ],
+        ]);
     }
 
     public function verifyRegistryResident(Request $request, string $id): JsonResponse
@@ -2321,24 +2528,119 @@ class ApiController extends Controller
 
     public function archiveRequests(Request $request): JsonResponse
     {
-        $days = max(0, (int) $request->input('days', 1));
-        $cutoff = now()->subDays($days);
-        $query = DB::table('requests')->whereIn('status', ['Approved', 'Rejected']);
-        if ($days > 0) {
-            $query->whereRaw('COALESCE(updated_at, created_at) <= ?', [$cutoff]);
+        $days = $request->input('days');
+        if ($days !== null && !in_array($days, [0, '0'], true)) {
+            return response()->json(['message' => 'Only manual archiving of closed requests is supported.'], 400);
         }
-        $rows = $query->orderBy('created_at')->get();
-        if ($rows->isEmpty()) {
-            return response()->json(['archive' => ['count' => 0, 'filename' => null, 'archivedAt' => null]]);
-        }
-        $records = $rows->map(fn ($row) => $this->requestData($row))->values()->all();
-        $filename = 'queue-approvals-'.now()->format('Y-m-d').'.json';
-        $payload = ['archivedAt' => now()->toISOString(), 'archivedFor' => $days === 0 ? 'manual' : "{$days} day(s)", 'total' => count($records), 'records' => $records];
-        $this->saveArchive($filename, 'queue-approvals', $payload);
-        DB::table('requests')->whereIn('id', $rows->pluck('id'))->delete();
-        $this->writeAudit($request->attributes->get('actor'), 'requests.archived', 'archive', $filename, ['count' => count($records)]);
+        $result = DB::transaction(function () {
+            $rows = DB::table('requests')
+                ->whereIn('status', ['Approved', 'Rejected'])
+                ->orderBy('created_at')
+                ->limit(500)
+                ->lockForUpdate()
+                ->get();
+            if ($rows->isEmpty()) {
+                return ['count' => 0, 'filename' => null, 'archivedAt' => null, 'remaining' => 0];
+            }
+            $records = $rows->map(fn ($row) => $this->requestData($row))->values()->all();
+            $archivedAt = now();
+            $filename = 'queue-approvals-'.$archivedAt->format('Y-m-d\TH-i-s-u').'-'.Str::uuid().'.json';
+            $payload = [
+                'archivedAt' => $archivedAt->toISOString(),
+                'archivedFor' => 'manual',
+                'total' => count($records),
+                'records' => $records,
+            ];
+            DB::table('archives')->insert([
+                'id' => (string) Str::uuid(),
+                'name' => $filename,
+                'category' => 'queue-approvals',
+                'contents' => json_encode($payload, JSON_THROW_ON_ERROR),
+                'created_at' => $archivedAt,
+            ]);
+            DB::table('requests')->whereIn('id', $rows->pluck('id'))->delete();
+            $remaining = DB::table('requests')->whereIn('status', ['Approved', 'Rejected'])->count();
 
-        return response()->json(['archive' => ['count' => count($records), 'filename' => $filename, 'archivedAt' => $payload['archivedAt']]]);
+            return ['count' => count($records), 'filename' => $filename, 'archivedAt' => $payload['archivedAt'], 'remaining' => $remaining];
+        });
+        $this->writeAudit($request->attributes->get('actor'), 'requests.archived', 'archive', $result['filename'], [
+            'count' => $result['count'],
+            'remainingClosedCount' => $result['remaining'],
+        ]);
+
+        return response()->json(['archive' => $result]);
+    }
+
+    public function restoreArchivedRequests(Request $request): JsonResponse
+    {
+        $filename = $request->input('filename');
+        if (!is_string($filename) || !preg_match('/^queue-approvals-[\w.-]+\.json$/', $filename)) {
+            return response()->json(['message' => 'Choose a valid closed-request archive.'], 400);
+        }
+
+        $result = DB::transaction(function () use ($filename) {
+            $archiveRow = DB::table('archives')
+                ->where('name', $filename)
+                ->where('category', 'queue-approvals')
+                ->lockForUpdate()
+                ->first();
+            if (!$archiveRow) {
+                return response()->json(['message' => 'Closed-request archive not found.'], 404);
+            }
+            $archive = ApiIdentity::decodeJson($archiveRow->contents);
+            if (!is_array($archive) || !isset($archive['records']) || !is_array($archive['records'])) {
+                return response()->json(['message' => 'The selected archive is invalid.'], 400);
+            }
+            foreach ($archive['records'] as $record) {
+                if (!is_array($record)
+                    || !is_string($record['id'] ?? null)
+                    || !Str::isUuid($record['id'])
+                    || !is_string($record['userId'] ?? null)
+                    || !Str::isUuid($record['userId'])
+                    || !in_array($record['status'] ?? null, ['Approved', 'Rejected'], true)
+                    || !is_string($record['type'] ?? null)
+                    || !is_string($record['purpose'] ?? null)) {
+                    return response()->json(['message' => 'The selected archive contains an invalid request.'], 400);
+                }
+            }
+
+            $restoredCount = 0;
+            $conflictCount = 0;
+            foreach ($archive['records'] as $record) {
+                if (!DB::table('users')->where('id', $record['userId'])->exists()) {
+                    $conflictCount++;
+                    continue;
+                }
+
+                $inserted = DB::table('requests')->insertOrIgnore([
+                    'id' => $record['id'],
+                    'user_id' => $record['userId'],
+                    'type' => $record['type'],
+                    'purpose' => $record['purpose'],
+                    'notes' => $record['notes'] ?? '',
+                    'status' => $record['status'],
+                    'delivery_method' => $record['deliveryMethod'] ?? 'online',
+                    'delivery_note' => $record['deliveryNote'] ?? '',
+                    'follow_ups' => json_encode($record['followUps'] ?? [], JSON_THROW_ON_ERROR),
+                    'status_history' => json_encode($record['statusHistory'] ?? [], JSON_THROW_ON_ERROR),
+                    'created_at' => $record['date'] ?? $record['createdAt'] ?? now(),
+                    'updated_at' => $record['updatedAt'] ?? null,
+                ]);
+                if ($inserted === 1) {
+                    $restoredCount++;
+                } else {
+                    $conflictCount++;
+                }
+            }
+
+            return ['restoredCount' => $restoredCount, 'conflictCount' => $conflictCount];
+        });
+        if ($result instanceof JsonResponse) {
+            return $result;
+        }
+        $this->writeAudit($request->attributes->get('actor'), 'requests.archive.restored', 'request_archive', $filename, $result);
+
+        return response()->json(['restore' => $result]);
     }
 
     public function staffArchives(Request $request): JsonResponse

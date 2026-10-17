@@ -28,7 +28,7 @@ const text = {
     lastName: 'Last name',
     birthDate: 'Birth date',
     sex: 'Sex',
-    selectSex: 'Unclassified / not recorded',
+    selectSex: 'Choose sex',
     male: 'Male',
     female: 'Female',
     household: 'Household ID',
@@ -44,7 +44,7 @@ const text = {
     import: 'Import checked rows as pending',
     importing: 'Importing…',
     imported: 'rows imported as pending. Check the saved records against their sources before verification.',
-    ready: 'Every row needs a first and last name and source check before import.',
+    ready: 'Every row needs a first and last name, a Male/Female value, and a source check before import.',
     clear: 'Clear scan and draft',
     errors: {
       noFiles: 'Choose at least one image to scan.',
@@ -365,7 +365,9 @@ export default function ResidentDocumentScanner({ language = 'en' }) {
       purok: entry.purok.trim() || null,
       sourceReference: entry.sourceReference.trim() || null,
     }))
-    if (!entries.length || entries.some((entry) => !entry.checked || !entry.firstName.trim() || !entry.lastName.trim())) {
+    if (!entries.length || entries.some((entry) => (
+      !entry.checked || !entry.firstName.trim() || !entry.lastName.trim() || !['Male', 'Female'].includes(entry.sex)
+    ))) {
       setError(labels.ready)
       return
     }
@@ -462,7 +464,7 @@ export default function ResidentDocumentScanner({ language = 'en' }) {
                   <label>{labels.firstName}<input autoComplete="off" maxLength={100} value={entry.firstName} onChange={(event) => updateEntry(entry.id, 'firstName', event.target.value)} /></label>
                   <label>{labels.lastName}<input autoComplete="off" maxLength={100} value={entry.lastName} onChange={(event) => updateEntry(entry.id, 'lastName', event.target.value)} /></label>
                   <label>{labels.birthDate}<input type="date" value={entry.birthDate} onChange={(event) => updateEntry(entry.id, 'birthDate', event.target.value)} /></label>
-                  <label>{labels.sex}<select value={entry.sex} onChange={(event) => updateEntry(entry.id, 'sex', event.target.value)}><option value="">{labels.selectSex}</option><option value="Male">{labels.male}</option><option value="Female">{labels.female}</option><option value="Unclassified">Unclassified</option></select></label>
+                  <label>{labels.sex}<select value={entry.sex} onChange={(event) => updateEntry(entry.id, 'sex', event.target.value)} required><option value="">{labels.selectSex}</option><option value="Male">{labels.male}</option><option value="Female">{labels.female}</option></select></label>
                   <label>{labels.household}<input autoComplete="off" maxLength={100} value={entry.householdId} onChange={(event) => updateEntry(entry.id, 'householdId', event.target.value)} /></label>
                   <label>{labels.zone}<select value={entry.zone} onChange={(event) => updateEntry(entry.id, 'zone', event.target.value)}><option value="">—</option>{[1, 2, 3, 4, 5, 6, 7].map((zone) => <option key={zone} value={zone}>{zone}</option>)}</select></label>
                   <label>{labels.purok}<input autoComplete="off" maxLength={100} value={entry.purok} onChange={(event) => updateEntry(entry.id, 'purok', event.target.value)} /></label>
@@ -478,7 +480,7 @@ export default function ResidentDocumentScanner({ language = 'en' }) {
           <div className="registry-row-actions">
             <button type="button" className="secondary-btn small" disabled={importing || entries.length >= 500} onClick={() => setEntries((current) => [...current, emptyResident(`scan-${Date.now()}-${current.length}`, current.length + 1)])}>{labels.addRow}</button>
             <span>{labels.rowLimit}</span>
-            <button type="button" className="primary-btn small" disabled={!entries.length || importing || entries.some((entry) => !entry.checked || !entry.firstName.trim() || !entry.lastName.trim())} onClick={() => importEntries(false)}>{importing ? labels.importing : labels.import}</button>
+            <button type="button" className="primary-btn small" disabled={!entries.length || importing || entries.some((entry) => !entry.checked || !entry.firstName.trim() || !entry.lastName.trim() || !['Male', 'Female'].includes(entry.sex))} onClick={() => importEntries(false)}>{importing ? labels.importing : labels.import}</button>
           </div>
           {matches.length > 0 && (
             <div className="registry-message warning" role="alert">

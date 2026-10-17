@@ -5,7 +5,14 @@ process.env.NODE_ENV = 'test'
 process.env.DATABASE_URL = 'postgres://unused:unused@127.0.0.1:1/unused'
 process.env.ADMIN_PASSWORD = 'TestAdminPass123!'
 
-const [{ default: pg }, { initDatabase, createStaffInvitation, redeemStaffInvitation }, { decryptResidentPrivateData }] = await Promise.all([
+const [{ default: pg }, {
+  archiveProcessedRequestsOlderThan,
+  createStaffInvitation,
+  initDatabase,
+  redeemStaffInvitation,
+  restoreArchivedRequests,
+  updateRegistryResident,
+}, { decryptResidentPrivateData }] = await Promise.all([
   import('pg'),
   import('../server/db-postgres.js'),
   import('../server/resident-registry-crypto.js'),
@@ -39,6 +46,8 @@ test('PostgreSQL initialization skips admin seeding when a seed identifier alrea
   assert.ok(queries.some((sql) => sql.includes('staff_invitations_pending_email_unique')))
   assert.ok(queries.some((sql) => sql.includes('staff_invitations_pending_mobile_unique')))
   assert.ok(queries.some((sql) => sql.startsWith('create table if not exists resident_registry')))
+  assert.ok(queries.some((sql) => sql.includes('using gin (name_search_tokens)')))
+  assert.ok(queries.some((sql) => sql.startsWith('create table if not exists resident_registry_search_key_state')))
   assert.ok(queries.some((sql) => sql.includes('encrypted_data text')))
   assert.ok(queries.some((sql) => sql.includes('drop index if exists resident_registry_household_location_idx')))
   assert.equal(queries.some((sql) => sql.includes('resident_registry_first_name_prefix_idx')), false)
@@ -101,6 +110,88 @@ test('PostgreSQL startup encrypts legacy registry data and clears plaintext colu
   })
 })
 
+test('PostgreSQL resident edits re-encrypt private fields and refresh keyed name search', async () => {
+  const { encryptResidentPrivateData, residentNameSearchCandidates } = await import('../server/resident-registry-crypto.js')
+  const id = 'edited-resident-id'
+  const initialPrivateData = {
+    firstName: 'Before',
+    lastName: 'Name',
+    birthDate: '1990-01-01',
+    sex: 'Female',
+    householdId: 'HH-1',
+    maritalStatus: 'Married',
+    occupation: 'Teacher',
+    address: 'Old address',
+    sourceReference: 'Sheet 1',
+    sourceFilename: 'roster.csv',
+  }
+  const initialEncryptedData = encryptResidentPrivateData(initialPrivateData, id)
+  let updatedQuery = null
+  const originalConnect = pg.Pool.prototype.connect
+  pg.Pool.prototype.connect = async function () {
+    return {
+      query: async (sql, params = []) => {
+        const normalizedSql = sql.replace(/\s+/g, ' ').trim().toLowerCase()
+        if (normalizedSql.startsWith('select * from resident_registry where id = $1 for update')) {
+          return { rows: [{
+            id,
+            encrypted_data: initialEncryptedData,
+            name_search_tokens: [],
+            purok: 'Purok 1',
+            zone: 1,
+            record_status: 'active',
+            verification_status: 'verified',
+          }] }
+        }
+        if (normalizedSql.startsWith('update resident_registry set encrypted_data')) {
+          updatedQuery = { sql: normalizedSql, params }
+          return { rows: [{
+            id,
+            encrypted_data: params[0],
+            name_search_tokens: params[1],
+            zone: params[2],
+            purok: 'Purok 1',
+            record_status: 'active',
+            verification_status: 'verified',
+          }] }
+        }
+        return { rows: [] }
+      },
+      release() {},
+    }
+  }
+
+  let resident
+  try {
+    resident = await updateRegistryResident(id, {
+      firstName: 'Updated',
+      birthDate: '1991-02-03',
+      maritalStatus: 'Single',
+      occupation: 'Nurse',
+      zone: 2,
+    })
+  } finally {
+    pg.Pool.prototype.connect = originalConnect
+  }
+
+  assert.ok(updatedQuery)
+  assert.match(updatedQuery.sql, /name_search_tokens = \$2/)
+  assert.deepEqual(decryptResidentPrivateData(updatedQuery.params[0], id), {
+    ...initialPrivateData,
+    firstName: 'Updated',
+    birthDate: '1991-02-03',
+    maritalStatus: 'Single',
+    occupation: 'Nurse',
+  })
+  assert.equal(resident.firstName, 'Updated')
+  assert.equal(resident.birthDate, '1991-02-03')
+  assert.equal(resident.maritalStatus, 'Single')
+  assert.equal(resident.occupation, 'Nurse')
+  assert.equal(resident.zone, 2)
+  const nameSearchCandidates = residentNameSearchCandidates('Updated')
+  assert.ok(nameSearchCandidates[0].some((token) => updatedQuery.params[1].includes(token)))
+})
+
 test('PostgreSQL staff invitation issuance and redemption are transactional and audit without contact details', async () => {
   const queries = []
   const invite = {
@@ -158,4 +249,72 @@ test('PostgreSQL staff invitation issuance and redemption are transactional and 
   assert.equal(JSON.stringify(auditQueries).includes(invite.email), false)
   assert.equal(JSON.stringify(auditQueries).includes(invite.mobile), false)
   assert.equal(JSON.stringify(auditQueries).includes(invite.tokenHash), false)
+})
+
+test('PostgreSQL request archives are bounded, uniquely named, and restored without deleting the archive', async () => {
+  const archiveQueries = []
+  const requestId = 'e1281819-ef45-4fae-a418-1e47ce2ce58b'
+  const userId = 'd7c58338-b3b2-43c3-8fa9-e4b2f6eaef35'
+  const originalConnect = pg.Pool.prototype.connect
+  pg.Pool.prototype.connect = async function () {
+    return {
+      query: async (sql, params = []) => {
+        const normalizedSql = sql.replace(/\s+/g, ' ').trim().toLowerCase()
+        archiveQueries.push({ sql: normalizedSql, params })
+        if (normalizedSql.startsWith('select * from requests')) {
+          return { rows: [{
+            id: requestId,
+            user_id: userId,
+            type: 'Certificate',
+            purpose: 'Synthetic archive test',
+            status: 'Approved',
+            created_at: new Date('2026-01-01T00:00:00.000Z'),
+          }] }
+        }
+        if (normalizedSql.startsWith('select count(*)::int as total from requests')) {
+          return { rows: [{ total: 2 }] }
+        }
+        if (normalizedSql.startsWith('select contents from archives')) {
+          return { rows: [{
+            contents: {
+              records: [{
+                id: requestId,
+                userId,
+                type: 'Certificate',
+                purpose: 'Synthetic archive test',
+                status: 'Approved',
+                date: '2026-01-01T00:00:00.000Z',
+              }],
+            },
+          }] }
+        }
+        if (normalizedSql.startsWith('insert into requests')) return { rowCount: 1, rows: [{ id: requestId }] }
+        return { rows: [], rowCount: 0 }
+      },
+      release() {},
+    }
+  }
+
+  try {
+    const archived = await archiveProcessedRequestsOlderThan()
+    assert.equal(archived.count, 1)
+    assert.equal(archived.remaining, 2)
+    assert.match(archived.filename, /^queue-approvals-.*-[0-9a-f-]{36}\.json$/)
+    const select = archiveQueries.find(({ sql }) => sql.startsWith('select * from requests'))
+    assert.match(select.sql, /limit 500 for update skip locked/)
+    const insertArchive = archiveQueries.find(({ sql }) => sql.startsWith('insert into archives'))
+    const payload = JSON.parse(insertArchive.params[2])
+    assert.equal(payload.archivedFor, 'manual')
+    assert.equal(payload.total, 1)
+    assert.equal(archiveQueries.some(({ sql }) => sql.includes('on conflict (name) do update')), false)
+
+    archiveQueries.length = 0
+    const restored = await restoreArchivedRequests(archived.filename)
+    assert.deepEqual(restored, { restoredCount: 1, conflictCount: 0 })
+    assert.ok(archiveQueries.some(({ sql }) => sql.startsWith('select contents from archives')))
+    assert.ok(archiveQueries.some(({ sql }) => sql.startsWith('insert into requests')))
+    assert.equal(archiveQueries.some(({ sql }) => sql.startsWith('delete from archives')), false)
+  } finally {
+    pg.Pool.prototype.connect = originalConnect
+  }
 })

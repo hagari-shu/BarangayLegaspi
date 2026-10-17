@@ -54,6 +54,7 @@ class AdminMonitoringOnly
             'POST /api/staff/residents/import',
             'POST /api/staff/residents/print-audit',
             'POST /api/staff/archive-requests',
+            'POST /api/staff/archive-requests/restore',
             'DELETE /api/staff/archive-file',
         ];
 

@@ -3552,6 +3552,10 @@ textarea:focus {
   font-size: 0.9rem;
 }
 
+.archive-main strong {
+  overflow-wrap: anywhere;
+}
+
 .approval-row-top span,
 .archive-meta,
 .approval-meta {
@@ -3570,6 +3574,7 @@ textarea:focus {
 
 .archive-actions {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   width: 100%;
@@ -5123,9 +5128,19 @@ button.report-summary-card:focus-visible,
 }
 
 @media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-delay: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
+
   ::view-transition-old(root),
   ::view-transition-new(root) {
-    animation-duration: 1ms;
+    animation-duration: 0.01ms !important;
   }
 }
 

@@ -2,7 +2,13 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { DB_PATH } from './config.js'
-import { decryptResidentPrivateData, encryptResidentPrivateData } from './resident-registry-crypto.js'
+import {
+  createResidentNameSearchTokens,
+  decryptResidentPrivateData,
+  encryptResidentPrivateData,
+  residentNameSearchCandidates,
+  residentNameSearchTokensNeedRefresh,
+} from './resident-registry-crypto.js'
 
 const dbDir = path.dirname(DB_PATH)
 let registryMutationQueue = Promise.resolve()
@@ -18,6 +24,8 @@ const residentPrivateFields = [
   'birthDate',
   'sex',
   'householdId',
+  'maritalStatus',
+  'occupation',
   'address',
   'sourceReference',
   'sourceFilename',
@@ -66,10 +74,24 @@ function stripPlaintextUserPasswords(data) {
 }
 
 function encryptRegistryRecord(record) {
+  const privateData = record.encryptedData
+    ? null
+    : Object.fromEntries(residentPrivateFields.map((field) => [
+        field,
+        record[field] ?? record[field.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`)] ?? null,
+      ]))
   const encryptedData = record.encryptedData || encryptResidentPrivateData(Object.fromEntries(
-    residentPrivateFields.map((field) => [field, record[field] ?? record[field.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`)] ?? null])
+    residentPrivateFields.map((field) => [field, privateData[field]])
   ), record.id)
-  const safeRecord = { ...record, encryptedData }
+  const refreshNameSearchTokens = residentNameSearchTokensNeedRefresh(record.nameSearchTokens)
+  const searchData = privateData || (refreshNameSearchTokens ? decryptResidentPrivateData(encryptedData, record.id) : null)
+  const safeRecord = {
+    ...record,
+    encryptedData,
+    nameSearchTokens: refreshNameSearchTokens
+      ? createResidentNameSearchTokens(searchData.firstName, searchData.lastName)
+      : record.nameSearchTokens,
+  }
   for (const field of residentPrivateFields) {
     delete safeRecord[field]
     delete safeRecord[field.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`)]
@@ -85,21 +107,24 @@ function decryptRegistryRecord(record) {
   }
 }
 
-export async function readDb() {
+export async function readDb({ decryptRegistry = true } = {}) {
   try {
     const raw = await fs.readFile(DB_PATH, 'utf8')
     const { data, changed: passwordsChanged } = stripPlaintextUserPasswords(JSON.parse(raw))
     const registry = Array.isArray(data.residentRegistry) ? data.residentRegistry : []
     const needsRegistryEncryption = registry.some((record) => !record.encryptedData)
+    const needsNameSearchTokens = registry.some((record) => residentNameSearchTokensNeedRefresh(record.nameSearchTokens))
     const protectedData = {
       ...data,
       residentRegistry: registry.map(encryptRegistryRecord),
     }
-    if (passwordsChanged || needsRegistryEncryption) await writeJsonFile(protectedData)
+    if (passwordsChanged || needsRegistryEncryption || needsNameSearchTokens) await writeJsonFile(protectedData)
 
     return {
       ...data,
-      residentRegistry: protectedData.residentRegistry.map(decryptRegistryRecord),
+      residentRegistry: decryptRegistry
+        ? protectedData.residentRegistry.map(decryptRegistryRecord)
+        : protectedData.residentRegistry,
     }
   } catch (error) {
     if (error.code === 'ENOENT') {
@@ -595,6 +620,9 @@ const normalizeRegistryResident = (record) => ({
   lastName: record.lastName ?? record.last_name ?? '',
   birthDate: record.birthDate ?? record.birth_date ?? null,
   householdId: record.householdId ?? record.household_id ?? null,
+  household: record.household ?? record.householdId ?? record.household_id ?? null,
+  maritalStatus: record.maritalStatus ?? record.marital_status ?? null,
+  occupation: record.occupation ?? null,
   verificationStatus: record.verificationStatus ?? record.verification_status ?? 'pending',
   sourceReference: record.sourceReference ?? record.source_reference ?? null,
   sourceFilename: record.sourceFilename ?? record.source_filename ?? null,
@@ -606,25 +634,46 @@ const normalizeRegistryResident = (record) => ({
 })
 
 export async function listResidentRegistry(filters = {}) {
-  const db = await readDb()
-  const matches = (db.residentRegistry || []).map(normalizeRegistryResident).filter((resident) => {
-    const nameParts = String(filters.search || '').toLowerCase().split(/\s+/).filter(Boolean)
-    const fullName = `${resident.firstName} ${resident.lastName}`.toLowerCase()
-    if (nameParts.some((part) => !fullName.includes(part))) return false
+  const db = await readDb({ decryptRegistry: false })
+  const searchCandidates = residentNameSearchCandidates(filters.search)
+  const rawMatches = (db.residentRegistry || []).filter((record) => {
+    if (searchCandidates.some((candidates) => !candidates.some((token) => record.nameSearchTokens?.includes(token)))) return false
+    if (filters.zone && Number(record.zone) !== Number(filters.zone)) return false
+    if (filters.purok && record.purok !== filters.purok) return false
+    return true
+  })
+  const offset = (filters.page - 1) * filters.pageSize
+  const recordsToRead = searchCandidates.length || filters.birthDate || filters.ageStart || filters.ageEnd || filters.maritalStatus || filters.occupation
+    ? rawMatches.map(decryptRegistryRecord).map(normalizeRegistryResident).filter((resident) => {
     if (filters.birthDate && resident.birthDate !== filters.birthDate) return false
     if (filters.ageStart && filters.ageEnd && (!resident.birthDate || resident.birthDate < filters.ageStart || resident.birthDate > filters.ageEnd)) return false
-    if (filters.zone && Number(resident.zone) !== Number(filters.zone)) return false
-    if (filters.purok && resident.purok !== filters.purok) return false
+    if (filters.maritalStatus && String(resident.maritalStatus || '').trim().toLocaleLowerCase('en') !== filters.maritalStatus.trim().toLocaleLowerCase('en')) return false
+    if (filters.occupation && String(resident.occupation || '').trim().toLocaleLowerCase('en') !== filters.occupation.trim().toLocaleLowerCase('en')) return false
     return true
-  }).sort((left, right) => (
-    Number(left.zone || 99) - Number(right.zone || 99)
-    || String(left.purok || '').localeCompare(String(right.purok || ''))
-    || left.lastName.localeCompare(right.lastName)
-    || left.firstName.localeCompare(right.firstName)
-    || String(left.id).localeCompare(String(right.id))
-  ))
-  const offset = (filters.page - 1) * filters.pageSize
-  return { residents: matches.slice(offset, offset + filters.pageSize), total: matches.length }
+    }).sort((left, right) => (
+      Number(left.zone || 99) - Number(right.zone || 99)
+      || String(left.purok || '').localeCompare(String(right.purok || ''))
+      || left.lastName.localeCompare(right.lastName)
+      || left.firstName.localeCompare(right.firstName)
+      || String(left.id).localeCompare(String(right.id))
+    ))
+    : rawMatches
+      .sort((left, right) => (
+        Number(left.zone || 99) - Number(right.zone || 99)
+        || String(left.purok || '').localeCompare(String(right.purok || ''))
+        || String(left.createdAt || '').localeCompare(String(right.createdAt || ''))
+        || String(left.id).localeCompare(String(right.id))
+      ))
+      .slice(offset, offset + filters.pageSize)
+      .map(decryptRegistryRecord)
+      .map(normalizeRegistryResident)
+  const total = searchCandidates.length || filters.birthDate || filters.ageStart || filters.ageEnd || filters.maritalStatus || filters.occupation
+    ? recordsToRead.length
+    : rawMatches.length
+  const residents = searchCandidates.length || filters.birthDate || filters.ageStart || filters.ageEnd || filters.maritalStatus || filters.occupation
+    ? recordsToRead.slice(offset, offset + filters.pageSize)
+    : recordsToRead
+  return { residents, total }
 }
 
 export async function getResidentDemographics(filters = {}, includeHouseholds = true) {
@@ -639,7 +688,6 @@ export async function getResidentDemographics(filters = {}, includeHouseholds = 
     total: residents.length,
     male: residents.filter((item) => String(item.sex || '').toLowerCase() === 'male').length,
     female: residents.filter((item) => String(item.sex || '').toLowerCase() === 'female').length,
-    unclassified: residents.filter((item) => !['male', 'female'].includes(String(item.sex || '').toLowerCase())).length,
     households: new Set(residents.filter((item) => item.householdId).map((item) => (
       `${item.zone || ''}\u0000${item.purok || ''}\u0000${item.householdId}`
     ))).size,
@@ -675,12 +723,11 @@ export async function getResidentDemographics(filters = {}, includeHouseholds = 
       total: counts.total,
       male: counts.male,
       female: counts.female,
-      unclassified: counts.unclassified,
     }
   }) : undefined
 
   return {
-    eligibility: 'Active records with verified household/resident status; unclassified sex is reported separately.',
+    eligibility: 'Active records with verified household/resident status.',
     overall: count(eligible),
     byPurok,
     ...(includeHouseholds ? { byHousehold } : {}),
@@ -738,6 +785,12 @@ export async function updateRegistryResident(id, updates) {
     const resident = (db.residentRegistry || []).find((item) => item.id === id)
     if (!resident) return null
     Object.assign(resident, updates)
+    if (Object.keys(updates).some((field) => residentPrivateFields.includes(field))) {
+      delete resident.encryptedData
+    }
+    if (Object.prototype.hasOwnProperty.call(updates, 'firstName') || Object.prototype.hasOwnProperty.call(updates, 'lastName')) {
+      resident.nameSearchTokens = []
+    }
     await writeDb(db)
     return normalizeRegistryResident(resident)
   })
@@ -825,43 +878,68 @@ export async function archiveApprovalsOlderThan(days = 30) {
   return { filename, count: old.length }
 }
 
-export async function archiveProcessedRequestsOlderThan(days = 1) {
+export async function archiveProcessedRequestsOlderThan() {
   const db = await readDb()
   db.requests = db.requests || []
 
-  const processed = db.requests.filter((request) => ['Approved', 'Rejected'].includes(request.status))
-  const daysValue = Number(days) || 1
-  const cutoff = Date.now() - daysValue * 24 * 60 * 60 * 1000
-
-  const old = daysValue === 0
-    ? processed
-    : processed.filter((request) => {
-        const source = request.updatedAt || request.date || request.createdAt || new Date().toISOString()
-        const timestamp = new Date(source).getTime()
-        return Number.isFinite(timestamp) && timestamp <= cutoff
-      })
+  const old = db.requests
+    .filter((request) => ['Approved', 'Rejected'].includes(request.status))
+    .slice(0, 500)
 
   if (old.length === 0) {
     return { count: 0, filename: null, archivedAt: null }
   }
 
-  const archiveDir = `${DB_PATH.replace('db.json', '')}archives/`
-  await fs.mkdir(archiveDir, { recursive: true })
+  await fs.mkdir(archiveDirectory, { recursive: true })
 
-  const today = new Date().toISOString().slice(0, 10)
-  const filename = `${archiveDir}queue-approvals-${today}.json`
+  const archivedAt = new Date().toISOString()
+  const filename = `queue-approvals-${archivedAt.replace(/[:.]/g, '-')}-${randomUUID()}.json`
+  const archivePath = path.join(archiveDirectory, filename)
   const archivePayload = {
-    archivedAt: new Date().toISOString(),
-    archivedFor: daysValue === 0 ? 'manual' : `${daysValue} day(s)`,
+    archivedAt,
+    archivedFor: 'manual',
     total: old.length,
     records: old,
   }
-  await fs.writeFile(filename, JSON.stringify(archivePayload, null, 2), 'utf8')
+  await fs.writeFile(archivePath, JSON.stringify(archivePayload, null, 2), { encoding: 'utf8', flag: 'wx' })
 
-  db.requests = db.requests.filter((request) => !old.some((archived) => archived.id === request.id))
+  const archivedIds = new Set(old.map((request) => request.id))
+  db.requests = db.requests.filter((request) => !archivedIds.has(request.id))
   await writeDb(db)
 
-  return { count: old.length, filename, archivedAt: archivePayload.archivedAt }
+  return {
+    count: old.length,
+    filename,
+    archivedAt,
+    remaining: db.requests.filter((request) => ['Approved', 'Rejected'].includes(request.status)).length,
+  }
+}
+
+export async function restoreArchivedRequests(filename) {
+  if (typeof filename !== 'string' || !/^queue-approvals-[\w.-]+\.json$/.test(filename)) {
+    throw new TypeError('Only queue-approval archives can be restored.')
+  }
+  const archive = await getArchive(filename)
+  if (!archive) return null
+  if (!Array.isArray(archive.records)
+    || archive.records.some((record) => !record || typeof record.id !== 'string' || !['Approved', 'Rejected'].includes(record.status))) {
+    throw new TypeError('The selected archive is invalid or does not contain closed requests.')
+  }
+
+  const db = await readDb()
+  db.requests = db.requests || []
+  const activeIds = new Set(db.requests.map((request) => request.id))
+  const restorable = archive.records.filter((record) => {
+    if (activeIds.has(record.id)) return false
+    activeIds.add(record.id)
+    return true
+  })
+  const conflictCount = archive.records.length - restorable.length
+  if (restorable.length) {
+    db.requests.push(...restorable)
+    await writeDb(db)
+  }
+  return { restoredCount: restorable.length, conflictCount }
 }
 
 export async function clearData(options = { keepAdmins: true }) {

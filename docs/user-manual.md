@@ -61,11 +61,9 @@ Only use Staff Portal functions for authorized barangay work. Resident account a
 
 ### Monitor system activity
 
-The Staff Portal opens to **System monitor**, a summary of request-status totals, the active and verified resident population, announcements, and event records returned by the event service. Select **Refresh overview** to fetch the latest summary. If a section reports an error, treat that data as unavailable; do not interpret it as zero.
+The Staff Portal opens directly to **Resident registry**. Its overview and dashboard-summary screens have been removed. Use **Requests** for the service-request queue, and use the remaining Resident records and Service operations links for authorized work. Administrator settings, audit-log access, and backup/restore remain restricted to authorized Admin accounts.
 
-The overview shows aggregate counts, not resident names or contact details. Use the existing request queue or resident registry when record-level review is required and authorized. Staff permissions and operational actions are unchanged. The event service currently may return no records; an empty result does not confirm that an event was not scheduled elsewhere.
-
-The Staff Portal groups authorized work into **Overview**, **Resident records**, **Service operations**, and **Administration**. The **Admin portal (Admin only)** link opens the separately protected Admin console; it does not grant Staff any additional permissions. Administrator account and security settings, administrative audit-log access, and backup/restore remain restricted to authorized Admin accounts; a staff preview or aggregate count is not a live backup or production dataset.
+The Admin portal remains a separate, role-protected area and is no longer linked from inside the Staff Portal. Authorized Admin accounts continue to be directed to the Admin portal when they sign in.
 
 ### Review resident accounts
 
@@ -86,18 +84,29 @@ Administrators cannot approve, reject, or edit resident accounts, even while eme
 4. If information is missing, use the available **Needs information** action and provide a clear request for follow-up.
 5. Confirm the status/history reflects the change. The portal does not treat approval as proof that a request is complete or a document has been released.
 
+#### Manually archive closed requests
+
+Authorized Staff may manually archive up to 500 **Approved** or **Rejected** requests at a time from the queue archive panel. This is not automatic: confirm the records are no longer needed in the active queue before archiving. Each batch receives a unique archive copy, the archived requests leave the active queue, and any remaining closed requests can be archived in a later run. Archive access is restricted and audited. Use **Restore** on an archive to return records that do not already exist in the active database; conflicting records are skipped, and the archive copy is retained. An archived **Approved** status is only a workflow status and does not prove a document was released or a service was completed.
+
 ### Use the resident registry
 
 The **Resident registry** is a staff-only roster separate from resident login accounts.
 
 #### Search and filter
 
-Use the available full-name, exact birth-date, age, zone, or exact Purok filters. Search results contain personal information; avoid displaying them where unauthorized people can see the screen. The registry and demographic counts are distinct from the number of resident login accounts.
+The registry landing view shows Zone 1–7 only, with each zone's active, verified resident count. Select a zone to open its pop-up; the resident list displays only birthdate and calculated age, not resident names. Use **Edit record** to change a record. The editor keeps stored names hidden unless a staff member enters a replacement name, and supports updating other registry fields. Age is calculated from the birthdate and cannot be edited separately. Changes are validated, encrypted according to the configured storage adapter, and audited by field name without copying resident values to the audit log. The zones are views of the same secure registry, not separate copies. The registry and demographic counts are distinct from the number of resident login accounts.
+
+#### Download an Excel-ready roster
+
+1. Apply the desired search and filters, then select **Download Excel-ready CSV**. Confirm the download only if you are authorized to handle the matching resident records.
+2. The export includes all records matching the current filters (not only the visible page), up to 10,000 records. It is sorted by Zone, Household, last name, then first name; each resident is one row with clear columns for their registry fields.
+3. Open the `.csv` file in Excel and use its header filters or save a working copy in an approved location. The export is audited by count, grouping, and filter-presence flags; resident values are not copied into the audit log. Keep the file in approved storage and do not share it outside authorized work.
+4. Add filters and export again if the matching set exceeds 10,000 records. Do not remove records from the source roster just to fit an export.
 
 #### Add one record manually
 
 1. Select **Add a resident for verification**.
-2. Enter the resident's first and last name. Add birth date, sex, household identifier, zone, Purok, address/location, and source reference only when supported by an authorized source and necessary for the registry.
+2. Enter the resident's first and last name and choose **Male** or **Female** only when supported by the authorized source. Add birth date, Household, zone, Marital status, Occupation, and source reference only when supported by an authorized source and necessary for the registry. Household is a plain organizational value, not a household identifier.
 3. Save the record. It is added as **Pending verification**, not as a confirmed census record.
 4. If possible matching records appear, compare them carefully with the official source before proceeding. Do not create a duplicate just to bypass the warning.
 5. Keep the record pending until it has been checked against the approved source. If the source is unclear or counts do not reconcile, stop and refer the discrepancy to the responsible records officer.
@@ -107,8 +116,8 @@ Use the available full-name, exact birth-date, age, zone, or exact Purok filters
 1. Obtain authorization to use the source list. Reconcile its scope and totals before preparing a file. Do not upload scans or infer unreadable information.
 2. In the registry, select **Import reviewed CSV**, then **Download CSV template**.
 3. Prepare a UTF-8 CSV with the template's exact headers:
-   `firstName,lastName,birthDate,sex,householdId,zone,purok,address,sourceReference`
-4. First and last name are required. Other fields are optional. Use `YYYY-MM-DD` for a known birth date; use `Male`, `Female`, or `Unclassified` where applicable; zone must be 1–7. Quote fields containing commas and escape quotes using normal CSV rules.
+   `firstName,lastName,birthDate,sex,household,zone,maritalStatus,occupation,sourceReference`
+4. First and last name and a `Male` or `Female` value are required. Other fields are optional. Use `YYYY-MM-DD` for a known birth date; zone must be 1–7. Quote fields containing commas and escape quotes using normal CSV rules.
 5. Upload a `.csv` file no larger than 1 MB and containing no more than 500 records. Preview the file and inspect the displayed rows and validation errors. The preview displays only the first 10 records, so validate the complete source file separately before import.
 6. If possible matches are reported, review them before confirming. Cancel if the match is uncertain or the source has not been reconciled. Confirmation imports the rows as pending; it does not verify them.
 7. After import, review each record against its source before marking it verified.
@@ -121,7 +130,7 @@ Import errors must be corrected in the source file and previewed again. Do not r
 2. Select **Read text from selected pages** and wait for local OCR to finish. The scanner runs in this browser using OCR files served by the application; the image itself is not sent to an OCR provider or uploaded by this feature. Captured images remain in browser memory. **Close camera** stops the live camera; **Clear scan and draft** also stops it and clears the in-memory images and text.
 3. Compare the preview and recognized text with the original page. OCR can omit, alter, or misread handwriting. It does not identify people or automatically fill resident fields.
 4. Add one row for each person you have checked against the original. Enter names and only other necessary, legible details. Use the source-reference field to note a page or line, not additional personal information.
-5. Check **I checked these details against the original document** for each row. Import remains disabled until all rows have first and last names and have been checked.
+5. Choose **Male** or **Female** only when supported by the source, then check **I checked these details against the original document** for each row. Import remains disabled until all rows have first and last names, a sex value, and have been checked.
 6. Review any duplicate warnings. Import only when the possible matches have been checked; otherwise return to editing or clear the scan. Imported records remain pending verification.
 7. Select **Clear scan and draft** when finished. Closing the scanner or browser also clears its in-memory image and text state. The original document and OCR text are not stored by the scanner; resident fields are sent to the registry only when the staff member explicitly imports the checked rows.
 
@@ -135,7 +144,7 @@ The scanner accepts image files, not PDFs. Convert or photograph a page only usi
 - Verified population totals include only records that are both **Active** and **Verified**. Pending, needs-review, inactive, deceased, or archived records do not count as active verified population.
 - Treat demographic totals as operational summaries, not as proof that a source roster is complete.
 
-Browser printing is disabled until a managed office print service is configured and tested. Do not use browser print or “Save as PDF” to copy resident information. If the managed print function reports that no job was started, do not assume anything was printed.
+Browser printing is disabled until a managed office print service is configured and tested. The Excel-ready CSV download is a separate, audited staff action; do not use browser print or “Save as PDF” to copy resident information. If the managed print function reports that no job was started, do not assume anything was printed.
 
 ### Source-list discrepancies
 

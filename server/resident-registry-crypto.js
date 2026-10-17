@@ -1,15 +1,58 @@
-import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto'
+import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes } from 'node:crypto'
 import { RESIDENT_DATA_ENCRYPTION_KEY, RESIDENT_DATA_ENCRYPTION_KEY_PREVIOUS } from './config.js'
 
 const keyId = (key) => createHash('sha256').update(key).digest('hex').slice(0, 16)
+const nameSearchKeys = [RESIDENT_DATA_ENCRYPTION_KEY, ...RESIDENT_DATA_ENCRYPTION_KEY_PREVIOUS.split(',').map((key) => key.trim())]
+  .filter(Boolean)
 const encryptionKey = RESIDENT_DATA_ENCRYPTION_KEY
   ? createHash('sha256').update(RESIDENT_DATA_ENCRYPTION_KEY).digest()
   : null
 const encryptionKeys = new Map(
-  [RESIDENT_DATA_ENCRYPTION_KEY, ...RESIDENT_DATA_ENCRYPTION_KEY_PREVIOUS.split(',').map((key) => key.trim())]
-    .filter(Boolean)
+  nameSearchKeys
     .map((key) => [keyId(key), createHash('sha256').update(key).digest()])
 )
+const configuredNameSearchKeyIds = nameSearchKeys.map(keyId)
+
+const tokenizeNameSearch = (value) => String(value || '')
+  .normalize('NFKC')
+  .toLocaleLowerCase('en')
+  .split(/[^\p{L}\p{N}]+/u)
+  .filter(Boolean)
+
+const hashNameSearchTerm = (term, key) => createHmac(
+  'sha256',
+  createHash('sha256').update(`resident-name-search:v1:${key}`).digest()
+).update(term).digest('base64url')
+
+export const createResidentNameSearchTokens = (firstName, lastName) => {
+  const tokens = new Set()
+  const nameParts = tokenizeNameSearch(`${firstName || ''} ${lastName || ''}`)
+
+  for (const part of nameParts) {
+    const characters = Array.from(part)
+    for (let length = 1; length <= characters.length; length += 1) {
+      const prefix = characters.slice(0, length).join('')
+      for (const key of nameSearchKeys) {
+        tokens.add(`${keyId(key)}:${hashNameSearchTerm(prefix, key)}`)
+      }
+    }
+  }
+  return [...tokens]
+}
+
+export const residentNameSearchCandidates = (search) => String(search || '')
+  .normalize('NFKC')
+  .toLocaleLowerCase('en')
+  .split(/[^\p{L}\p{N}]+/u)
+  .filter(Boolean)
+  .map((term) => nameSearchKeys.map((key) => `${keyId(key)}:${hashNameSearchTerm(term, key)}`))
+
+export const residentNameSearchTokensNeedRefresh = (tokens) => (
+  !Array.isArray(tokens)
+  || configuredNameSearchKeyIds.some((id) => !tokens.some((token) => token.startsWith(`${id}:`)))
+)
+
+export const residentNameSearchKeyIds = () => [...configuredNameSearchKeyIds]
 
 export const encryptResidentPrivateData = (privateData, recordId) => {
   if (!encryptionKey) throw new Error('RESIDENT_DATA_ENCRYPTION_KEY is required to store resident private data.')
