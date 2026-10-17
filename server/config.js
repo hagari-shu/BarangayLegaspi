@@ -8,10 +8,15 @@ dotenv.config()
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
-const dataDir = path.join(__dirname, 'data')
 const isTestRun = process.env.NODE_ENV === 'test'
   || process.execArgv.some((arg) => arg.includes('--test'))
   || process.argv.some((arg) => arg.includes('--test') || /\.test\.[cm]?[jt]s$/i.test(arg))
+if (process.env.BRGY_TEST_DATA_DIR && !isTestRun) {
+  throw new Error('BRGY_TEST_DATA_DIR can only be used by a test process.')
+}
+const dataDir = process.env.BRGY_TEST_DATA_DIR
+  ? path.resolve(process.env.BRGY_TEST_DATA_DIR)
+  : path.join(__dirname, 'data')
 const dbPath = path.join(dataDir, isTestRun ? `db-${process.pid}.json` : 'db.json')
 
 if (!fs.existsSync(dataDir)) {

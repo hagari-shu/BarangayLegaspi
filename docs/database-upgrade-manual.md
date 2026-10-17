@@ -61,6 +61,7 @@ Run this gate before loading, migrating, or manually entering identifiable resid
 4. Review database backups created before encryption: they may contain plaintext and are not retroactively protected. Restrict access and retention, and retire them only under the approved records-retention policy after a verified encrypted recovery copy exists.
 5. Enter or import resident information only after the data owner approves the source and scope, staff access is authorized, and source totals and verification procedures are defined. Do not bulk-import uncertain scans or claim the registry is complete until source lists reconcile.
 6. Confirm that logs and audit metadata do not contain resident names, birth dates, search terms, source filenames, or other unnecessary personal data. Audit successful access and record changes without copying resident content into the audit trail.
+7. Keep an authorized source roster in the approved private environment. Before staging import, run the local-only `npm run registry:preflight -- "<private-roster.csv>"` command with no `DATABASE_URL` configured. It reports aggregate validation counts only and does not import or send data. Correct the source in its authorized location; do not copy it into chat, tickets, source control, or the app repository.
 
 **Current gate:** Encryption changes are local and not deployed, and the existing Free database has no available backup capability shown in its Recovery page. Do not add or migrate real resident personal information until both blockers are resolved and a restore is verified.
 

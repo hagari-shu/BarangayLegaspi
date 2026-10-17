@@ -3,6 +3,7 @@ import { parseRegistryCsv, registryCsvTemplate } from './registry-csv'
 import './StaffRegistryPanel.css'
 
 const API_BASE = (import.meta.env.VITE_API_BASE || (import.meta.env.DEV ? 'http://localhost:3001/api' : '')).replace(/\/$/, '')
+const isScaleDemo = import.meta.env.VITE_REGISTRY_SCALE_DEMO === 'true'
 
 const text = {
   en: {
@@ -552,6 +553,12 @@ export default function StaffRegistryPanel({ language = 'en' }) {
 
   return (
     <section className="registry-panel" aria-labelledby="resident-registry-title">
+      {isScaleDemo && (
+        <aside className="registry-scale-demo-banner" role="note">
+          <strong>Synthetic scale demo — fictional records only</strong>
+          <span>This local preview uses a temporary isolated database. It is not connected to production or real resident information.</span>
+        </aside>
+      )}
       <div className="registry-panel-header">
         <div>
           <h2 id="resident-registry-title">{labels.title}</h2>

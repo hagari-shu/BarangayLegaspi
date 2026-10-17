@@ -4,6 +4,24 @@
   gap: 1rem;
 }
 
+.registry-scale-demo-banner {
+  display: grid;
+  gap: 0.25rem;
+  padding: 0.9rem 1rem;
+  border: 2px solid #8a5a00;
+  border-radius: 0.65rem;
+  background: #fff4d6;
+  color: #412c00;
+}
+
+.registry-scale-demo-banner strong {
+  font-size: 1rem;
+}
+
+.registry-scale-demo-banner span {
+  line-height: 1.5;
+}
+
 .registry-panel-header,
 .registry-pagination,
 .registry-pagination > div {

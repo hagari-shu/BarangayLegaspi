@@ -74,6 +74,8 @@ The Staff Portal groups authorized work into **Overview**, **Resident records**,
 3. Approve only when eligibility and the submitted details have been checked. Reject or request correction according to barangay policy.
 4. Verify that the displayed status changed. If it did not, report the error; do not assume the action succeeded.
 
+For an authorized official roster containing only Male/Female values, the deployment operator can run the local roster preflight before a staging import. Missing or unclear values must be corrected from the official source or left for review; never infer a value from a name or other personal detail.
+
 Administrators cannot approve, reject, or edit resident accounts, even while emergency access is active.
 
 ### Process service requests

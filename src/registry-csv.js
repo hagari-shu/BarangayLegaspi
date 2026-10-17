@@ -65,7 +65,10 @@ function parseRows(source) {
   return rows
 }
 
-export function parseRegistryCsv(source) {
+export function parseRegistryCsv(source, { maxRows = MAX_IMPORT_ROWS, requireBinarySex = false } = {}) {
+  if (!Number.isSafeInteger(maxRows) || maxRows < 1) {
+    throw new Error('The CSV row limit must be a positive whole number.')
+  }
   const rows = parseRows(String(source).replace(/^\uFEFF/, ''))
   if (rows.length === 0) throw new Error('The CSV file is empty.')
 
@@ -81,18 +84,24 @@ export function parseRegistryCsv(source) {
 
   const dataRows = rows.slice(1)
   if (dataRows.length === 0) throw new Error('The CSV has headers but no resident records.')
-  if (dataRows.length > MAX_IMPORT_ROWS) throw new Error(`Import no more than ${MAX_IMPORT_ROWS} resident records at a time.`)
+  if (dataRows.length > maxRows) throw new Error(`Import no more than ${maxRows} resident records at a time.`)
 
   const residents = dataRows.map((values, index) => {
     if (values.length > headers.length && values.slice(headers.length).some(Boolean)) {
       throw new Error(`CSV row ${index + 2} has more fields than its header.`)
     }
     const record = Object.fromEntries(headers.map((header, column) => [header, values[column] || '']))
+    const sex = record.sex || null
+    if (requireBinarySex) {
+      if (!sex || !['male', 'female'].includes(sex.toLowerCase())) {
+        throw new Error(`CSV row ${index + 2} must have sex recorded as Male or Female.`)
+      }
+    }
     return {
       firstName: record.firstName,
       lastName: record.lastName,
       birthDate: record.birthDate || null,
-      sex: record.sex || null,
+      sex: requireBinarySex ? (sex.toLowerCase() === 'male' ? 'Male' : 'Female') : sex,
       householdId: record.householdId || null,
       zone: record.zone || null,
       purok: record.purok || null,
