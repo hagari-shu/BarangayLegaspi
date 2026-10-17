@@ -636,6 +636,8 @@ const normalizeRegistryResident = (record) => ({
   lastName: record.lastName ?? record.last_name ?? '',
   birthDate: record.birthDate ?? record.birth_date ?? null,
   householdId: record.householdId ?? record.household_id ?? null,
+  maritalStatus: record.maritalStatus ?? record.marital_status ?? null,
+  occupation: record.occupation ?? null,
   verificationStatus: record.verificationStatus ?? record.verification_status ?? 'pending',
   sourceReference: record.sourceReference ?? record.source_reference ?? null,
   sourceFilename: record.sourceFilename ?? record.source_filename ?? null,
@@ -741,7 +743,6 @@ export async function findPotentialRegistryMatches(firstName, lastName, birthDat
     lastName: resident.lastName,
     birthDate: resident.birthDate,
     householdId: resident.householdId,
-    purok: resident.purok,
     zone: resident.zone,
     verificationStatus: resident.verificationStatus,
   }))
@@ -759,7 +760,6 @@ const matchRegistryRows = (residents, registry) => residents.map((resident, inde
     lastName: candidate.lastName,
     birthDate: candidate.birthDate,
     householdId: candidate.householdId,
-    purok: candidate.purok,
     zone: candidate.zone,
     verificationStatus: candidate.verificationStatus,
   })),
@@ -782,7 +782,6 @@ export async function findPotentialRegistryMatchesForResidents(residents) {
     lastName: candidate.lastName,
     birthDate: candidate.birthDate,
     householdId: candidate.householdId,
-    purok: candidate.purok,
     zone: candidate.zone,
     verificationStatus: candidate.verificationStatus,
   })))
@@ -823,7 +822,22 @@ export async function updateRegistryResidentWithAudit(id, updates, auditEntry) {
     const db = await readDb()
     const resident = (db.residentRegistry || []).find((item) => item.id === id)
     if (!resident) return null
-    Object.assign(resident, updates, updates.status ? { recordStatus: updates.status } : {})
+    const current = normalizeRegistryResident(resident)
+    const identityFields = ['firstName', 'lastName', 'birthDate', 'sex', 'householdId', 'zone']
+    const normalizeValue = (field, value) => {
+      if (value === null || value === undefined || value === '') return ''
+      return field === 'zone' ? String(Number(value)) : String(value).trim().toLocaleLowerCase()
+    }
+    const identityChanged = identityFields.some((field) => (
+      updates[field] !== undefined
+      && normalizeValue(field, current[field]) !== normalizeValue(field, updates[field])
+    ))
+    const nextUpdates = { ...updates }
+    if (identityChanged && current.verificationStatus === 'verified') {
+      Object.assign(nextUpdates, { verificationStatus: 'needs_review', verifiedBy: null, verifiedAt: null })
+      auditEntry.metadata = { ...auditEntry.metadata, requiresReverification: true }
+    }
+    Object.assign(resident, nextUpdates, nextUpdates.status ? { recordStatus: nextUpdates.status } : {})
     db.auditLogs = db.auditLogs || []
     db.auditLogs.push(auditEntry)
     await writeDb(db)

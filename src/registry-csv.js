@@ -6,8 +6,8 @@ const EXPECTED_HEADERS = [
   'sex',
   'householdId',
   'zone',
-  'purok',
-  'address',
+  'maritalStatus',
+  'occupation',
   'sourceReference',
 ]
 
@@ -95,8 +95,8 @@ export function parseRegistryCsv(source) {
       sex: record.sex || null,
       householdId: record.householdId || null,
       zone: record.zone || null,
-      purok: record.purok || null,
-      address: record.address || null,
+      maritalStatus: record.maritalStatus || null,
+      occupation: record.occupation || null,
       sourceReference: record.sourceReference || null,
     }
   })

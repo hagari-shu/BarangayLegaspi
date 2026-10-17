@@ -195,6 +195,8 @@ export async function initDatabase() {
       purok VARCHAR(100),
       zone SMALLINT,
       address VARCHAR(255),
+      marital_status VARCHAR(100),
+      occupation VARCHAR(100),
       record_status VARCHAR(20) NOT NULL DEFAULT 'active',
       verification_status VARCHAR(20) NOT NULL DEFAULT 'pending',
       source_reference VARCHAR(255),
@@ -207,6 +209,8 @@ export async function initDatabase() {
       updated_at TIMESTAMPTZ
     );
   `)
+  await query('ALTER TABLE resident_registry ADD COLUMN IF NOT EXISTS marital_status VARCHAR(100)')
+  await query('ALTER TABLE resident_registry ADD COLUMN IF NOT EXISTS occupation VARCHAR(100)')
   await query('CREATE INDEX IF NOT EXISTS resident_registry_location_status_idx ON resident_registry (zone, purok, record_status, verification_status)')
   await query('CREATE INDEX IF NOT EXISTS resident_registry_household_location_idx ON resident_registry (household_id, zone, purok)')
   await query('CREATE INDEX IF NOT EXISTS resident_registry_first_name_prefix_idx ON resident_registry (LOWER(first_name) text_pattern_ops)')
@@ -1081,6 +1085,8 @@ const normalizeRegistryResident = (record) => ({
     return value instanceof Date ? value.toISOString().slice(0, 10) : value ? String(value).slice(0, 10) : null
   })(),
   householdId: record.householdId ?? record.household_id ?? null,
+  maritalStatus: record.maritalStatus ?? record.marital_status ?? null,
+  occupation: record.occupation ?? null,
   verificationStatus: record.verificationStatus ?? record.verification_status ?? 'pending',
   sourceReference: record.sourceReference ?? record.source_reference ?? null,
   sourceFilename: record.sourceFilename ?? record.source_filename ?? null,
@@ -1311,6 +1317,7 @@ export async function insertRegistryResidents(residents, auditEntry, options = {
 
     const columns = [
       'id', 'first_name', 'last_name', 'birth_date', 'sex', 'household_id', 'purok', 'zone', 'address',
+      'marital_status', 'occupation',
       'record_status', 'verification_status', 'source_reference', 'source_filename', 'source_fingerprint',
       'created_by', 'created_at', 'updated_at',
     ]
@@ -1318,7 +1325,8 @@ export async function insertRegistryResidents(residents, auditEntry, options = {
     const tuples = residents.map((resident, index) => {
       const row = [
         resident.id, resident.firstName, resident.lastName, resident.birthDate, resident.sex,
-        resident.householdId, resident.purok, resident.zone, resident.address, 'active', 'pending',
+        resident.householdId, resident.purok, resident.zone, resident.address,
+        resident.maritalStatus, resident.occupation, 'active', 'pending',
         resident.sourceReference, resident.sourceFilename, resident.sourceFingerprint, resident.createdBy,
         resident.createdAt, resident.updatedAt || resident.createdAt,
       ]
@@ -1366,19 +1374,54 @@ export async function insertRegistryResidents(residents, auditEntry, options = {
 
 export async function updateRegistryResidentWithAudit(id, updates, auditEntry) {
   const columns = {
+    firstName: 'first_name',
+    lastName: 'last_name',
+    birthDate: 'birth_date',
+    sex: 'sex',
+    householdId: 'household_id',
+    maritalStatus: 'marital_status',
+    occupation: 'occupation',
+    zone: 'zone',
     verificationStatus: 'verification_status',
     verifiedBy: 'verified_by',
     verifiedAt: 'verified_at',
     status: 'record_status',
   }
-  const entries = Object.entries(updates).filter(([key]) => columns[key])
-  if (!entries.length) return null
-  const values = entries.map(([, value]) => value)
-  const assignments = entries.map(([key], index) => `${columns[key]} = $${index + 1}`)
-  values.push(id)
   const client = await pool.connect()
   try {
     await client.query('BEGIN')
+    const currentResult = await client.query(
+      `SELECT first_name, last_name, birth_date, sex, household_id, zone, verification_status
+       FROM resident_registry WHERE id = $1 FOR UPDATE`,
+      [id]
+    )
+    if (!currentResult.rows.length) {
+      await client.query('ROLLBACK')
+      return null
+    }
+    const current = normalizeRegistryResident(currentResult.rows[0])
+    const identityFields = ['firstName', 'lastName', 'birthDate', 'sex', 'householdId', 'zone']
+    const normalizeValue = (field, value) => {
+      if (value === null || value === undefined || value === '') return ''
+      return field === 'zone' ? String(Number(value)) : String(value).trim().toLocaleLowerCase()
+    }
+    const identityChanged = identityFields.some((field) => (
+      updates[field] !== undefined
+      && normalizeValue(field, current[field]) !== normalizeValue(field, updates[field])
+    ))
+    const nextUpdates = { ...updates }
+    if (identityChanged && current.verificationStatus === 'verified') {
+      Object.assign(nextUpdates, { verificationStatus: 'needs_review', verifiedBy: null, verifiedAt: null })
+      auditEntry.metadata = { ...auditEntry.metadata, requiresReverification: true }
+    }
+    const entries = Object.entries(nextUpdates).filter(([key]) => columns[key])
+    if (!entries.length) {
+      await client.query('ROLLBACK')
+      return null
+    }
+    const values = entries.map(([, value]) => value)
+    const assignments = entries.map(([key], index) => `${columns[key]} = $${index + 1}`)
+    values.push(id)
     const result = await client.query(
       `UPDATE resident_registry SET ${assignments.join(', ')}, updated_at = NOW()
        WHERE id = $${values.length} RETURNING *`,

@@ -2488,7 +2488,7 @@ function SettingsPage({ profile, onLogout, language, setLanguage }) {
 function StaffPage({ staffMembers = [], announcements = [], currentUser, userRole = 'staff', onProcessRequest, onLogout, onStaffMemberUpdated, onAddAnnouncement, onDeleteAnnouncement, onRetractAnnouncement, onDeleteStaffMember, language, setLanguage }) {
   const t = translations[language] || translations.en
   const [activeTab, setActiveTab] = useState('queue')
-  const [openRequestPanel, setOpenRequestPanel] = useState('queue')
+  const [openRequestPanel, setOpenRequestPanel] = useState(null)
   const [queueSearch, setQueueSearch] = useState('')
   const [debouncedQueueSearch, setDebouncedQueueSearch] = useState('')
   const [queueStatus, setQueueStatus] = useState('active')
@@ -2506,7 +2506,6 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
   const [dashboardTotal, setDashboardTotal] = useState(0)
   const [dashboardLoading, setDashboardLoading] = useState(true)
   const [dashboardError, setDashboardError] = useState('')
-  const [dashboardUpdatedAt, setDashboardUpdatedAt] = useState(null)
   const [dashboardRefreshKey, setDashboardRefreshKey] = useState(0)
   const [reportRefreshKey, setReportRefreshKey] = useState(0)
   const [reportPeriod, setReportPeriod] = useState('last30')
@@ -2525,7 +2524,6 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
   const [retractionTarget, setRetractionTarget] = useState(null)
   const [retractionContent, setRetractionContent] = useState('')
   const [retractionSubmitting, setRetractionSubmitting] = useState(false)
-  const [todayDate] = useState(() => new Date())
   const [requestStatusDrafts, setRequestStatusDrafts] = useState({})
   const [requestStatusNotes, setRequestStatusNotes] = useState({})
   const [selectedUser, setSelectedUser] = useState(null)
@@ -2609,7 +2607,6 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
           setDashboardSummary(data.summary || { total: 0, pending: 0, inReview: 0, needsInformation: 0, approved: 0, rejected: 0 })
           setDashboardDocumentTypes(Array.isArray(data.documentTypes) ? data.documentTypes : [])
           setDashboardTotal(Number(data.total) || 0)
-          setDashboardUpdatedAt(new Date())
           setDashboardError('')
         }
       } catch (error) {
@@ -2666,19 +2663,10 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
   }, [activeTab, reportRange, reportType, reportStatus, reportValidationError, reportRefreshKey, t.reportError])
 
   const pendingCount = Number(dashboardSummary.pending) || 0
-  const inReviewCount = Number(dashboardSummary.inReview) || 0
-  const needsInformationCount = Number(dashboardSummary.needsInformation) || 0
   const approvedCount = Number(dashboardSummary.approved) || 0
   const totalRequests = Number(dashboardSummary.total) || 0
   const filteredQueueRequests = dashboardRequests
   const requestPages = Math.max(1, Math.ceil(dashboardTotal / queuePageSize))
-
-  const setQueueFilter = (status) => {
-    setActiveTab('queue')
-    setQueueStatus(status)
-    setQueuePage(1)
-    setOpenRequestPanel('queue')
-  }
 
   const handleReportPeriodChange = (period) => {
     setReportPeriod(period)
@@ -2710,7 +2698,6 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
     setQueueFrom(reportRange.from)
     setQueueTo(reportRange.to)
     setQueuePage(1)
-    setOpenRequestPanel('queue')
     setActiveTab('queue')
   }
 
@@ -2928,7 +2915,12 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
         <div className="topbar-actions">
           <LanguageToggle language={language} setLanguage={setLanguage} />
           <Link to="/settings" className="secondary-btn small">{t.settings}</Link>
-          <span className="role-chip">{getDisplayName(currentUser)} • {getStaffPositionLabel(currentUser?.position || (userRole === 'admin' ? t.administrator : 'Staff'), t)}</span>
+          <div className="admin-identity" aria-label={`${t.signedInAs} ${getDisplayName(currentUser)}`}>
+            <small>{t.signedInAs}</small>
+            <strong>{getDisplayName(currentUser)}</strong>
+            <span>{currentUser?.email || currentUser?.mobile || t.staffPortal}</span>
+          </div>
+          <span className="role-chip">{getStaffPositionLabel(currentUser?.position || (userRole === 'admin' ? t.administrator : 'Staff'), t)}</span>
           <button className="logout-btn" type="button" onClick={onLogout}>{t.logout}</button>
         </div>
       </header>
@@ -2942,7 +2934,7 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
               aria-current={activeTab === 'queue' ? 'page' : undefined}
               onClick={() => setActiveTab('queue')}
             >
-              <span className="nav-icon">📄</span><span>{t.staffDashboardTitle}</span>
+              <span className="nav-icon">📄</span><span>{t.requests}</span>
             </button>
             {userRole === 'staff' && (
               <button
@@ -2989,17 +2981,14 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
           </nav>
         </aside>
 
-        <section className={`content-panel staff-content-panel staff-module-${activeTab}`} aria-label={t.staffOverviewLabel}>
+        <section className={`content-panel staff-content-panel staff-module-${activeTab}`} aria-label={activeTab === 'queue' ? t.requests : t.staffOverviewLabel}>
           <div className="welcome-row">
             <div>
               <p className="eyebrow">{t.operations}</p>
-              <h1>{activeTab === 'queue' ? t.staffDashboardTitle : activeTab === 'reports' ? t.serviceReports : activeTab === 'announcements' ? t.announcements : activeTab === 'staff' ? t.staffDirectory : activeTab === 'residents' ? (language === 'fil' ? 'Talaan ng residente' : 'Resident registry') : t.approvalsManagement}</h1>
-              {activeTab === 'queue' && <p className="staff-dashboard-subtitle">{t.staffDashboardSubtitle}</p>}
+              <h1>{activeTab === 'queue' ? t.requests : activeTab === 'reports' ? t.serviceReports : activeTab === 'announcements' ? t.announcements : activeTab === 'staff' ? t.staffDirectory : activeTab === 'residents' ? (language === 'fil' ? 'Talaan ng residente' : 'Resident registry') : t.approvalsManagement}</h1>
             </div>
             {activeTab === 'queue' ? (
               <div className="staff-dashboard-meta">
-                <span>{new Intl.DateTimeFormat(language === 'fil' ? 'fil-PH' : 'en-PH', { dateStyle: 'full', timeZone: 'Asia/Manila' }).format(todayDate)}</span>
-                <span>{t.lastUpdated}: {dashboardUpdatedAt ? new Intl.DateTimeFormat(language === 'fil' ? 'fil-PH' : 'en-PH', { hour: 'numeric', minute: '2-digit', timeZone: 'Asia/Manila' }).format(dashboardUpdatedAt) : '—'}</span>
                 <button className="secondary-btn small" type="button" disabled={dashboardLoading} onClick={() => setDashboardRefreshKey((current) => current + 1)}>
                   {dashboardLoading ? t.loadingRequests : t.refreshRequests}
                 </button>
@@ -3007,76 +2996,19 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
             ) : activeTab !== 'residents' && <span className="counter-pill">{activeTab === 'approvals' ? approvedCount : totalRequests} {activeTab === 'approvals' ? t.processed : t.requests}</span>}
           </div>
 
-          {activeTab !== 'residents' && <div className="stats-grid staff-dashboard-metrics" aria-label={t.staffSummaryLabel}>
-            <button className="stat-card staff-metric-card accent" type="button" onClick={() => setQueueFilter('Pending')}>
-              <span className="label">{t.pendingReviewMetric}</span>
-              <span className="stat-number">{pendingCount}</span>
-              <span className="staff-metric-description">{t.pendingReviewDescription}</span>
-            </button>
-            <button className="stat-card staff-metric-card" type="button" onClick={() => setQueueFilter('In Review')}>
-              <span className="label">{t.inProcessingMetric}</span>
-              <span className="stat-number">{inReviewCount}</span>
-              <span className="staff-metric-description">{t.inProcessingDescription}</span>
-            </button>
-            <article className="stat-card staff-metric-card unavailable">
-              <span className="label">{t.readyForReleaseMetric}</span>
-              <span className="stat-number" aria-label={t.systemUnknown}>—</span>
-              <span className="staff-metric-description">{t.releaseStageNotTracked}</span>
-            </article>
-            <article className="stat-card staff-metric-card unavailable">
-              <span className="label">{t.overdueRequestsMetric}</span>
-              <span className="stat-number" aria-label={t.systemUnknown}>—</span>
-              <span className="staff-metric-description">{t.deadlinesNotTracked}</span>
-            </article>
-          </div>}
-
           <div className="dashboard-body">
             <div className="main-column">
               {activeTab === 'residents' && <StaffRegistryPanel language={language} />}
               {activeTab === 'queue' && (
-                <>
-                <section className="panel-card needs-attention" aria-labelledby="needs-attention-title">
-                  <div className="panel-header left-align">
-                    <h2 id="needs-attention-title">{t.needsAttention}</h2>
-                  </div>
-                  <div className="attention-items">
-                    {pendingCount > 0 && (
-                      <button type="button" onClick={() => setQueueFilter('Pending')}>
-                        <strong>{pendingCount}</strong><span>{t.pendingReviewMetric}</span><small>{t.pendingAttentionDescription}</small>
-                      </button>
-                    )}
-                    {inReviewCount > 0 && (
-                      <button type="button" onClick={() => setQueueFilter('In Review')}>
-                        <strong>{inReviewCount}</strong><span>{t.inProcessingMetric}</span><small>{t.reviewAttentionDescription}</small>
-                      </button>
-                    )}
-                    {needsInformationCount > 0 && (
-                      <button type="button" onClick={() => setQueueFilter('Needs Information')}>
-                        <strong>{needsInformationCount}</strong><span>{t.statusNeedsInformation}</span><small>{t.informationAttentionDescription}</small>
-                      </button>
-                    )}
-                    {!dashboardLoading && !dashboardError && pendingCount + inReviewCount + needsInformationCount === 0 && (
-                      <p className="attention-empty">{t.attentionEmpty}</p>
-                    )}
-                  </div>
-                  <p className="workflow-limit-notice">{t.noReleaseOrDeadlineTracking}</p>
-                </section>
-
-                <article className="panel-card" id="staff-request-queue">
-                  <button
-                    type="button"
-                    className="collapsible-panel-header"
-                    aria-expanded={openRequestPanel === 'queue'}
-                    onClick={() => setOpenRequestPanel((current) => current === 'queue' ? null : 'queue')}
-                  >
-                    <span>
+                <article className="panel-card staff-request-queue" id="staff-request-queue">
+                  <div className="panel-header">
+                    <div>
                       <h2>{t.residentRequestsQueue || 'Resident Requests Queue'}</h2>
-                      <span className="soft-label">{t.updatedToday}</span>
-                    </span>
-                    <span className={`collapse-chevron ${openRequestPanel === 'queue' ? 'open' : ''}`}>▾</span>
-                  </button>
+                      <p className="soft-label">{t.updatedToday}</p>
+                    </div>
+                    <span className="counter-pill">{dashboardTotal} {t.requests}</span>
+                  </div>
 
-                  {openRequestPanel === 'queue' && <>
                   <div className="staff-queue-filters">
                     <input type="search" value={queueSearch} onChange={(event) => { setQueueSearch(event.target.value); setQueuePage(1) }} placeholder={t.requestQueueSearch} aria-label={t.requestQueueSearch} />
                     <select value={queueStatus} onChange={(event) => { setQueueStatus(event.target.value); setQueuePage(1) }} aria-label={t.requestStatusFilter}>
@@ -3123,48 +3055,69 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
                     <span>{dashboardError}</span>
                     <button type="button" className="secondary-btn small" onClick={() => setDashboardRefreshKey((current) => current + 1)}>{t.retry}</button>
                   </div>}
-                  <div className="request-table-wrap" aria-busy={dashboardLoading}>
-                    <table className="request-table">
-                      <thead>
-                        <tr>
-                          <th>{t.requestId}</th>
-                          <th>{t.resident}</th>
-                          <th>{t.requestType}</th>
-                          <th>{t.submissionDate}</th>
-                          <th>{t.purpose}</th>
-                          <th>{t.status}</th>
-                          <th>{t.deliveryMethodLabel}</th>
-                          <th>{t.latestFollowUp}</th>
-                          <th>{t.requestStatusHistory}</th>
-                          <th>{t.priority}</th>
-                          <th>{t.actionsLabel}</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {filteredQueueRequests.map((item) => (
-                          <tr key={item.id}>
-                            <td><button type="button" className="request-id-button" aria-label={t.viewRequestDetails.replace('{id}', String(item.id))} onClick={() => setSelectedRequest(item)}>{item.id}</button></td>
-                            <td>{item.first_name || item.firstName || t.resident} {item.last_name || item.lastName || ''}</td>
-                            <td>{item.type}</td>
-                            <td>{formatRequestDate(item.date || item.createdAt || item.created_at)}</td>
-                            <td>{item.purpose}</td>
-                            <td><span className={`status-badge ${(item.status || '').toLowerCase().replace(/\s+/g, '-')}`}>{getRequestStatusLabel(item.status, t)}</span></td>
-                            <td>
-                              {item.deliveryMethod === 'physical' || item.delivery_method === 'physical' ? t.physicalCopy : t.onlineCopy}
-                              {(item.deliveryNote || item.delivery_note) && <small className="request-staff-note">{item.deliveryNote || item.delivery_note}</small>}
-                            </td>
-                            <td>{(item.followUps || item.follow_ups || []).slice(-1)[0]?.message || '—'}</td>
-                            <td><details className="request-history-details"><summary>{t.requestStatusHistory}</summary><RequestHistory history={item.statusHistory || item.status_history} t={t} /></details></td>
-                            <td><span className={`priority-badge ${item.type === 'Emergency Help' ? 'urgent' : 'normal'}`}>{item.type === 'Emergency Help' ? t.urgentLabel : t.normalLabel}</span></td>
-                            <td>
-                              {['Approved', 'Rejected'].includes(item.status)
-                                ? <span>{getRequestStatusLabel(item.status, t)}</span>
-                                : <button type="button" className="small-action success" onClick={() => setSelectedRequest(item)}>{t.requestStatusAction}</button>}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                  <div className="staff-request-list" aria-busy={dashboardLoading}>
+                    {filteredQueueRequests.map((item) => {
+                      const residentName = `${item.first_name || item.firstName || t.resident} ${item.last_name || item.lastName || ''}`.trim()
+                      const deliveryMethod = item.deliveryMethod || item.delivery_method
+                      const deliveryNote = item.deliveryNote || item.delivery_note
+                      const latestFollowUp = (item.followUps || item.follow_ups || []).slice(-1)[0]?.message
+                      const isUrgent = item.type === 'Emergency Help'
+                      return (
+                        <article className="staff-request-card" key={item.id}>
+                          <div className="staff-request-card-header">
+                            <div className="staff-request-person">
+                              <span className="staff-request-avatar" aria-hidden="true">{residentName.charAt(0) || 'R'}</span>
+                              <div>
+                                <h3>{residentName}</h3>
+                                <span>{item.type}</span>
+                              </div>
+                            </div>
+                            <div className="staff-request-badges">
+                              <span className={`status-badge ${(item.status || '').toLowerCase().replace(/\s+/g, '-')}`}>{getRequestStatusLabel(item.status, t)}</span>
+                              <span className={`priority-badge ${isUrgent ? 'urgent' : 'normal'}`}>{isUrgent ? t.urgentLabel : t.normalLabel}</span>
+                            </div>
+                          </div>
+
+                          <div className="staff-request-reference">
+                            <span>{t.requestId}</span>
+                            <button type="button" className="request-id-button" aria-label={t.viewRequestDetails.replace('{id}', String(item.id))} onClick={() => setSelectedRequest(item)}>{item.id}</button>
+                          </div>
+
+                          <div className="staff-request-fields">
+                            <div className="staff-request-field">
+                              <span>{t.submissionDate}</span>
+                              <strong>{formatRequestDate(item.date || item.createdAt || item.created_at)}</strong>
+                            </div>
+                            <div className="staff-request-field">
+                              <span>{t.deliveryMethodLabel}</span>
+                              <strong>{deliveryMethod === 'physical' ? t.physicalCopy : t.onlineCopy}</strong>
+                              {deliveryNote && <small>{deliveryNote}</small>}
+                            </div>
+                            <div className="staff-request-field staff-request-purpose">
+                              <span>{t.purpose}</span>
+                              <strong>{item.purpose || '—'}</strong>
+                            </div>
+                          </div>
+
+                          {latestFollowUp && (
+                            <div className="staff-request-follow-up">
+                              <span>{t.latestFollowUp}</span>
+                              <p>{latestFollowUp}</p>
+                            </div>
+                          )}
+
+                          <div className="staff-request-card-footer">
+                            <details className="request-history-details">
+                              <summary>{t.requestStatusHistory}</summary>
+                              <RequestHistory history={item.statusHistory || item.status_history} t={t} />
+                            </details>
+                            {['Approved', 'Rejected'].includes(item.status)
+                              ? <span className="staff-request-complete">{getRequestStatusLabel(item.status, t)}</span>
+                              : <button type="button" className="primary-btn small" onClick={() => setSelectedRequest(item)}>{t.requestStatusAction}</button>}
+                          </div>
+                        </article>
+                      )
+                    })}
                     {!dashboardLoading && !dashboardError && filteredQueueRequests.length === 0 && <div className="empty-state">{t.noRequestsMatchFilters}</div>}
                   </div>
                   <div className="request-pagination">
@@ -3174,10 +3127,7 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
                       <button type="button" className="secondary-btn small" disabled={dashboardLoading || queuePage >= requestPages} onClick={() => setQueuePage((page) => Math.min(requestPages, page + 1))}>{t.nextPage}</button>
                     </div>
                   </div>
-                  </>}
-
                 </article>
-                </>
               )}
 
               {activeTab === 'approvals' && (

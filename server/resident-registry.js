@@ -51,9 +51,9 @@ const residentFingerprint = (resident) => createHash('sha256').update(JSON.strin
   resident.birthDate || null,
   resident.sex || null,
   resident.householdId || null,
-  resident.purok || null,
+  resident.maritalStatus || null,
+  resident.occupation || null,
   resident.zone ?? null,
-  resident.address || null,
   resident.sourceReference || null,
 ])).digest('hex')
 
@@ -254,7 +254,8 @@ export function registerResidentRegistryRoutes(app, { store }) {
         age: calculateAge(resident.birthDate || resident.birth_date, today),
         sex: resident.sex || 'Unclassified',
         householdId: resident.householdId || resident.household_id || null,
-        purok: resident.purok || null,
+        maritalStatus: resident.maritalStatus || resident.marital_status || null,
+        occupation: resident.occupation || null,
         zone: resident.zone === null || resident.zone === undefined ? null : Number(resident.zone),
         status: resident.status || resident.recordStatus || resident.record_status || 'active',
         verificationStatus: resident.verificationStatus || resident.verification_status || 'pending',
@@ -290,8 +291,8 @@ export function registerResidentRegistryRoutes(app, { store }) {
     const birthDate = req.body?.birthDate || null
     const sex = req.body?.sex || null
     const householdId = cleanText(req.body?.householdId || '')
-    const purok = cleanText(req.body?.purok || '')
-    const address = cleanText(req.body?.address || '')
+    const maritalStatus = cleanText(req.body?.maritalStatus || '')
+    const occupation = cleanText(req.body?.occupation || '')
     const sourceReference = cleanText(req.body?.sourceReference || '')
     const sourceFilename = cleanText(req.body?.sourceFilename || '')
     const zoneText = req.body?.zone === null || req.body?.zone === undefined ? '' : String(req.body.zone)
@@ -310,7 +311,7 @@ export function registerResidentRegistryRoutes(app, { store }) {
     if (zone !== null && (!Number.isInteger(zone) || zone < 1 || zone > 7)) {
       return res.status(400).json({ message: 'Choose a valid zone from 1 to 7.' })
     }
-    if (householdId.length > 100 || purok.length > 100 || address.length > 255 || sourceReference.length > 255 || sourceFilename.length > 255) {
+    if (householdId.length > 100 || maritalStatus.length > 100 || occupation.length > 100 || sourceReference.length > 255 || sourceFilename.length > 255) {
       return res.status(400).json({ message: 'One or more resident fields exceed the allowed length.' })
     }
     if (req.body?.confirmPotentialMatch !== undefined && typeof req.body.confirmPotentialMatch !== 'boolean') {
@@ -341,9 +342,9 @@ export function registerResidentRegistryRoutes(app, { store }) {
         birthDate,
         sex,
         householdId: householdId || null,
-        purok: purok || null,
+        maritalStatus: maritalStatus || null,
+        occupation: occupation || null,
         zone,
-        address: address || null,
         status: 'active',
         recordStatus: 'active',
         verificationStatus: 'pending',
@@ -421,8 +422,8 @@ export function registerResidentRegistryRoutes(app, { store }) {
       const birthDate = rawString('birthDate')
       const sex = rawString('sex')
       const householdId = rawString('householdId')
-      const purok = rawString('purok')
-      const address = rawString('address')
+      const maritalStatus = rawString('maritalStatus')
+      const occupation = rawString('occupation')
       const sourceReference = rawString('sourceReference')
       const zoneText = rawString('zone')
       const zone = zoneText ? Number(zoneText) : null
@@ -439,7 +440,7 @@ export function registerResidentRegistryRoutes(app, { store }) {
       if (zoneText && (!Number.isInteger(zone) || zone < 1 || zone > 7)) {
         validationErrors.push({ row: index + 2, field: 'zone', message: 'Zone must be a whole number from 1 to 7.' })
       }
-      if (householdId.length > 100 || purok.length > 100 || address.length > 255 || sourceReference.length > 255) {
+      if (householdId.length > 100 || maritalStatus.length > 100 || occupation.length > 100 || sourceReference.length > 255) {
         validationErrors.push({ row: index + 2, field: 'length', message: 'A field exceeds its maximum length.' })
       }
       return {
@@ -448,9 +449,9 @@ export function registerResidentRegistryRoutes(app, { store }) {
         birthDate: birthDate || null,
         sex: sex || null,
         householdId: householdId || null,
-        purok: purok || null,
+        maritalStatus: maritalStatus || null,
+        occupation: occupation || null,
         zone,
-        address: address || null,
         sourceReference: sourceReference || null,
       }
     })
@@ -510,6 +511,86 @@ export function registerResidentRegistryRoutes(app, { store }) {
     } catch (error) {
       console.error('staff resident registry import failed', error)
       return res.status(500).json({ message: 'Unable to import resident records.' })
+    }
+  })
+
+  app.patch('/api/staff/residents/:id', async (req, res) => {
+    const actor = await authorizeStaff(req, res)
+    if (!actor) return
+
+    const body = req.body || {}
+    const textField = (key) => {
+      const value = body[key]
+      if (value === null || value === undefined) return ''
+      if (typeof value !== 'string') return null
+      return cleanText(value)
+    }
+    const firstName = textField('firstName')
+    const lastName = textField('lastName')
+    const birthDate = body.birthDate === null || body.birthDate === undefined ? '' : textField('birthDate')
+    const sex = body.sex === null || body.sex === undefined ? '' : textField('sex')
+    const householdId = textField('householdId')
+    const maritalStatus = textField('maritalStatus')
+    const occupation = textField('occupation')
+    const zoneText = body.zone === null || body.zone === undefined ? '' : String(body.zone)
+    const zone = zoneText ? Number(zoneText) : null
+    const today = manilaDateKey()
+
+    if ([firstName, lastName, birthDate, sex, householdId, maritalStatus, occupation].some((value) => value === null)) {
+      return res.status(400).json({ message: 'Resident fields must be text or blank.' })
+    }
+    if (!firstName || !lastName || firstName.length > 100 || lastName.length > 100) {
+      return res.status(400).json({ message: 'Enter the resident’s first and last names (up to 100 characters each).' })
+    }
+    if (birthDate && (!validDateKey(birthDate) || birthDate > today)) {
+      return res.status(400).json({ message: 'Enter a valid birthdate that is not in the future.' })
+    }
+    if (sex && !['Male', 'Female', 'Unclassified'].includes(sex)) {
+      return res.status(400).json({ message: 'Choose Male, Female, or Unclassified for sex.' })
+    }
+    if (zone !== null && (!Number.isInteger(zone) || zone < 1 || zone > 7)) {
+      return res.status(400).json({ message: 'Choose a valid zone from 1 to 7.' })
+    }
+    if (householdId.length > 100 || maritalStatus.length > 100 || occupation.length > 100) {
+      return res.status(400).json({ message: 'One or more resident fields exceed the allowed length.' })
+    }
+
+    try {
+      requireStorage('updateRegistryResidentWithAudit')
+      const updates = {
+        firstName,
+        lastName,
+        birthDate: birthDate || null,
+        sex: sex || null,
+        householdId: householdId || null,
+        maritalStatus: maritalStatus || null,
+        occupation: occupation || null,
+        zone,
+        updatedAt: new Date().toISOString(),
+      }
+      const resident = await store.updateRegistryResidentWithAudit(req.params.id, updates,
+        makeAuditEntry(actor, 'resident_registry.updated', 'resident_registry', req.params.id, {
+          fields: Object.keys(updates).filter((field) => field !== 'updatedAt'),
+        }))
+      if (!resident) return res.status(404).json({ message: 'Resident record not found.' })
+      return res.json({
+        resident: {
+          id: resident.id,
+          firstName: resident.firstName,
+          lastName: resident.lastName,
+          birthDate: resident.birthDate,
+          sex: resident.sex,
+          householdId: resident.householdId,
+          maritalStatus: resident.maritalStatus,
+          occupation: resident.occupation,
+          zone: resident.zone,
+          verificationStatus: resident.verificationStatus,
+          verifiedAt: resident.verifiedAt,
+        },
+      })
+    } catch (error) {
+      console.error('resident registry edit failed', error)
+      return res.status(500).json({ message: 'Unable to update the resident record.' })
     }
   })
 
