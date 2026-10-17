@@ -211,6 +211,30 @@ export async function initDatabase() {
   `)
 
   await query(`
+    CREATE TABLE IF NOT EXISTS staff_invitations (
+      id UUID PRIMARY KEY,
+      token_hash CHAR(64) NOT NULL UNIQUE,
+      email VARCHAR(255) NOT NULL,
+      mobile VARCHAR(20) NOT NULL,
+      expires_at TIMESTAMPTZ NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      accepted_at TIMESTAMPTZ,
+      revoked_at TIMESTAMPTZ,
+      redeemed_user_id UUID REFERENCES users(id) ON DELETE SET NULL
+    );
+  `)
+  await query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS staff_invitations_pending_email_unique
+    ON staff_invitations (LOWER(email))
+    WHERE accepted_at IS NULL AND revoked_at IS NULL
+  `)
+  await query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS staff_invitations_pending_mobile_unique
+    ON staff_invitations (mobile)
+    WHERE accepted_at IS NULL AND revoked_at IS NULL
+  `)
+
+  await query(`
     CREATE TABLE IF NOT EXISTS resident_registry (
       id UUID PRIMARY KEY,
       first_name VARCHAR(100) NOT NULL,
@@ -338,6 +362,93 @@ export async function createUser(user) {
     [id, firstName, lastName, mobile, email, passwordHash, role, householdId, familyMembers, JSON.stringify(householdMembers), status, address, zone ?? null, position ?? null, availability ?? 'Available']
   )
   return { ...user, firstName, lastName, mobile, email }
+}
+
+export async function createStaffInvitation(invitation) {
+  const email = String(invitation.email || '').trim().toLowerCase()
+  const mobile = String(invitation.mobile || '').trim()
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+    await client.query(
+      'UPDATE staff_invitations SET revoked_at = NOW() WHERE accepted_at IS NULL AND revoked_at IS NULL AND expires_at <= NOW()'
+    )
+    const account = await client.query(
+      'SELECT id FROM users WHERE LOWER(email) = $1 OR mobile = $2 LIMIT 1',
+      [email, mobile]
+    )
+    if (account.rowCount) throw new Error('STAFF_INVITATION_ACCOUNT_EXISTS')
+
+    await client.query(
+      `INSERT INTO staff_invitations (id, token_hash, email, mobile, expires_at, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [invitation.id, invitation.tokenHash, email, mobile, invitation.expiresAt, invitation.createdAt]
+    )
+    await client.query(
+      `INSERT INTO audit_logs (id, actor_id, actor_role, action, target_type, target_id, metadata, created_at)
+       VALUES ($1, NULL, 'deployment_operator', 'staff.invitation.created', 'staff_invitation', $2, $3, $4)`,
+      [randomUUID(), invitation.id, { expiresAt: invitation.expiresAt, operatorId: invitation.operatorId }, invitation.createdAt]
+    )
+    await client.query('COMMIT')
+    return { id: invitation.id, expiresAt: invitation.expiresAt }
+  } catch (error) {
+    await client.query('ROLLBACK')
+    if (error.code === '23505') throw new Error('STAFF_INVITATION_IDENTITY_CONFLICT')
+    throw error
+  } finally {
+    client.release()
+  }
+}
+
+export async function redeemStaffInvitation({ tokenHash, firstName, lastName, passwordHash, userId, now = new Date().toISOString() }) {
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+    const result = await client.query(
+      'SELECT * FROM staff_invitations WHERE token_hash = $1 FOR UPDATE',
+      [tokenHash]
+    )
+    const invitation = result.rows[0]
+    if (!invitation || invitation.accepted_at || invitation.revoked_at || new Date(invitation.expires_at).getTime() <= Date.parse(now)) {
+      await client.query('ROLLBACK')
+      return null
+    }
+
+    const account = await client.query(
+      'SELECT id FROM users WHERE LOWER(email) = $1 OR mobile = $2 LIMIT 1',
+      [invitation.email.toLowerCase(), invitation.mobile]
+    )
+    if (account.rowCount) {
+      await client.query('ROLLBACK')
+      return null
+    }
+
+    await client.query(
+      `INSERT INTO users
+       (id, first_name, last_name, mobile, email, password_hash, role, household_id, family_members,
+        household_members, status, address, zone, position, availability, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, 'staff', NULL, 1, '[]'::jsonb, 'On Duty',
+        'Barangay Hall, Legaspi', 0, 'Staff', 'Available', $7)`,
+      [userId, firstName, lastName, invitation.mobile, invitation.email, passwordHash, now]
+    )
+    await client.query(
+      'UPDATE staff_invitations SET accepted_at = $1, redeemed_user_id = $2 WHERE id = $3',
+      [now, userId, invitation.id]
+    )
+    await client.query(
+      `INSERT INTO audit_logs (id, actor_id, actor_role, action, target_type, target_id, metadata, created_at)
+       VALUES ($1, $2, 'staff', 'staff.invitation.redeemed', 'user', $2, $3, $4)`,
+      [randomUUID(), userId, { invitationId: invitation.id }, now]
+    )
+    await client.query('COMMIT')
+    return { id: userId, email: invitation.email }
+  } catch (error) {
+    await client.query('ROLLBACK')
+    if (error.code === '23505') return null
+    throw error
+  } finally {
+    client.release()
+  }
 }
 
 export async function listAnnouncements() {

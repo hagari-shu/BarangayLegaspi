@@ -4634,6 +4634,94 @@ function MauAssistant({ language, userRole, isAuthenticated, pathname, mobileDas
   )
 }
 
+function StaffInvitationPage() {
+  const [token, setToken] = useState(() => window.location.hash.slice(1))
+  const [form, setForm] = useState({ firstName: '', lastName: '', password: '', confirmPassword: '' })
+  const [error, setError] = useState('')
+  const [isSubmitting, setIsSubmitting] = useState(false)
+  const [isComplete, setIsComplete] = useState(false)
+
+  useEffect(() => {
+    if (window.location.hash) {
+      window.history.replaceState(window.history.state, '', `${window.location.pathname}${window.location.search}`)
+    }
+  }, [])
+
+  const handleSubmit = async (event) => {
+    event.preventDefault()
+    setError('')
+    if (!token) {
+      setError('This invitation link is missing or has already been cleared. Ask the system operator for a new invitation.')
+      return
+    }
+    if (!isValidPassword(form.password)) {
+      setError(`Choose a password with ${passwordRequirements}.`)
+      return
+    }
+    if (form.password !== form.confirmPassword) {
+      setError('The passwords do not match.')
+      return
+    }
+
+    setIsSubmitting(true)
+    try {
+      const response = await fetch(`${API_BASE}/staff-invitations/accept`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          token,
+          firstName: form.firstName,
+          lastName: form.lastName,
+          password: form.password,
+        }),
+      })
+      const result = await response.json()
+      if (!response.ok) throw new Error(result.message || 'Unable to accept this invitation.')
+      setToken('')
+      setIsComplete(true)
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Unable to accept this invitation. Please try again.')
+    } finally {
+      setIsSubmitting(false)
+    }
+  }
+
+  return (
+    <main className="staff-invitation-screen">
+      <section className="staff-invitation-card" aria-labelledby="staff-invitation-title">
+        <img className="staff-invitation-seal" src={barangaySeal} alt="Barangay Legaspi official seal" />
+        <p className="landing-eyebrow">Barangay Legaspi</p>
+        <h1 id="staff-invitation-title">{isComplete ? 'Invitation accepted' : 'Set up your staff account'}</h1>
+        {isComplete ? (
+          <>
+            <p>Your staff account has been created. You can now sign in using the email or mobile number assigned to this invitation.</p>
+            <Link className="primary-btn staff-invitation-action" to="/">Go to sign in</Link>
+          </>
+        ) : (
+          <>
+            <p>This single-use invitation expires after 24 hours. Choose your name and a strong password to finish setting up your staff account.</p>
+            {!token && <p className="staff-invitation-error" role="alert">The invitation token is missing. Ask the system operator for a valid link.</p>}
+            {error && <p className="staff-invitation-error" role="alert">{error}</p>}
+            <form className="staff-invitation-form" onSubmit={handleSubmit}>
+              <label htmlFor="staff-invite-first-name">First name</label>
+              <input id="staff-invite-first-name" autoComplete="given-name" maxLength={100} required value={form.firstName} onChange={(event) => setForm((current) => ({ ...current, firstName: event.target.value }))} />
+              <label htmlFor="staff-invite-last-name">Last name</label>
+              <input id="staff-invite-last-name" autoComplete="family-name" maxLength={100} required value={form.lastName} onChange={(event) => setForm((current) => ({ ...current, lastName: event.target.value }))} />
+              <PasswordField id="staff-invite-password" label="Create password" value={form.password} onChange={(event) => setForm((current) => ({ ...current, password: event.target.value }))} helpText={`${passwordRequirements}.`} />
+              <label htmlFor="staff-invite-confirm-password">Confirm password</label>
+              <input id="staff-invite-confirm-password" type="password" autoComplete="new-password" required value={form.confirmPassword} onChange={(event) => setForm((current) => ({ ...current, confirmPassword: event.target.value }))} />
+              <button className="primary-btn staff-invitation-action" type="submit" disabled={isSubmitting || !token}>
+                {isSubmitting ? 'Creating account…' : 'Create staff account'}
+              </button>
+            </form>
+            <Link className="staff-invitation-login-link" to="/">Return to sign in</Link>
+          </>
+        )}
+      </section>
+    </main>
+  )
+}
+
 function App() {
   const location = useLocation()
   const [language, setLanguage] = useState(() => {
@@ -4884,6 +4972,7 @@ function App() {
         </div>
       )}
       <Routes>
+        <Route path="/staff-invite" element={<StaffInvitationPage />} />
         <Route path="/" element={isAuthenticated ? <Navigate to={userRole === 'staff' ? '/staff' : userRole === 'admin' ? '/admin' : '/dashboard'} replace /> : <LoginPage onLogin={handleLogin} language={language} setLanguage={switchLanguage} />} />
         <Route path="/register" element={isAuthenticated ? <Navigate to={userRole === 'staff' ? '/staff' : userRole === 'admin' ? '/admin' : '/dashboard'} replace /> : <RegisterPage language={language} setLanguage={switchLanguage} />} />
         <Route path="/dashboard" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['resident']} userRole={userRole}><DashboardPage profile={profile} requests={requests} services={services} announcements={announcementsData} events={events} payments={payments} onLogout={handleLogout} onProfileUpdated={setProfile} language={language} setLanguage={switchLanguage} /></ProtectedRoute>} />

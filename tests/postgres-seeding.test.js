@@ -5,7 +5,7 @@ process.env.NODE_ENV = 'test'
 process.env.DATABASE_URL = 'postgres://unused:unused@127.0.0.1:1/unused'
 process.env.ADMIN_PASSWORD = 'TestAdminPass123!'
 
-const [{ default: pg }, { initDatabase }, { decryptResidentPrivateData }] = await Promise.all([
+const [{ default: pg }, { initDatabase, createStaffInvitation, redeemStaffInvitation }, { decryptResidentPrivateData }] = await Promise.all([
   import('pg'),
   import('../server/db-postgres.js'),
   import('../server/resident-registry-crypto.js'),
@@ -35,6 +35,9 @@ test('PostgreSQL initialization skips admin seeding when a seed identifier alrea
   }
 
   assert.ok(queries.includes('select id from users where email = $1 or mobile = $2 limit 1'))
+  assert.ok(queries.some((sql) => sql.startsWith('create table if not exists staff_invitations')))
+  assert.ok(queries.some((sql) => sql.includes('staff_invitations_pending_email_unique')))
+  assert.ok(queries.some((sql) => sql.includes('staff_invitations_pending_mobile_unique')))
   assert.ok(queries.some((sql) => sql.startsWith('create table if not exists resident_registry')))
   assert.ok(queries.some((sql) => sql.includes('encrypted_data text')))
   assert.ok(queries.some((sql) => sql.includes('drop index if exists resident_registry_household_location_idx')))
@@ -96,4 +99,63 @@ test('PostgreSQL startup encrypts legacy registry data and clears plaintext colu
     sourceReference: 'Roster line 1',
     sourceFilename: 'private-roster.csv',
   })
+})
+
+test('PostgreSQL staff invitation issuance and redemption are transactional and audit without contact details', async () => {
+  const queries = []
+  const invite = {
+    id: 'b4c34e0d-7518-45a7-a489-b65d2e7f584f',
+    tokenHash: 'a'.repeat(64),
+    email: 'staff.invitee@example.com',
+    mobile: '09123456789',
+    operatorId: 'operator-test-id',
+    createdAt: new Date().toISOString(),
+    expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+  }
+  const originalConnect = pg.Pool.prototype.connect
+  pg.Pool.prototype.connect = async function () {
+    return {
+      query: async (sql, params = []) => {
+        const normalizedSql = sql.replace(/\s+/g, ' ').trim().toLowerCase()
+        queries.push({ sql: normalizedSql, params })
+        if (normalizedSql.startsWith('select * from staff_invitations where token_hash')) {
+          return { rows: [{
+            id: invite.id,
+            token_hash: invite.tokenHash,
+            email: invite.email,
+            mobile: invite.mobile,
+            expires_at: invite.expiresAt,
+            accepted_at: null,
+            revoked_at: null,
+          }] }
+        }
+        if (normalizedSql.startsWith('select id from users')) return { rows: [] }
+        return { rows: [] }
+      },
+      release() {},
+    }
+  }
+
+  try {
+    await createStaffInvitation(invite)
+    const result = await redeemStaffInvitation({
+      tokenHash: invite.tokenHash,
+      firstName: 'Test',
+      lastName: 'Invitee',
+      passwordHash: 'hashed-password',
+      userId: 'b9c7519c-583a-4e23-ae6c-63113cc2c07f',
+    })
+    assert.equal(result.email, invite.email)
+  } finally {
+    pg.Pool.prototype.connect = originalConnect
+  }
+
+  assert.equal(queries.filter(({ sql }) => sql === 'begin').length, 2)
+  assert.equal(queries.filter(({ sql }) => sql === 'commit').length, 2)
+  assert.ok(queries.some(({ sql }) => sql.includes("values ($1, $2, $3, $4, $5, $6, 'staff'")))
+  const auditQueries = queries.filter(({ sql }) => sql.startsWith('insert into audit_logs'))
+  assert.equal(auditQueries.length, 2)
+  assert.equal(JSON.stringify(auditQueries).includes(invite.email), false)
+  assert.equal(JSON.stringify(auditQueries).includes(invite.mobile), false)
+  assert.equal(JSON.stringify(auditQueries).includes(invite.tokenHash), false)
 })

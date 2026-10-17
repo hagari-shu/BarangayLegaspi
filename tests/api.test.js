@@ -10,7 +10,7 @@ import { ADMIN_SEED, DB_PATH } from '../server/config.js'
 import { isCaptainPhotoStorageConfigured } from '../server/captain-photo-storage.js'
 import { registryAgeDateRange } from '../server/resident-registry.js'
 import { decryptResidentPrivateData, encryptResidentPrivateData } from '../server/resident-registry-crypto.js'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomBytes, randomUUID } from 'node:crypto'
 
 const testDbPath = DB_PATH
 
@@ -647,6 +647,160 @@ test('request lifecycle preserves copy preference, status history, and resident 
       server.close((error) => error ? reject(error) : resolve())
     })
   }
+})
+
+test('staff invitation creates a staff account once and keeps invitation secrets out of audit logs', async () => {
+  const { server, baseUrl } = await createTestServer()
+  const token = randomBytes(32).toString('base64url')
+  const tokenHash = createHash('sha256').update(token).digest('hex')
+  const email = `invited.${randomUUID()}@example.com`
+  const mobile = `091${Math.floor(10000000 + Math.random() * 90000000)}`
+  const now = new Date()
+  const invitationId = randomUUID()
+  await jsonDb.createStaffInvitation({
+    id: invitationId,
+    tokenHash,
+    email,
+    mobile,
+    operatorId: 'deployment-operator-test',
+    createdAt: now.toISOString(),
+    expiresAt: new Date(now.getTime() + 24 * 60 * 60 * 1000).toISOString(),
+  })
+
+  try {
+    const accept = () => fetch(`${baseUrl}/api/staff-invitations/accept`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        token,
+        firstName: 'Test',
+        lastName: 'Invitee',
+        password: 'SecurePass123!',
+      }),
+    })
+    const [firstResponse, replayResponse] = await Promise.all([accept(), accept()])
+    assert.equal(firstResponse.status, 201)
+    assert.equal(replayResponse.status, 400)
+    assert.equal(firstResponse.headers.get('cache-control'), 'no-store')
+
+    const stored = await jsonDb.readDb()
+    const staff = stored.users.filter((user) => user.email === email)
+    assert.equal(staff.length, 1)
+    assert.equal(staff[0].role, 'staff')
+    assert.equal(staff[0].mobile, mobile)
+    assert.equal(staff[0].passwordHash === 'SecurePass123!', false)
+    assert.equal(stored.staffInvitations.find((item) => item.id === invitationId).acceptedAt !== null, true)
+
+    const invitationAudits = stored.auditLogs.filter((entry) => entry.targetId === invitationId || entry.metadata?.invitationId === invitationId)
+    assert.deepEqual(invitationAudits.map((entry) => entry.action).sort(), ['staff.invitation.created', 'staff.invitation.redeemed'])
+    assert.equal(invitationAudits.find((entry) => entry.action === 'staff.invitation.created').metadata.operatorId, 'deployment-operator-test')
+    assert.equal(JSON.stringify(invitationAudits).includes(token), false)
+    assert.equal(JSON.stringify(invitationAudits).includes(tokenHash), false)
+    assert.equal(JSON.stringify(invitationAudits).includes(email), false)
+    assert.equal(JSON.stringify(invitationAudits).includes(mobile), false)
+
+    const loginResponse = await fetch(`${baseUrl}/api/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ identifier: email, password: 'SecurePass123!' }),
+    })
+    assert.equal(loginResponse.status, 200)
+    assert.equal((await loginResponse.json()).user.role, 'staff')
+  } finally {
+    server.close()
+  }
+})
+
+test('expired, invalid-password, and missing staff invitations cannot create staff accounts', async () => {
+  const { server, baseUrl } = await createTestServer()
+  const expiredToken = randomBytes(32).toString('base64url')
+  const validToken = randomBytes(32).toString('base64url')
+  const now = Date.now()
+  await jsonDb.createStaffInvitation({
+    id: randomUUID(),
+    tokenHash: createHash('sha256').update(expiredToken).digest('hex'),
+    email: `expired.${randomUUID()}@example.com`,
+    mobile: `091${Math.floor(10000000 + Math.random() * 90000000)}`,
+    createdAt: new Date(now - 48 * 60 * 60 * 1000).toISOString(),
+    expiresAt: new Date(now - 24 * 60 * 60 * 1000).toISOString(),
+  })
+  const pendingId = randomUUID()
+  await jsonDb.createStaffInvitation({
+    id: pendingId,
+    tokenHash: createHash('sha256').update(validToken).digest('hex'),
+    email: `pending.${randomUUID()}@example.com`,
+    mobile: `091${Math.floor(10000000 + Math.random() * 90000000)}`,
+    createdAt: new Date(now).toISOString(),
+    expiresAt: new Date(now + 24 * 60 * 60 * 1000).toISOString(),
+  })
+
+  try {
+    for (const body of [
+      { token: expiredToken, firstName: 'Test', lastName: 'Person', password: 'SecurePass123!' },
+      { token: validToken, firstName: 'Test', lastName: 'Person', password: 'weak' },
+      { firstName: 'Test', lastName: 'Person', password: 'SecurePass123!' },
+    ]) {
+      const response = await fetch(`${baseUrl}/api/staff-invitations/accept`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      assert.equal(response.status, 400)
+    }
+
+    const stored = await jsonDb.readDb()
+    assert.equal(stored.users.filter((user) => user.role === 'staff').length, 0)
+    assert.equal(stored.staffInvitations.find((item) => item.id === pendingId).acceptedAt, null)
+  } finally {
+    server.close()
+  }
+})
+
+test('staff invitation issuance rejects existing accounts and duplicate pending identities', async () => {
+  const resident = {
+    id: randomUUID(),
+    firstName: 'Existing',
+    lastName: 'Resident',
+    email: `existing.${randomUUID()}@example.com`,
+    mobile: `091${Math.floor(10000000 + Math.random() * 90000000)}`,
+    passwordHash: 'not-a-login-hash',
+    role: 'resident',
+    status: 'Pending Verification',
+  }
+  await jsonDb.saveUser(resident)
+  await assert.rejects(
+    jsonDb.createStaffInvitation({
+      id: randomUUID(),
+      tokenHash: createHash('sha256').update(randomBytes(32)).digest('hex'),
+      email: resident.email.toUpperCase(),
+      mobile: `091${Math.floor(10000000 + Math.random() * 90000000)}`,
+      createdAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+    }),
+    /STAFF_INVITATION_ACCOUNT_EXISTS/
+  )
+
+  const sharedEmail = `duplicate.${randomUUID()}@example.com`
+  const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
+  await jsonDb.createStaffInvitation({
+    id: randomUUID(),
+    tokenHash: createHash('sha256').update(randomBytes(32)).digest('hex'),
+    email: sharedEmail,
+    mobile: `091${Math.floor(10000000 + Math.random() * 90000000)}`,
+    createdAt: new Date().toISOString(),
+    expiresAt,
+  })
+  await assert.rejects(
+    jsonDb.createStaffInvitation({
+      id: randomUUID(),
+      tokenHash: createHash('sha256').update(randomBytes(32)).digest('hex'),
+      email: sharedEmail,
+      mobile: `091${Math.floor(10000000 + Math.random() * 90000000)}`,
+      createdAt: new Date().toISOString(),
+      expiresAt,
+    }),
+    /STAFF_INVITATION_ALREADY_PENDING/
+  )
 })
 
 test('staff can review pending resident accounts but emergency Admin cannot', async () => {

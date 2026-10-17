@@ -113,7 +113,8 @@ export async function readDb() {
         registrySourceReviews: [],
         emergencyAccessGrants: [],
         auditLogs: [],
-      }
+        staffInvitations: [],
+        }
       await writeJsonFile(fallbackDb)
       return fallbackDb
     }
@@ -425,6 +426,111 @@ export async function addAuditLog(entry) {
   })
   auditWriteQueue = write.then(() => undefined, () => undefined)
   return write
+}
+
+export async function createStaffInvitation(invitation) {
+  return serializeRegistryMutation(async () => {
+    const email = String(invitation.email || '').trim().toLowerCase()
+    const mobile = String(invitation.mobile || '').trim()
+    const db = await readDb()
+    db.staffInvitations = Array.isArray(db.staffInvitations) ? db.staffInvitations : []
+    db.users = Array.isArray(db.users) ? db.users : []
+
+    const now = Date.now()
+    db.staffInvitations = db.staffInvitations.map((item) => (
+      !item.acceptedAt && !item.revokedAt && Date.parse(item.expiresAt) <= now
+        ? { ...item, revokedAt: new Date(now).toISOString() }
+        : item
+    ))
+
+    const identityExists = db.users.some((user) => (
+      String(user.email || '').toLowerCase() === email
+      || String(user.mobile || '') === mobile
+    ))
+    const invitationExists = db.staffInvitations.some((item) => (
+      !item.acceptedAt && !item.revokedAt
+      && (item.email === email || item.mobile === mobile)
+    ))
+    if (identityExists) throw new Error('STAFF_INVITATION_ACCOUNT_EXISTS')
+    if (invitationExists) throw new Error('STAFF_INVITATION_ALREADY_PENDING')
+
+    db.staffInvitations.push({
+      id: invitation.id,
+      tokenHash: invitation.tokenHash,
+      email,
+      mobile,
+      expiresAt: invitation.expiresAt,
+      createdAt: invitation.createdAt,
+      acceptedAt: null,
+      revokedAt: null,
+    })
+    db.auditLogs = Array.isArray(db.auditLogs) ? db.auditLogs : []
+    db.auditLogs.push({
+      id: randomUUID(),
+      actorId: null,
+      actorRole: 'deployment_operator',
+      action: 'staff.invitation.created',
+      targetType: 'staff_invitation',
+      targetId: invitation.id,
+      metadata: { expiresAt: invitation.expiresAt, operatorId: invitation.operatorId },
+      createdAt: invitation.createdAt,
+    })
+    await writeDb(db)
+    return { id: invitation.id, expiresAt: invitation.expiresAt }
+  })
+}
+
+export async function redeemStaffInvitation({ tokenHash, firstName, lastName, passwordHash, userId, now = new Date().toISOString() }) {
+  return serializeRegistryMutation(async () => {
+    const db = await readDb()
+    db.staffInvitations = Array.isArray(db.staffInvitations) ? db.staffInvitations : []
+    db.users = Array.isArray(db.users) ? db.users : []
+    const invitation = db.staffInvitations.find((item) => item.tokenHash === tokenHash)
+    if (!invitation || invitation.acceptedAt || invitation.revokedAt || Date.parse(invitation.expiresAt) <= Date.parse(now)) {
+      return null
+    }
+
+    const identityExists = db.users.some((user) => (
+      String(user.email || '').toLowerCase() === invitation.email
+      || String(user.mobile || '') === invitation.mobile
+    ))
+    if (identityExists) return null
+
+    const user = {
+      id: userId,
+      firstName,
+      lastName,
+      mobile: invitation.mobile,
+      email: invitation.email,
+      passwordHash,
+      role: 'staff',
+      householdId: null,
+      familyMembers: 1,
+      householdMembers: [],
+      status: 'On Duty',
+      address: 'Barangay Hall, Legaspi',
+      zone: 0,
+      position: 'Staff',
+      availability: 'Available',
+      createdAt: now,
+    }
+    invitation.acceptedAt = now
+    invitation.redeemedUserId = userId
+    db.users.push(user)
+    db.auditLogs = Array.isArray(db.auditLogs) ? db.auditLogs : []
+    db.auditLogs.push({
+      id: randomUUID(),
+      actorId: userId,
+      actorRole: 'staff',
+      action: 'staff.invitation.redeemed',
+      targetType: 'user',
+      targetId: userId,
+      metadata: { invitationId: invitation.id },
+      createdAt: now,
+    })
+    await writeDb(db)
+    return { id: user.id, email: user.email }
+  })
 }
 
 export async function listAuditLogs(limit = 100) {

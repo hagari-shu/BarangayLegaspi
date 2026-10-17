@@ -42,6 +42,10 @@ Account registration is not the same as entry into the staff resident registry. 
 3. Use **Forgot password** only if the configured recovery service is available. Password-reset delivery has not been verified for every deployment. If no reset instructions arrive, contact the barangay office instead of sending your password to anyone.
 4. Use **Settings** to review available security controls. If MFA is enabled, keep authenticator and recovery codes private and store recovery codes securely.
 
+### Staff invitation
+
+Staff accounts are issued by an authorized deployment operator, not created through resident registration or the Admin/Staff portals. Open the invitation link on the official HTTPS site within 24 hours, enter your name, and choose a strong password. The link works once; if it expires or has already been used, contact the system operator for a new one. Do not forward or post the invitation link, and never send your password to the operator.
+
 ### Profile, requests, and status
 
 - Open **Profile** to review or edit available contact and address details. Save changes and check for a success or error message.

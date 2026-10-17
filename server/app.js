@@ -576,6 +576,47 @@ export function createApp() {
     }
   })
 
+  app.post('/api/staff-invitations/accept', rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 8,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { message: 'Too many invitation attempts. Please try again later.' },
+  }), async (req, res) => {
+    res.set('Cache-Control', 'no-store')
+    const token = String(req.body?.token || '')
+    const firstName = sanitizeText(req.body?.firstName)
+    const lastName = sanitizeText(req.body?.lastName)
+    const password = String(req.body?.password || '').trim()
+
+    if (!/^[A-Za-z0-9_-]{43}$/.test(token) || !firstName || firstName.length > 100 || !lastName || lastName.length > 100) {
+      return res.status(400).json({ message: 'This invitation cannot be used. It may have expired, already been used, or its account details may conflict.' })
+    }
+    if (!isValidPassword(password)) {
+      return res.status(400).json({ message: `Please choose a password with ${passwordRequirements}.` })
+    }
+
+    try {
+      if (typeof store.redeemStaffInvitation !== 'function') {
+        throw new Error('Staff invitation redemption is not configured for this storage adapter.')
+      }
+      const redeemed = await store.redeemStaffInvitation({
+        tokenHash: createHash('sha256').update(token).digest('hex'),
+        firstName,
+        lastName,
+        passwordHash: await hashPassword(password),
+        userId: randomUUID(),
+      })
+      if (!redeemed) {
+        return res.status(400).json({ message: 'This invitation cannot be used. It may have expired, already been used, or its account details may conflict.' })
+      }
+      return res.status(201).json({ message: 'Staff account created. You can now sign in.' })
+    } catch (error) {
+      console.error('failed to redeem staff invitation', error)
+      return res.status(500).json({ message: 'Unable to complete this invitation right now. Please contact the barangay system operator.' })
+    }
+  })
+
   app.post('/api/register', authRateLimit, async (req, res) => {
     try {
       const firstName = sanitizeText(req.body?.firstName)
