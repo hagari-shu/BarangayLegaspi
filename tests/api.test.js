@@ -851,7 +851,7 @@ test('request lifecycle preserves copy preference, status history, and resident 
   }
 })
 
-test('admin can update user role and status', async () => {
+test('admin can update user details but cannot change account roles', async () => {
   const { server, baseUrl } = await createTestServer()
   const mobile = `091${Math.floor(10000000 + Math.random() * 90000000)}`
   const email = `upgrade.${Date.now()}@example.com`
@@ -904,10 +904,27 @@ test('admin can update user role and status', async () => {
       }),
     })
 
-    assert.equal(updateResponse.status, 200)
-    const updateData = await updateResponse.json()
-    assert.equal(updateData.user.role, 'staff')
-    assert.equal(updateData.user.status, 'On Duty')
+    assert.equal(updateResponse.status, 403)
+    const detailUpdateResponse = await fetch(`${baseUrl}/api/admin/users/${residentId}`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${adminToken}`,
+      },
+      body: JSON.stringify({
+        status: 'Active Resident',
+        zone: 4,
+        familyMembers: 3,
+        householdMembers: [
+          { name: 'Ana Villanueva', relationship: 'Spouse' },
+          { name: 'Luis Villanueva', relationship: 'Child' },
+        ],
+      }),
+    })
+    assert.equal(detailUpdateResponse.status, 200)
+    const updateData = await detailUpdateResponse.json()
+    assert.equal(updateData.user.role, 'resident')
+    assert.equal(updateData.user.status, 'Active Resident')
     assert.equal(updateData.user.zone, 4)
     assert.equal(updateData.user.familyMembers, 3)
     assert.deepEqual(updateData.user.householdMembers, [
@@ -933,7 +950,39 @@ test('admin can update user role and status', async () => {
 
     assert.equal(usersResponse.status, 200)
     const usersData = await usersResponse.json()
-    assert.ok(usersData.users.some((user) => user.id === residentId && user.role === 'staff'))
+    assert.ok(usersData.users.some((user) => user.id === residentId && user.role === 'resident'))
+
+    const staffCreateResponse = await fetch(`${baseUrl}/api/staff/members`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${adminToken}`,
+      },
+      body: JSON.stringify({
+        firstName: 'Portal',
+        lastName: 'Staff',
+        email: `portal.staff.${Date.now()}@example.com`,
+        mobile: `091${Math.floor(10000000 + Math.random() * 90000000)}`,
+        password: 'StaffPass123!',
+      }),
+    })
+    assert.equal(staffCreateResponse.status, 403)
+
+    const adminCreateResponse = await fetch(`${baseUrl}/api/admin/users`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${adminToken}`,
+      },
+      body: JSON.stringify({
+        firstName: 'Portal',
+        lastName: 'Admin',
+        email: `portal.admin.${Date.now()}@example.com`,
+        mobile: `091${Math.floor(10000000 + Math.random() * 90000000)}`,
+        password: 'AdminPass123!',
+      }),
+    })
+    assert.equal(adminCreateResponse.status, 403)
   } finally {
     await new Promise((resolve, reject) => {
       server.close((error) => (error ? reject(error) : resolve()))
@@ -992,12 +1041,27 @@ test('staff cannot create staff accounts', async () => {
   }
 })
 
-test('admin-assigned staff positions persist in login profiles and the staff directory', async () => {
+test('pre-provisioned staff positions persist in login profiles while portal creation stays disabled', async () => {
   const { server, baseUrl } = await createTestServer()
   const email = `secretary.${Date.now()}@example.com`
   const mobile = `091${Math.floor(10000000 + Math.random() * 90000000)}`
 
   try {
+    const password = 'StaffPass123!'
+    const staffMember = {
+      id: randomUUID(),
+      firstName: 'Maria',
+      lastName: 'Secretary',
+      position: 'Secretary',
+      email,
+      mobile,
+      passwordHash: await hashPassword(password),
+      role: 'staff',
+      status: 'On Duty',
+      createdAt: new Date().toISOString(),
+    }
+    await jsonDb.saveUser(staffMember)
+
     const adminLogin = await fetch(`${baseUrl}/api/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1021,18 +1085,15 @@ test('admin-assigned staff positions persist in login profiles and the staff dir
         password: 'StaffPass123!',
       }),
     })
-    assert.equal(createResponse.status, 201)
-    const { staffMember } = await createResponse.json()
+    assert.equal(createResponse.status, 403)
     assert.equal(staffMember.role, 'staff')
     assert.equal(staffMember.status, 'On Duty')
-    assert.equal(staffMember.password, undefined)
-    assert.equal(staffMember.passwordHash, undefined)
     assert.equal(staffMember.position, 'Secretary')
 
     const staffLogin = await fetch(`${baseUrl}/api/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ identifier: email, password: 'StaffPass123!' }),
+      body: JSON.stringify({ identifier: email, password }),
     })
     assert.equal(staffLogin.status, 200)
     const { user } = await staffLogin.json()

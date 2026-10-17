@@ -50,6 +50,16 @@ The staged Laravel API preserves the `/api` routes and PostgreSQL data model, an
 
 For the active Node/Express API, automatic administrator seeding is only for a genuinely new database. If either configured seed identifier (`ADMIN_EMAIL` or `ADMIN_MOBILE`) already belongs to an account, seeding is skipped; it never promotes or overwrites an existing user.
 
+#### Operator account provisioning
+
+Only an authorized deployment operator may provision administrators or issue staff invitations. Admin and staff portal account-creation endpoints are disabled, and administrators cannot change account roles. These commands require the active production Node service environment and PostgreSQL connection; do not run them against a local or staged database to provision live accounts.
+
+- To promote an existing, verified resident account, run `npm run accounts:promote-admin -- --confirm` from the active Node service shell. The command changes the role only when `ADMIN_EMAIL` and `ADMIN_MOBILE` match the same resident account, records an audit entry, and never changes its password or other profile fields. It refuses mismatches, disabled accounts, and non-resident roles. If the account is already an administrator, it makes no changes.
+- To invite a new staff member, run `npm run accounts:invite-staff -- --email staff@example.gov --confirm`. The command creates an audited, single-use invitation expiring in 12 hours. It prints the raw invitation URL once; deliver it to the intended staff member over an approved private channel and do not put it in chat, tickets, logs, or source control. The token is kept in the URL fragment, removed from the address bar by the portal, and submitted to the API in a POST body. The invitation is not emailed automatically.
+- The invitee completes `/staff-invite` on the production portal, confirms their name and mobile number, and chooses a password. The staff account is created only when the invitation is accepted. Token hashes, not raw tokens, are stored. Reissuing an invitation revokes any prior unused invitation for that email.
+
+The production schema is initialized by the Node API at startup. Deploy this code and wait for a healthy service before running either command. The operator commands do not initialize the schema or run the administrator seed, preventing unrelated startup writes. Never pass passwords, database URLs, or invitation tokens as command-line arguments.
+
 ### Mau assistant maintenance
 
 Mau currently uses client-side, keyword-matched responses; it is not a machine-learning model and does not continuously train on conversations. Adapt it through staff-approved, version-controlled FAQ updates: maintain role- and language-specific intents in `src/mau-responses.js`, keep English and Filipino answers aligned in `src/translations.js`, and add question, role, language, and out-of-scope coverage in `tests/translations.test.js`. Recheck these answers whenever a portal workflow or policy changes, and keep claims about unavailable features explicit.
@@ -88,7 +98,7 @@ Enable GitHub Actions failure notifications in your GitHub account or repository
 
 These checks cover uptime and public read paths; they do not replace authenticated workflow tests, application-log review, or verified database backups.
 
-The admin portal health card checks API availability and, for PostgreSQL deployments, database connectivity. It does not inspect backup schedules, alert delivery, restoreability, or staff coverage. Verify automated database backups and perform a restore test separately; add authorized staff accounts in Admin → Access only when the barangay has assigned those responsibilities.
+The admin portal health card checks API availability and, for PostgreSQL deployments, database connectivity. It does not inspect backup schedules, alert delivery, restoreability, or staff coverage. Verify automated database backups and perform a restore test separately. Admin → Access is for monitoring and account details; only an authorized deployment operator can provision an administrator or issue a staff invitation.
 
 ### Staff request dashboard metrics
 

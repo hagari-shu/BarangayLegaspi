@@ -12,6 +12,7 @@ const dataDir = path.join(__dirname, 'data')
 const isTestRun = process.env.NODE_ENV === 'test'
   || process.execArgv.some((arg) => arg.includes('--test'))
   || process.argv.some((arg) => arg.includes('--test') || /\.test\.[cm]?[jt]s$/i.test(arg))
+export const IS_TEST_RUN = isTestRun
 const dbPath = path.join(dataDir, isTestRun ? `db-${process.pid}.json` : 'db.json')
 
 if (!fs.existsSync(dataDir)) {

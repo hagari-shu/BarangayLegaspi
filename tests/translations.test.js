@@ -436,6 +436,7 @@ test('captain photo controls and profile details have localized labels', () => {
 
 test('staff account management labels are available in both supported languages', () => {
   for (const locale of [translations.en, translations.fil]) {
+    assert.ok(locale.operatorOnlyAccounts)
     assert.ok(locale.createStaffAccount)
     assert.ok(locale.staffAccounts)
     assert.ok(locale.noStaffAccounts)

@@ -26,9 +26,14 @@ import {
   verifyMetaWebhookSignature,
 } from './meta-social.js'
 import { registerResidentRegistryRoutes } from './resident-registry.js'
-import { ADMIN_SEED, CORS_ORIGINS, IS_PRODUCTION, PORT, SHOULD_SKIP_SEED } from './config.js'
+import { ADMIN_SEED, CORS_ORIGINS, IS_PRODUCTION, IS_TEST_RUN, PORT, SHOULD_SKIP_SEED } from './config.js'
+import {
+  createStaffInvitationAcceptanceAudit,
+  hashStaffInvitationToken,
+  isValidStaffInvitationToken,
+} from './staff-invitations.js'
 
-let store = process.env.DATABASE_URL ? pgDb : jsonDb
+let store = process.env.DATABASE_URL && !IS_TEST_RUN ? pgDb : jsonDb
 
 const sanitizeText = (value = '') => String(value).replace(/[<>]/g, '').trim()
 const sanitizeUserRecord = (user = {}) => {
@@ -88,7 +93,7 @@ const serviceCatalog = [
 const reminderStore = new Map()
 
 export async function seedDemoResident() {
-  if (process.env.DATABASE_URL) {
+  if (process.env.DATABASE_URL && !IS_TEST_RUN) {
     await pgDb.initDatabase()
     return
   }
@@ -552,6 +557,96 @@ export function createApp() {
     } catch (error) {
       console.error('Register error:', error)
       return res.status(500).json({ message: 'Registration failed.' })
+    }
+  })
+
+  app.post('/api/staff/invitations/validate', authRateLimit, async (req, res) => {
+    res.set('Cache-Control', 'no-store')
+    const token = String(req.body?.token || '')
+    if (!isValidStaffInvitationToken(token) || typeof store.getStaffInvitationByTokenHash !== 'function') {
+      return res.status(410).json({ message: 'This staff invitation is invalid, expired, or already used.' })
+    }
+
+    try {
+      const invitation = await store.getStaffInvitationByTokenHash(hashStaffInvitationToken(token))
+      if (
+        !invitation
+        || invitation.acceptedAt
+        || invitation.revokedAt
+        || Date.parse(invitation.expiresAt) <= Date.now()
+      ) {
+        return res.status(410).json({ message: 'This staff invitation is invalid, expired, or already used.' })
+      }
+
+      return res.json({ email: invitation.email, expiresAt: invitation.expiresAt })
+    } catch (error) {
+      console.error('staff invitation lookup failed', error)
+      return res.status(500).json({ message: 'Unable to verify this staff invitation.' })
+    }
+  })
+
+  app.post('/api/staff/invitations/accept', authRateLimit, async (req, res) => {
+    res.set('Cache-Control', 'no-store')
+    const token = String(req.body?.token || '')
+    const firstName = sanitizeText(req.body?.firstName)
+    const lastName = sanitizeText(req.body?.lastName)
+    const mobile = sanitizeText(req.body?.mobile)
+    const password = sanitizeText(req.body?.password)
+    if (!isValidStaffInvitationToken(token)) {
+      return res.status(410).json({ message: 'This staff invitation is invalid, expired, or already used.' })
+    }
+    if (
+      !firstName || firstName.length > 100
+      || !lastName || lastName.length > 100
+      || !isValidMobile(mobile)
+      || !isValidPassword(password)
+    ) {
+      return res.status(400).json({
+        message: `Please provide a first and last name, a valid mobile number, and a password with ${passwordRequirements}.`,
+      })
+    }
+    if (typeof store.acceptStaffInvitation !== 'function') {
+      return res.status(503).json({ message: 'Staff invitation acceptance is unavailable.' })
+    }
+
+    try {
+      const tokenHash = hashStaffInvitationToken(token)
+      const invitation = await store.getStaffInvitationByTokenHash(tokenHash)
+      if (
+        !invitation
+        || invitation.acceptedAt
+        || invitation.revokedAt
+        || Date.parse(invitation.expiresAt) <= Date.now()
+      ) {
+        return res.status(410).json({ message: 'This staff invitation is invalid, expired, or already used.' })
+      }
+
+      const acceptedAt = new Date().toISOString()
+      const user = {
+        id: randomUUID(),
+        firstName,
+        lastName,
+        mobile,
+        passwordHash: await hashPassword(password),
+        householdId: `STAFF-${randomUUID().slice(0, 12)}`,
+      }
+      const result = await store.acceptStaffInvitation({
+        tokenHash,
+        user,
+        acceptedAt,
+        auditEntry: createStaffInvitationAcceptanceAudit(user.id, invitation.id),
+      })
+      if (result.status === 'invalid_invitation') {
+        return res.status(410).json({ message: 'This staff invitation is invalid, expired, or already used.' })
+      }
+      if (result.status === 'account_exists') {
+        return res.status(409).json({ message: 'An account already uses these details. Contact the barangay office.' })
+      }
+
+      return res.status(201).json({ message: 'Staff account created. You can now sign in.' })
+    } catch (error) {
+      console.error('staff invitation acceptance failed', error)
+      return res.status(500).json({ message: 'Unable to create the staff account.' })
     }
   })
 
@@ -1583,58 +1678,7 @@ export function createApp() {
         return res.status(403).json({ message: 'Administrator access required.' })
       }
 
-      const firstName = sanitizeText(req.body?.firstName)
-      const lastName = sanitizeText(req.body?.lastName)
-      const position = sanitizeText(req.body?.position) || 'Staff'
-      const availability = sanitizeText(req.body?.availability) || 'Available'
-      const email = sanitizeText(req.body?.email).toLowerCase()
-      const mobile = sanitizeText(req.body?.mobile)
-      const password = String(req.body?.password || '').trim()
-
-      if (!firstName || !lastName || !email || !mobile || !password) {
-        return res.status(400).json({ message: 'Please complete all staff member fields.' })
-      }
-
-      if (!isValidEmail(email) || !isValidMobile(mobile) || !isValidPassword(password)) {
-        return res.status(400).json({ message: `Please enter a valid email, mobile number, and password with ${passwordRequirements}.` })
-      }
-
-      const existingEmail = await store.findUserByIdentifier(email)
-      const existingMobile = await store.findUserByIdentifier(mobile)
-      if (existingEmail || existingMobile) {
-        return res.status(409).json({ message: 'A staff member with this email or mobile already exists.' })
-      }
-
-      const staffMember = {
-        id: randomUUID(),
-        firstName,
-        lastName,
-        email,
-        mobile,
-        passwordHash: await hashPassword(password),
-        role: 'staff',
-        householdId: `2024-${String(Date.now()).slice(-4)}`,
-        familyMembers: 1,
-        status: sanitizeText(req.body?.status) || 'On Duty',
-        address: 'Barangay Hall, Legaspi',
-        zone: 0,
-        position,
-        availability,
-        createdAt: new Date().toISOString(),
-      }
-
-      if (typeof store.createUser === 'function') {
-        await store.createUser(staffMember)
-      } else {
-        const db = await store.readDb?.() || { users: [] }
-        db.users = db.users || []
-        db.users.push(staffMember)
-        await store.writeDb?.(db)
-      }
-
-      const { passwordHash, ...safeMember } = staffMember
-      await writeAudit(actor.user, 'staff.created', 'user', staffMember.id, { email: staffMember.email })
-      return res.status(201).json({ staffMember: safeMember })
+      return res.status(403).json({ message: 'Staff accounts can only be created through a deployment-operator invitation.' })
     } catch (error) {
       console.error('failed to create staff member', error)
       return res.status(401).json({ message: 'Invalid or expired token.' })
@@ -1756,30 +1800,7 @@ export function createApp() {
         return res.status(403).json({ message: 'Admin access required.' })
       }
 
-      const firstName = sanitizeText(req.body?.firstName)
-      const lastName = sanitizeText(req.body?.lastName)
-      const email = sanitizeText(req.body?.email).toLowerCase()
-      const mobile = sanitizeText(req.body?.mobile)
-      const password = String(req.body?.password || '').trim()
-      if (!firstName || !lastName || !email || !mobile || !password) {
-        return res.status(400).json({ message: 'First name, last name, email, mobile, and password are required.' })
-      }
-      if (!isValidEmail(email) || !isValidMobile(mobile) || !isValidPassword(password)) {
-        return res.status(400).json({ message: `Please provide valid account details and a password with ${passwordRequirements}.` })
-      }
-      if (await store.findUserByIdentifier(email) || await store.findUserByIdentifier(mobile)) {
-        return res.status(409).json({ message: 'A user with this email or mobile already exists.' })
-      }
-
-      const adminUser = {
-        id: randomUUID(), firstName, lastName, email, mobile, passwordHash: await hashPassword(password),
-        role: 'admin', householdId: `2024-${String(Date.now()).slice(-4)}`, familyMembers: 1,
-        status: 'Administrator', address: 'Barangay Hall, Legaspi', zone: 0, createdAt: new Date().toISOString(),
-      }
-      await store.createUser?.(adminUser) || await store.saveUser(adminUser)
-      const { passwordHash, ...safeUser } = adminUser
-      await writeAudit(actor.user, 'admin.created', 'user', adminUser.id, { email })
-      return res.status(201).json({ user: safeUser })
+      return res.status(403).json({ message: 'Administrator accounts can only be provisioned by an authorized deployment operator.' })
     } catch (error) {
       console.error('failed to create admin user', error)
       return res.status(500).json({ message: 'Unable to create administrator account.' })
@@ -1956,6 +1977,9 @@ export function createApp() {
       const nextRole = sanitizeText(req.body?.role || '').toLowerCase() || existingUser.role || 'resident'
       if (!['resident', 'staff', 'admin'].includes(nextRole)) {
         return res.status(400).json({ message: 'Invalid role.' })
+      }
+      if (nextRole !== existingUser.role) {
+        return res.status(403).json({ message: 'Account roles can only be changed by an authorized deployment operator.' })
       }
 
       const nextFirstName = sanitizeText(req.body?.firstName || existingUser.firstName || existingUser.first_name)
