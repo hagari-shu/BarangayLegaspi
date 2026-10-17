@@ -1,7 +1,27 @@
 # Barangay Legaspi Laravel API
 
-This Laravel 12 service replaces the former Express API while preserving the React frontend's `/api` contract.
+This Laravel 12 service is being prepared to replace the former Express API. Its API routes cover the React portal workflows, including staff request queue and reports, request status history, announcements, resident archiving, and persistent reminders.
 
 For deployment, environment variables, local setup, and database migration guidance, see the [repository README](../README.md).
 
-The API schema migration is designed to extend the existing PostgreSQL data. Back up the database and validate the migration against a staging copy before deploying it to production.
+The API schema migration is designed to extend the existing PostgreSQL data. Back up the database and validate the migration against an isolated staging copy before deploying it to production. The live frontend must continue using Express until authenticated role-based tests pass against Laravel and a rollback plan is ready.
+
+Events currently have no persistent management workflow and return an empty collection, matching the active Express API. Captain-photo upload, replacement, and deletion use the configured S3-compatible storage disk; set `OBJECT_STORAGE_ENDPOINT`, `OBJECT_STORAGE_REGION`, `OBJECT_STORAGE_BUCKET`, `OBJECT_STORAGE_ACCESS_KEY_ID`, and `OBJECT_STORAGE_SECRET_ACCESS_KEY` on the Laravel service. Keep the bucket private, allow browser `POST` uploads from the exact portal origin with bucket CORS, and configure lifecycle cleanup for `official/captain-portrait/pending/`. Verify the flow against staging before cutover. Password-reset delivery also requires a configured HTTPS delivery endpoint.
+
+## Resident registry and emergency staff backup
+
+The resident registry is separate from resident login accounts. Do not use account counts as census totals. Registry searches and demographic counts are available only through authenticated staff endpoints. Demographic totals include active, verified records; male, female, and unclassified sex counts are kept distinct. Purok and zone labels come only from entered source information, and missing locations remain explicitly unassigned.
+
+New resident entries remain pending verification and are excluded from population totals until staff verifies them. Duplicate-looking entries are surfaced for review, not automatically rejected. The registry migration creates no sample records; a migration therefore leaves the registry empty until an authorized source roster is reviewed and entered.
+
+New login registrations also remain pending. Staff review these accounts in the Staff Portal; the approval endpoint permits only the `Pending Verification` to `Active Resident` or `Rejected` transition and records the decision. Administrators can view account status but cannot approve or edit accounts, even with an active emergency grant.
+
+An administrator can request one globally active, 20-minute break-glass grant after re-entering the account password (and a current authenticator code when MFA is enabled), and recording a reason of at least 20 characters. The grant is bound to the activating administrator and permits only resident-registry operations and request processing. Request queue, report, and staff archive reads are also protected by the request-processing scope, including the admin-wide request list; residents retain access to their own request list. Expiration and revocation immediately deny scoped operations. Activation, use, denied attempts, and revocation are audited. Re-activation after expiration requires fresh authentication and a new audit record.
+
+Administrators have read-only monitoring access. They cannot create, update, archive, or delete accounts, announcements, reports, payments, or other managed data. Admins may log out, update their own password or MFA settings, and activate/revoke their own break-glass grant. That grant never unlocks account, announcement, or security-setting changes. Staff request processing and registry operations continue to require the matching, active emergency scope. Rejected Admin write attempts are recorded in the audit log.
+
+The Drive source images were not accessible to the implementation session, so no resident values have been extracted or imported. Do not upload images or OCR results directly into production without source review and verification. OCR, Drive API credentials, and notification delivery are not implemented; they require source-file access, configured authorized notification recipients, and a delivery service before production use.
+
+Staff can import a reviewed CSV roster through the registry UI. The browser previews rows before submission; the API validates the whole batch, requires explicit confirmation for potential duplicates, and saves imported residents as pending. Imports are limited to 500 data rows (1 MB in the browser). Headers are `firstName`, `lastName`, `birthDate`, `sex`, `householdId`, `zone`, `purok`, `address`, and `sourceReference`; zone and purok are never inferred. Batch metadata is audited without recording resident names or birthdates. A browser print dialog cannot enforce physical-only output, so the UI must not use `window.print()` for resident records. A managed office print server is required; no server or physical printer is configured yet, so hard-copy jobs remain disabled until that service is configured and tested. The Express and Laravel APIs must fail closed rather than claim a print succeeded when no physical queue is available. These workflows are implemented in both APIs, but the frontend remains on Express until the documented staging and cutover checks pass.
+
+Notifications are not sent by registry import or printing. No external notification recipients or delivery service have been configured.

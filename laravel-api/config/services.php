@@ -35,8 +35,4 @@ return [
         ],
     ],
 
-    'public_content' => [
-        'api_base' => env('PUBLIC_CONTENT_API_BASE'),
-    ],
-
 ];

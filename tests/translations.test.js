@@ -36,9 +36,24 @@ test('Filipino role dashboards have translated controls and accessible navigatio
   assert.equal(fil.needsReview, 'Kailangang suriin')
   assert.equal(fil.averageTurnaround, 'Karaniwang tagal ng pagproseso')
   assert.equal(fil.requestQueueSearch, 'Maghanap ayon sa residente, serbisyo, o layunin')
-  assert.equal(fil.archiveOlderThan30Days, 'I-archive ang mga naprosesong request na mahigit 30 araw na')
-  assert.equal(fil.archiveAllProcessed, 'I-archive ang lahat ng naprosesong request')
-  assert.equal(fil.staffProfile, 'Profile ng staff')
+  assert.equal(fil.archiveLastDay, 'I-archive ang nakalipas na 24 oras')
+})
+
+test('Admin accessibility labels are available in both supported languages', () => {
+  for (const locale of [translations.en, translations.fil]) {
+    for (const key of [
+      'adminNavigationLabel',
+      'adminAuditTitle',
+      'filterResidentsByZone',
+      'searchUsersByName',
+      'sortBy',
+      'alphabetical',
+      'recentlyCreated',
+    ]) {
+      assert.equal(typeof locale[key], 'string')
+      assert.ok(locale[key].length > 0)
+    }
+  }
 })
 
 test('Filipino resident, staff, and admin dashboard copy is localized', () => {
@@ -49,9 +64,6 @@ test('Filipino resident, staff, and admin dashboard copy is localized', () => {
   assert.equal(fil.noRequestSubmitted, 'Wala pang isinumiteng kahilingan')
   assert.equal(fil.noRequestsMatchFilters, 'Walang kahilingang tumutugma sa mga piniling filter.')
   assert.equal(fil.staffNoteFor, 'Tala ng kawani para sa {service}')
-  assert.ok(!translations.en.requestStatusApprovedMessage.toLowerCase().includes('completed'))
-  assert.match(translations.en.requestStatusApprovedMessage, /release is not tracked/i)
-  assert.ok(!fil.requestStatusApprovedMessage.toLowerCase().includes('natapos'))
   assert.equal(fil.residentManagement, 'Pamamahala sa Resident')
   assert.equal(fil.noEmergencyReports, 'Walang naitalang ulat sa emergency.')
 })
@@ -72,7 +84,6 @@ test('system health and improvement labels are localized in both supported langu
       'recommendedImprovements',
       'systemStorageRecommendation',
       'systemMonitoringRecommendation',
-      'systemNoStaffRecommendation',
     ]) {
       assert.equal(typeof locale[key], 'string')
       assert.ok(locale[key].length > 0)
@@ -81,10 +92,6 @@ test('system health and improvement labels are localized in both supported langu
 
   assert.match(translations.en.systemRequestsRecommendation, /\{count\}/)
   assert.match(translations.fil.systemRequestsRecommendation, /\{count\}/)
-  assert.match(translations.en.systemMonitoringRecommendation, /does not verify backups/i)
-  assert.match(translations.fil.systemMonitoringRecommendation, /Hindi sinusuri.*backup/i)
-  assert.equal(translations.en.servicesLabel, 'Service requests')
-  assert.equal(translations.fil.servicesLabel, 'Mga Kahilingan sa Serbisyo')
 })
 
 test('staff request dashboard labels are localized and distinguish approval from release', () => {
@@ -92,16 +99,6 @@ test('staff request dashboard labels are localized and distinguish approval from
     for (const key of [
       'staffDashboardTitle',
       'staffDashboardSubtitle',
-      'processedArchiveConfirmTitle',
-      'processedArchiveOlderMessage',
-      'processedArchiveAllMessage',
-      'archiveOlderThan30Days',
-      'archiveAllProcessed',
-      'staffArchiveFailed',
-      'staffArchivesLoadFailed',
-      'requestTotals',
-      'staffProfile',
-      'staffScheduleNotTracked',
       'pendingReviewMetric',
       'inProcessingMetric',
       'readyForReleaseMetric',
@@ -135,7 +132,7 @@ test('resident request status messages distinguish approval from document releas
       'requestStatusRejectedMessage',
       'requestStatusNeedsInformationMessage',
       'requestStatusInReviewMessage',
-      'requestStatusPendingMessage',
+      'requestStatusSubmittedMessage',
       'requestSubmittedSuccess',
       'requestPurposeRequired',
       'requestPurposePlaceholder',
@@ -184,7 +181,6 @@ test('service report controls are localized in both supported languages', () => 
 test('resident announcement details controls are localized in both supported languages', () => {
   for (const locale of [translations.en, translations.fil]) {
     for (const key of [
-      'noCurrentAnnouncements',
       'openAnnouncementDetails',
       'currentAnnouncement',
       'closeAnnouncementDetails',
@@ -196,6 +192,9 @@ test('resident announcement details controls are localized in both supported lan
       assert.ok(locale[key].length > 0)
     }
   }
+
+  assert.match(translations.en.openAnnouncementDetails, /\{title\}/)
+  assert.match(translations.fil.openAnnouncementDetails, /\{title\}/)
 })
 
 test('homepage header actions are localized', () => {
@@ -378,9 +377,12 @@ test('Mau tailors homepage and authenticated guidance to residency and user role
     translations.en.mauStaffRequestsReply,
   )
   assert.equal(
-    getMauReply('Where do I approve resident accounts?', 'en', translations.en, 'admin', true),
+    getMauReply('How can I monitor pending resident accounts?', 'en', translations.en, 'admin', true),
     translations.en.mauAdminApprovalsReply,
   )
+  assert.match(translations.en.mauAdminApprovalsReply, /cannot approve, reject, or edit accounts/i)
+  assert.match(translations.fil.mauAdminApprovalsReply, /hindi maaaring mag-apruba, tumanggi, o mag-edit/i)
+  assert.match(translations.en.mauStaffAnnouncementsReply, /publishing announcements is currently disabled/i)
   assert.equal(
     getMauReply('Where can I review login alerts?', 'en', translations.en, 'admin', true),
     translations.en.mauAdminAuditReply,
@@ -405,22 +407,6 @@ test('Facebook group and profile links have localized labels', () => {
   }
 })
 
-test('larger text controls are localized for both supported languages', () => {
-  assert.ok(translations.en.largerText)
-  assert.ok(translations.en.standardText)
-  assert.ok(translations.fil.largerText)
-  assert.ok(translations.fil.standardText)
-})
-
-test('staff social publishing status and Messenger safety labels are localized', () => {
-  for (const locale of [translations.en, translations.fil]) {
-    assert.ok(locale.socialNotConfigured)
-    assert.ok(locale.socialIntegrationStatusUnavailable)
-    assert.ok(locale.messengerMessagesRemain)
-    assert.ok(locale.messengerOptInLink)
-  }
-})
-
 test('captain photo controls and profile details have localized labels', () => {
   for (const locale of [translations.en, translations.fil]) {
     assert.ok(locale.captainIdentification)
@@ -431,44 +417,5 @@ test('captain photo controls and profile details have localized labels', () => {
     assert.ok(locale.captainLocation)
     assert.ok(locale.captainPhotoInvalid)
     assert.ok(locale.captainPhotoTooLarge)
-  }
-})
-
-test('staff account management labels are available in both supported languages', () => {
-  for (const locale of [translations.en, translations.fil]) {
-    assert.ok(locale.createStaffAccount)
-    assert.ok(locale.staffAccounts)
-    assert.ok(locale.noStaffAccounts)
-    assert.ok(locale.staffInitialPassword)
-    assert.ok(locale.staffCreatedNotice)
-    assert.ok(locale.staffCreateFailed)
-    assert.ok(locale.staffCredentialsNote)
-    assert.ok(locale.resetStaffPassword)
-    assert.ok(locale.staffPasswordResetIntro)
-    assert.ok(locale.staffPasswordResetNotice)
-    assert.ok(locale.staffPasswordResetFailed)
-    assert.ok(locale.passwordsDoNotMatch)
-    assert.ok(locale.staffPresence)
-    assert.ok(locale.staffPresenceExplanation)
-    assert.ok(locale.onlineNow)
-    assert.ok(locale.offline)
-    assert.ok(locale.lastSeen)
-    assert.ok(locale.staffPresenceLoadFailed)
-    assert.ok(locale.mobileNumberLabel)
-  }
-})
-
-test('approval archive and live user search labels are localized', () => {
-  for (const locale of [translations.en, translations.fil]) {
-    assert.ok(locale.searchUsersLabel)
-    assert.ok(locale.searchUsersPlaceholder)
-    assert.ok(locale.userSearchResults)
-    assert.ok(locale.usersFound)
-    assert.ok(locale.noUserSearchResults)
-    assert.ok(locale.archiveConfirmTitle)
-    assert.ok(locale.archiveAllConfirmMessage)
-    assert.ok(locale.archiveRetentionHint)
-    assert.ok(locale.archiveInvalidRetention)
-    assert.ok(locale.archiveRefreshFailed)
   }
 })

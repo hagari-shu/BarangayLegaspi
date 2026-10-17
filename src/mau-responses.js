@@ -153,8 +153,8 @@ const adminTopics = {
     { response: 'mauAdminAuditReply', keywords: ['audit log', 'audit logs', 'login alert', 'login alerts', 'login attempt', 'blocked login', 'security event'] },
   ],
   fil: [
-    { response: 'mauAdminApprovalsReply', keywords: ['resident na naghihintay', 'pending verification', 'aprubahan ang resident', 'aprubahan ang mga resident', 'aaprubahan ang mga resident', 'aprubahan ang account', 'approval ng resident', 'beripikasyon ng account', 'beripikahin ang account', 'beripikahin ang resident'] },
-    { response: 'mauAdminUsersReply', keywords: ['pamahalaan ang users', 'pamahalaan ang user', 'pamahalaan ang access', 'pamahalaan ang pahintulot', 'pamamahalaan ang pahintulot', 'pamahalaan ang staff', 'user roles', 'palitan ang role', 'gumawa ng admin'] },
+    { response: 'mauAdminApprovalsReply', keywords: ['resident na naghihintay', 'pending verification', 'aprubahan ang resident', 'aprubahan ang mga resident', 'aaprubahan ang mga resident', 'aprubahan ang account', 'approval ng resident', 'beripikasyon ng account', 'beripikahin ang account', 'beripikahin ang resident', 'subaybayan ang mga account', 'masubaybayan ang mga account', 'account na naghihintay ng beripikasyon', 'residenteng naghihintay ng beripikasyon'] },
+    { response: 'mauAdminUsersReply', keywords: ['pamahalaan ang users', 'pamahalaan ang user', 'pamahalaan ang access', 'pamahalaan ang pahintulot', 'pamamahalaan ang pahintulot', 'pamahalaan ang staff', 'user roles', 'palitan ang role', 'gumawa ng admin', 'baguhin ang mga account', 'baguhin ang tungkulin', 'account o tungkulin'] },
     { response: 'mauAdminAuditReply', keywords: ['audit log', 'mga audit log', 'alerto sa login', 'alerto sa pag sign in', 'login attempt', 'na-block na login', 'security event'] },
   ],
 }

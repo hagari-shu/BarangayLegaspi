@@ -17,29 +17,43 @@ import {
   getCaptainPhotoUrl,
   isCaptainPhotoStorageConfigured,
 } from './captain-photo-storage.js'
-import {
-  deleteFacebookPost,
-  deliverMessengerAnnouncement,
-  getMetaIntegrationStatus,
-  processMessengerWebhook,
-  publishFacebookPost,
-  verifyMetaWebhookSignature,
-} from './meta-social.js'
 import { registerResidentRegistryRoutes } from './resident-registry.js'
-import { ADMIN_SEED, CORS_ORIGINS, IS_PRODUCTION, PORT, SHOULD_SKIP_SEED } from './config.js'
+import { ADMIN_SEED, CORS_ORIGINS, IS_PRODUCTION, IS_TEST_RUN, PORT, SHOULD_SKIP_SEED } from './config.js'
 
-let store = process.env.DATABASE_URL ? pgDb : jsonDb
+const usePostgres = !IS_TEST_RUN && Boolean(process.env.DATABASE_URL)
+let store = usePostgres ? pgDb : jsonDb
 
 const sanitizeText = (value = '') => String(value).replace(/[<>]/g, '').trim()
 const sanitizeUserRecord = (user = {}) => {
   if (!user || typeof user !== 'object') return {}
   const { password, passwordHash, password_hash, mfaSecret, mfa_secret, mfaLastStep, mfa_last_step, ...safeUser } = user
   const mfaEnabled = Boolean(safeUser.mfaEnabled ?? safeUser.mfa_enabled)
+  const role = String(safeUser.role || safeUser.userRole || 'resident').toLowerCase()
   return {
     ...safeUser,
     mfaEnabled,
     mfaSetupPending: !mfaEnabled && Boolean(mfaSecret || mfa_secret),
-    role: safeUser.role || safeUser.userRole || 'resident',
+    role,
+  }
+}
+
+const toAccessUserSummary = (user = {}) => {
+  const normalized = sanitizeUserRecord(user)
+  const role = normalized.role || 'resident'
+  const zone = Number(user.zone ?? user.zone_number ?? user.zoneNumber ?? 0)
+  return {
+    ...normalized,
+    id: user.id,
+    firstName: user.firstName ?? user.first_name ?? '',
+    lastName: user.lastName ?? user.last_name ?? '',
+    email: user.email || '',
+    mobile: user.mobile || '',
+    zone: Number.isFinite(zone) && zone >= 1 && zone <= 7 ? zone : (role === 'resident' ? 1 : 0),
+    createdAt: user.createdAt ?? user.created_at ?? null,
+    status: user.status || 'Active Resident',
+    position: user.position || null,
+    availability: user.availability || 'Available',
+    householdId: user.householdId ?? user.household_id ?? null,
   }
 }
 
@@ -78,6 +92,41 @@ const isValidPassword = (value) => {
   return password.length >= 8 && /[a-z]/.test(password) && /[A-Z]/.test(password) && /\d/.test(password) && /[^A-Za-z0-9\s]/.test(password)
 }
 const passwordRequirements = 'at least 8 characters, one uppercase letter, one lowercase letter, one number, and one special character'
+const getManilaDateKey = (date = new Date()) => {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Manila',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date)
+  const values = Object.fromEntries(parts.map(({ type, value }) => [type, value]))
+  return `${values.year}-${values.month}-${values.day}`
+}
+const isValidDateKey = (value) => {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false
+  const [year, month, day] = value.split('-').map(Number)
+  const date = new Date(Date.UTC(year, month - 1, day))
+  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day
+}
+const shiftDateKeyByYears = (value, years) => {
+  const [year, month, day] = value.split('-').map(Number)
+  const targetYear = year + years
+  const lastDay = new Date(Date.UTC(targetYear, month, 0)).getUTCDate()
+  return `${targetYear}-${String(month).padStart(2, '0')}-${String(Math.min(day, lastDay)).padStart(2, '0')}`
+}
+const shiftDateKeyByDays = (value, days) => {
+  const date = new Date(`${value}T00:00:00.000Z`)
+  date.setUTCDate(date.getUTCDate() + days)
+  return date.toISOString().slice(0, 10)
+}
+const calculateAge = (birthDate, today = getManilaDateKey()) => {
+  if (!birthDate) return null
+  const [birthYear] = birthDate.split('-').map(Number)
+  const [todayYear] = today.split('-').map(Number)
+  const birthMonthDay = birthDate.slice(5)
+  const todayMonthDay = today.slice(5)
+  return todayYear - birthYear - (birthMonthDay > todayMonthDay ? 1 : 0)
+}
 const serviceCatalog = [
   { icon: '📄', title: 'Barangay Certificate', subtitle: 'Request and claim', tone: 'green' },
   { icon: '🏥', title: 'Health Assistance', subtitle: 'Access public health support', tone: 'blue' },
@@ -88,7 +137,7 @@ const serviceCatalog = [
 const reminderStore = new Map()
 
 export async function seedDemoResident() {
-  if (process.env.DATABASE_URL) {
+  if (usePostgres) {
     await pgDb.initDatabase()
     return
   }
@@ -187,41 +236,6 @@ export function createApp() {
     legacyHeaders: false,
     message: { message: 'Too many requests, please try again later.' },
   }))
-
-  app.get('/api/meta/webhook', (req, res) => {
-    const verifyToken = process.env.META_WEBHOOK_VERIFY_TOKEN
-    if (
-      verifyToken
-      && req.query['hub.mode'] === 'subscribe'
-      && req.query['hub.verify_token'] === verifyToken
-      && typeof req.query['hub.challenge'] === 'string'
-    ) {
-      return res.type('text/plain').send(req.query['hub.challenge'])
-    }
-    return res.sendStatus(403)
-  })
-
-  app.post('/api/meta/webhook', express.raw({ type: 'application/json', limit: '1mb' }), async (req, res) => {
-    if (!getMetaIntegrationStatus().messenger) {
-      return res.status(503).json({ message: 'Messenger integration is not configured.' })
-    }
-    if (!verifyMetaWebhookSignature(req.body, req.get('x-hub-signature-256'), process.env.META_APP_SECRET)) {
-      return res.status(401).json({ message: 'Invalid webhook signature.' })
-    }
-
-    try {
-      const payload = JSON.parse(req.body.toString('utf8'))
-      const pagePayload = payload?.object === 'page'
-        ? { ...payload, entry: (payload.entry || []).filter((entry) => String(entry.id) === String(process.env.META_PAGE_ID)) }
-        : payload
-      await processMessengerWebhook(pagePayload, store)
-      return res.sendStatus(200)
-    } catch (error) {
-      console.error('Messenger webhook processing failed', error)
-      return res.status(500).json({ message: 'Unable to process Messenger event.' })
-    }
-  })
-
   app.use(['/api/staff/residents', '/api/staff/demographics', '/api/staff/registry-source-reviews'], (_req, res, next) => {
     res.set('Cache-Control', 'private, no-store')
     res.set('Vary', 'Authorization')
@@ -244,28 +258,6 @@ export function createApp() {
     return Boolean(actor && roles.includes(actor.user.role) && !['Suspended', 'Disabled'].includes(actor.user.status))
   }
 
-  const deliverAnnouncementChannels = async (announcement, channels, options = {}) => {
-    const delivery = {}
-    if (channels.includes('facebook')) {
-      try {
-        const postId = await publishFacebookPost(announcement)
-        delivery.facebook = { status: 'published', postId }
-      } catch (error) {
-        console.error('Facebook announcement delivery failed', error.message)
-        delivery.facebook = { status: 'failed', message: error.message }
-      }
-    }
-    if (channels.includes('messenger')) {
-      try {
-        delivery.messenger = await deliverMessengerAnnouncement(announcement, store, options)
-      } catch (error) {
-        console.error('Messenger announcement delivery failed', error.message)
-        delivery.messenger = { status: 'failed', eligible: 0, sent: 0, failed: 0, message: error.message }
-      }
-    }
-    return delivery
-  }
-
   const writeAudit = async (actor, action, targetType, targetId, metadata = {}) => {
     await store.addAuditLog?.({
       id: randomUUID(),
@@ -279,14 +271,136 @@ export function createApp() {
     })
   }
 
-  registerResidentRegistryRoutes(app, { store })
+  app.use('/api', async (req, res, next) => {
+    if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return next()
+
+    const authHeader = req.headers.authorization || ''
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null
+    if (!token) return next()
+
+    let payload
+    try {
+      payload = verifyToken(token)
+    } catch {
+      return next()
+    }
+    if (payload.purpose === 'mfa_pending') return next()
+
+    let user
+    try {
+      user = await store.findUserById?.(payload.sub)
+    } catch (error) {
+      console.error('admin read-only policy role lookup failed', error)
+      return res.status(500).json({ message: 'Unable to verify account access.' })
+    }
+    if (!user || ['Suspended', 'Disabled'].includes(user.status) || user.role !== 'admin') return next()
+
+    const path = (req.originalUrl || '').split('?')[0]
+    const allowedMethods = new Map([
+      ['/api/logout', ['POST']],
+      ['/api/change-password', ['POST']],
+      ['/api/mfa/setup', ['POST']],
+      ['/api/mfa/enable', ['POST']],
+      ['/api/mfa/disable', ['POST']],
+      ['/api/admin/emergency-access', ['POST']],
+      ['/api/admin/emergency-access/revoke', ['POST']],
+      ['/api/staff/residents', ['POST']],
+      ['/api/staff/residents/import', ['POST']],
+      ['/api/staff/residents/print-audit', ['POST']],
+      ['/api/staff/archive-requests', ['POST']],
+      ['/api/staff/archive-file', ['DELETE']],
+    ])
+    const scopedStaffOperation = (
+      (req.method === 'PATCH' && (
+        /^\/api\/staff\/residents\/[^/]+\/(?:verify|status)$/.test(path)
+        || /^\/api\/requests\/[^/]+\/status$/.test(path)
+      ))
+    )
+
+    if (allowedMethods.get(path)?.includes(req.method) || scopedStaffOperation) return next()
+
+    await writeAudit(
+      { id: user.id, role: user.role },
+      'admin.read_only.denied',
+      'permission',
+      req.route?.path || path,
+      { method: req.method },
+    )
+    return res.status(403).json({ message: 'Administrator access is read-only. Use an approved emergency staff scope for staff operations.' })
+  })
+
+  const authorizeCurrentActor = async (req, res, roles, emergencyScope = null) => {
+    const authHeader = req.headers.authorization || ''
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null
+    if (!token) {
+      res.status(401).json({ message: 'Authentication required.' })
+      return null
+    }
+
+    let payload
+    try {
+      payload = verifyToken(token)
+    } catch {
+      res.status(401).json({ message: 'Invalid or expired token.' })
+      return null
+    }
+    if (payload.purpose === 'mfa_pending') {
+      res.status(403).json({ message: 'Complete multi-factor authentication first.' })
+      return null
+    }
+
+    let user
+    try {
+      user = await store.findUserById?.(payload.sub)
+    } catch (error) {
+      console.error('authenticated API role lookup failed', error)
+      res.status(500).json({ message: 'Unable to verify account access.' })
+      return null
+    }
+    if (!user || ['Suspended', 'Disabled'].includes(user.status) || !roles.includes(user.role)) {
+      res.status(403).json({ message: 'Access denied for this role.' })
+      return null
+    }
+
+    if (emergencyScope && user.role === 'admin') {
+      let grant
+      try {
+        grant = await store.getActiveEmergencyAccessGrant?.()
+      } catch (error) {
+        console.error('emergency access lookup failed', error)
+        res.status(500).json({ message: 'Unable to verify emergency access.' })
+        return null
+      }
+      if (!grant || grant.adminId !== user.id || !grant.scopes.includes(emergencyScope)) {
+        try {
+          await writeAudit(user, 'emergency_access.denied', 'permission', emergencyScope, { scope: emergencyScope })
+        } catch (error) {
+          console.error('emergency access denial audit failed', error)
+          res.status(500).json({ message: 'Unable to record the emergency access denial.' })
+          return null
+        }
+        res.status(403).json({ message: 'Activate the required emergency access scope before using this staff operation.' })
+        return null
+      }
+      try {
+        await writeAudit(user, 'emergency_access.used', 'permission', emergencyScope, { scope: emergencyScope, grantId: grant.id })
+      } catch (error) {
+        console.error('emergency access use audit failed', error)
+        res.status(500).json({ message: 'Unable to record emergency access use.' })
+        return null
+      }
+    }
+
+    return user
+  }
+  registerResidentRegistryRoutes(app, { store, sourceReviewsOnly: true })
 
   const authAttempts = new Map()
   const resetTokens = new Map()
   const mfaChallenges = new Map()
 
   const ensureSeededAccounts = async () => {
-    if (process.env.DATABASE_URL) return
+    if (usePostgres) return
     if (!SHOULD_SKIP_SEED) await seedDemoResident()
   }
 
@@ -294,9 +408,6 @@ export function createApp() {
     const deliveryUrl = process.env.RESET_DELIVERY_URL || process.env.NOTIFICATION_WEBHOOK_URL
     if (!deliveryUrl) {
       return { queued: false, deliveryStatus: 'disabled', event }
-    }
-    if (process.env.NODE_ENV === 'production' && (!deliveryUrl.startsWith('https://') || !process.env.RESET_DELIVERY_TOKEN)) {
-      throw new Error('Production reset delivery requires an HTTPS URL and RESET_DELIVERY_TOKEN.')
     }
 
     const payload = {
@@ -315,12 +426,8 @@ export function createApp() {
 
     const response = await fetch(deliveryUrl, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(process.env.RESET_DELIVERY_TOKEN ? { Authorization: `Bearer ${process.env.RESET_DELIVERY_TOKEN}` } : {}),
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
-      signal: AbortSignal.timeout(10_000),
     })
 
     if (!response.ok) {
@@ -395,7 +502,7 @@ export function createApp() {
     res.setHeader('Cache-Control', 'no-store')
     try {
       const photoUrl = await getCaptainPhotoUrl()
-      if (!photoUrl) return res.status(204).end()
+      if (!photoUrl) return res.status(404).end()
       return res.redirect(302, photoUrl)
     } catch (error) {
       console.error('load captain photo failed', error)
@@ -534,7 +641,7 @@ export function createApp() {
         expiresAt: null,
         user,
         title: 'Account registered',
-        message: 'Your account has been created and is waiting administrator approval.',
+        message: 'Your account has been created and is waiting for barangay Staff review.',
         metadata: { status: user.status },
       }).catch((error) => {
         console.error('registration notification error', error)
@@ -544,7 +651,7 @@ export function createApp() {
       const { passwordHash, ...safeUser } = user
 
       return res.status(201).json({
-        message: 'Account created and is awaiting administrator approval.',
+        message: 'Account created and is awaiting barangay Staff review.',
         requiresApproval: true,
         user: safeUser,
         deliveryStatus: delivery.deliveryStatus || 'disabled',
@@ -596,7 +703,7 @@ export function createApp() {
           })
           return res.status(403).json({
             code: 'resident_not_approved',
-            message: 'Your account is awaiting administrator approval before you can access the web app.',
+            message: 'Your account is awaiting barangay Staff review before you can access the web app.',
           })
         }
         return res.status(403).json({ message: 'Your account is not active. Please contact the barangay office for assistance.' })
@@ -604,18 +711,7 @@ export function createApp() {
 
       const safeUser = sanitizeUserRecord({ ...user, role: normalizedRole })
 
-      const mfaEnabled = Boolean(user.mfaEnabled ?? user.mfa_enabled)
-      const mfaSecret = user.mfaSecret || user.mfa_secret
-      if (mfaEnabled && !mfaSecret) {
-        await writeAudit({ role: 'anonymous' }, 'auth.login.mfa_unavailable', 'user', user.id)
-        console.error('MFA is enabled but the authenticator secret is missing for account', user.id)
-        return res.status(503).json({
-          code: 'mfa_unavailable',
-          message: 'Authenticator verification is temporarily unavailable. Please contact the barangay office.',
-        })
-      }
-
-      if (mfaEnabled) {
+      if (safeUser.mfaEnabled && user.mfaSecret) {
         if (mfaChallenges.size > 10000) {
           for (const [key, challenge] of mfaChallenges) {
             if (challenge.expiresAt <= Date.now()) mfaChallenges.delete(key)
@@ -658,13 +754,11 @@ export function createApp() {
       }
 
       const user = await store.findUserById?.(challenge.userId)
-      const mfaEnabled = Boolean(user?.mfaEnabled ?? user?.mfa_enabled)
-      const mfaSecret = user?.mfaSecret || user?.mfa_secret
-      if (!user || !mfaEnabled || !mfaSecret || ['Suspended', 'Disabled'].includes(user.status)) {
+      if (!user || !user.mfaEnabled || !user.mfaSecret || ['Suspended', 'Disabled'].includes(user.status)) {
         return res.status(401).json({ message: 'MFA challenge is no longer valid.' })
       }
 
-      const secret = decryptTotpSecret(mfaSecret)
+      const secret = decryptTotpSecret(user.mfaSecret)
       const matchedStep = verifyTotp(secret, code)
       const lastStep = Number(user.mfaLastStep || user.mfa_last_step || 0)
       if (matchedStep === null || matchedStep <= lastStep) {
@@ -1008,95 +1102,47 @@ export function createApp() {
     }
   })
 
-  app.get('/api/social-integrations/status', async (req, res) => {
-    const authHeader = req.headers.authorization || ''
-    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null
-    if (!token) return res.status(401).json({ message: 'Authentication required.' })
-
-    try {
-      verifyToken(token)
-    } catch {
-      return res.status(401).json({ message: 'Invalid or expired token.' })
-    }
-
-    try {
-      const actor = await getCurrentActor(token)
-      if (!actor || !['admin', 'staff'].includes(actor.user.role)) {
-        return res.status(403).json({ message: 'Staff access required.' })
-      }
-      return res.json({
-        integrations: getMetaIntegrationStatus(),
-        messengerLink: getMetaIntegrationStatus().messenger
-          ? `https://m.me/${encodeURIComponent(process.env.META_PAGE_ID)}`
-          : null,
-      })
-    } catch (error) {
-      console.error('failed to load social integration status', error)
-      return res.status(503).json({ message: 'Unable to load social integration status.' })
-    }
-  })
-
   app.post('/api/announcements', async (req, res) => {
     const authHeader = req.headers.authorization || ''
     const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null
+
     if (!token) {
       return res.status(401).json({ message: 'Authentication required.' })
     }
 
-    let actor
     try {
-      actor = await getCurrentActor(token)
-    } catch {
-      return res.status(401).json({ message: 'Invalid or expired token.' })
-    }
-    if (!actor || !['admin', 'staff'].includes(actor.user.role)) {
-      return res.status(403).json({ message: 'Staff access required.' })
-    }
+      if (!(await hasCurrentRole(token, ['admin']))) {
+        return res.status(403).json({ message: 'Administrator access required.' })
+      }
 
-    const title = sanitizeText(req.body?.title)
-    const content = sanitizeText(req.body?.content)
-    const date = sanitizeText(req.body?.date) || new Date().toLocaleDateString()
-    const tag = sanitizeText(req.body?.tag) || 'green'
-    const allowedChannels = new Set(['facebook', 'messenger'])
-    const socialChannels = Array.isArray(req.body?.socialChannels)
-      ? [...new Set(req.body.socialChannels.map((channel) => sanitizeText(channel).toLowerCase()))]
-      : []
+      const title = sanitizeText(req.body?.title)
+      const content = sanitizeText(req.body?.content)
+      const date = sanitizeText(req.body?.date) || new Date().toLocaleDateString()
+      const tag = sanitizeText(req.body?.tag) || 'green'
+      const socialChannels = Array.isArray(req.body?.socialChannels)
+        ? req.body.socialChannels.map((channel) => sanitizeText(channel)).filter(Boolean)
+        : []
 
-    if (socialChannels.some((channel) => !allowedChannels.has(channel))) {
-      return res.status(400).json({ message: 'Only Facebook and Messenger announcement channels are supported.' })
-    }
-    if (!title || !content) {
-      return res.status(400).json({ message: 'Title and message are required.' })
-    }
-    const integrationStatus = getMetaIntegrationStatus()
-    const unconfiguredChannel = socialChannels.find((channel) => !integrationStatus[channel])
-    if (unconfiguredChannel) {
-      return res.status(503).json({
-        message: `${unconfiguredChannel === 'facebook' ? 'Facebook' : 'Messenger'} is not connected. Contact the system administrator.`,
-      })
-    }
+      if (!title || !content) {
+        return res.status(400).json({ message: 'Title and message are required.' })
+      }
 
-    const announcement = {
-      id: randomUUID(),
-      tag,
-      title,
-      content,
-      date,
-      socialChannels,
-      socialDelivery: {},
-      createdAt: new Date().toISOString(),
-    }
+      const announcement = {
+        id: randomUUID(),
+        tag,
+        title,
+        content,
+        date,
+        socialChannels,
+        createdAt: new Date().toISOString(),
+      }
 
-    try {
-      const savedAnnouncement = await store.saveAnnouncement(announcement)
-      const delivery = await deliverAnnouncementChannels(savedAnnouncement || announcement, socialChannels)
-      const updatedAnnouncement = Object.keys(delivery).length
-        ? await store.updateAnnouncement(announcement.id, { socialDelivery: delivery, facebookPostId: delivery.facebook?.postId })
-        : savedAnnouncement || announcement
-      return res.status(201).json({ announcement: updatedAnnouncement, socialDelivery: delivery })
+      const savedAnnouncement = await store.saveAnnouncement?.(announcement)
+
+      return res.status(201).json({ announcement: savedAnnouncement || announcement })
     } catch (error) {
       console.error('failed to create announcement', error)
-      return res.status(500).json({ message: 'Announcement could not be saved or its delivery status could not be recorded.' })
+      return res.status(401).json({ message: 'Invalid or expired token.' })
     }
   })
 
@@ -1108,101 +1154,21 @@ export function createApp() {
       return res.status(401).json({ message: 'Authentication required.' })
     }
 
-    let actor
     try {
-      actor = await getCurrentActor(token)
-    } catch {
-      return res.status(401).json({ message: 'Invalid or expired token.' })
-    }
-    if (!actor || !['admin', 'staff'].includes(actor.user.role)) {
-      return res.status(403).json({ message: 'Staff access required.' })
-    }
-
-    const targetId = req.params.id
-    try {
-      const announcement = await store.getAnnouncement(targetId)
-      if (!announcement) return res.status(404).json({ message: 'Announcement not found.' })
-      if (announcement.facebookPostId) {
-        try {
-          await deleteFacebookPost(announcement.facebookPostId)
-        } catch (error) {
-          console.error('Facebook announcement removal failed', error.message)
-          return res.status(502).json({ message: `The Facebook post could not be deleted: ${error.message}` })
-        }
+      if (!(await hasCurrentRole(token, ['admin']))) {
+        return res.status(403).json({ message: 'Administrator access required.' })
       }
-      const deletedAnnouncement = await store.deleteAnnouncement(targetId)
-      if (!deletedAnnouncement) return res.status(404).json({ message: 'Announcement not found.' })
-      return res.json({
-        success: true,
-        removedId: targetId,
-        messengerMessagesCannotBeUnsent: Number(announcement.socialDelivery?.messenger?.sent) > 0,
-      })
+
+      const targetId = req.params.id
+      const deletedAnnouncement = await store.deleteAnnouncement?.(targetId)
+      if (!deletedAnnouncement) {
+        return res.status(404).json({ message: 'Announcement not found.' })
+      }
+
+      return res.json({ success: true, removedId: targetId })
     } catch (error) {
       console.error('failed to delete announcement', error)
-      return res.status(500).json({ message: 'Unable to delete announcement.' })
-    }
-  })
-
-  app.post('/api/announcements/:id/retract', async (req, res) => {
-    const authHeader = req.headers.authorization || ''
-    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null
-    if (!token) return res.status(401).json({ message: 'Authentication required.' })
-
-    let actor
-    try {
-      actor = await getCurrentActor(token)
-    } catch {
       return res.status(401).json({ message: 'Invalid or expired token.' })
-    }
-    if (!actor || !['admin', 'staff'].includes(actor.user.role)) {
-      return res.status(403).json({ message: 'Staff access required.' })
-    }
-
-    const content = sanitizeText(req.body?.content)
-    if (!content) return res.status(400).json({ message: 'A correction message is required.' })
-
-    try {
-      const original = await store.getAnnouncement(req.params.id)
-      if (!original) return res.status(404).json({ message: 'Announcement not found.' })
-      if (original.retractionAnnouncementId) {
-        return res.status(409).json({ message: 'A retraction has already been published for this announcement.' })
-      }
-
-      const channels = []
-      if (original.facebookPostId) channels.push('facebook')
-      if (Number(original.socialDelivery?.messenger?.sent) > 0) channels.push('messenger')
-      const integrationStatus = getMetaIntegrationStatus()
-      const unavailableChannel = channels.find((channel) => !integrationStatus[channel])
-      if (unavailableChannel) {
-        return res.status(503).json({
-          message: `${unavailableChannel === 'facebook' ? 'Facebook' : 'Messenger'} is not connected. The retraction was not created.`,
-        })
-      }
-      const retraction = {
-        id: randomUUID(),
-        tag: 'red',
-        title: `Retraction: ${original.title}`.slice(0, 200),
-        content,
-        date: new Date().toLocaleDateString(),
-        socialChannels: channels,
-        socialDelivery: {},
-        relatedAnnouncementId: original.id,
-        createdAt: new Date().toISOString(),
-      }
-      const savedRetraction = await store.saveAnnouncement(retraction)
-      const delivery = await deliverAnnouncementChannels(
-        savedRetraction || retraction,
-        channels,
-        { recipientAnnouncementId: original.id },
-      )
-      const updatedRetraction = Object.keys(delivery).length
-        ? await store.updateAnnouncement(retraction.id, { socialDelivery: delivery, facebookPostId: delivery.facebook?.postId })
-        : savedRetraction || retraction
-      await store.updateAnnouncement(original.id, { retractionAnnouncementId: retraction.id })
-      return res.status(201).json({ announcement: updatedRetraction, socialDelivery: delivery })
-    } catch (error) {
-      console.error('failed to publish announcement retraction', error)
-      return res.status(500).json({ message: 'Unable to publish the retraction.' })
     }
   })
 
@@ -1258,21 +1224,12 @@ export function createApp() {
   })
 
   app.get('/api/requests', async (req, res) => {
-    const authHeader = req.headers.authorization || ''
-    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null
-
-    if (!token) {
-      return res.status(401).json({ message: 'Authentication required.' })
-    }
-
     try {
-      const actor = await getCurrentActor(token)
-      if (!actor || ['Suspended', 'Disabled'].includes(actor.user.status)) {
-        return res.status(403).json({ message: 'Account access is disabled.' })
-      }
-      const requests = actor.user.role === 'resident'
-        ? await store.listRequestsForUser(actor.user.id)
-        : await store.listAllRequests?.() || await store.listRequestsForUser(actor.user.id)
+      const actor = await authorizeCurrentActor(req, res, ['resident', 'staff', 'admin'], 'request-processing')
+      if (!actor) return
+      const requests = actor.role === 'resident'
+        ? await store.listRequestsForUser(actor.id)
+        : await store.listAllRequests?.() || await store.listRequestsForUser(actor.id)
       return res.json({ requests })
     } catch {
       return res.status(401).json({ message: 'Invalid or expired token.' })
@@ -1280,19 +1237,9 @@ export function createApp() {
   })
 
   app.get('/api/staff/requests', async (req, res) => {
-    const authHeader = req.headers.authorization || ''
-    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null
-
-    if (!token) {
-      return res.status(401).json({ message: 'Authentication required.' })
-    }
-
     try {
-      const payload = verifyToken(token)
-      if (!(await hasCurrentRole(token, ['staff', 'admin']))) {
-        return res.status(403).json({ message: 'Access denied for this role.' })
-      }
-
+      const actor = await authorizeCurrentActor(req, res, ['staff', 'admin'], 'request-processing')
+      if (!actor) return
       const requests = await store.listAllRequests?.() || []
       return res.json({ requests })
     } catch {
@@ -1301,32 +1248,12 @@ export function createApp() {
   })
 
   app.get('/api/staff/dashboard-requests', async (req, res) => {
-    const authHeader = req.headers.authorization || ''
-    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null
-
-    if (!token) {
-      return res.status(401).json({ message: 'Authentication required.' })
-    }
-
-    let payload
     try {
-      payload = verifyToken(token)
-    } catch {
-      return res.status(401).json({ message: 'Invalid or expired token.' })
-    }
-    if (payload.purpose === 'mfa_pending') {
-      return res.status(403).json({ message: 'Complete multi-factor authentication first.' })
-    }
-
-    let actor
-    try {
-      actor = await store.findUserById?.(payload.sub)
+      const actor = await authorizeCurrentActor(req, res, ['staff', 'admin'], 'request-processing')
+      if (!actor) return
     } catch (error) {
       console.error('staff dashboard authorization lookup error', error)
       return res.status(500).json({ message: 'Unable to verify staff access.' })
-    }
-    if (!actor || !['staff', 'admin'].includes(actor.role) || ['Suspended', 'Disabled'].includes(actor.status)) {
-      return res.status(403).json({ message: 'Staff access required.' })
     }
 
     const { search = '', status = 'active', type = '', zone = '', from = '', to = '', sort = 'date', direction = 'desc' } = req.query
@@ -1377,6 +1304,596 @@ export function createApp() {
       return res.status(500).json({ message: 'Unable to load staff request dashboard.' })
     }
     return res.json(result)
+  })
+
+  const getStaffReportFilters = (req, res) => {
+    const from = String(req.query.from || '')
+    const to = String(req.query.to || '')
+    const type = String(req.query.type || '')
+    const status = String(req.query.status || '')
+    const allowedStatuses = ['Pending', 'In Review', 'Needs Information', 'Approved', 'Rejected']
+
+    if ((from && !isValidReportDate(from)) || (to && !isValidReportDate(to)) || (from && to && from > to)) {
+      res.status(400).json({ message: 'Invalid report date range.' })
+      return null
+    }
+    if (type.length > 100 || (status && !allowedStatuses.includes(status))) {
+      res.status(400).json({ message: 'Invalid report filter.' })
+      return null
+    }
+    return { from, to, type, status }
+  }
+
+  const withStaffReportAccess = async (req, res, callback) => {
+    const actor = await authorizeCurrentActor(req, res, ['staff', 'admin'], 'request-processing')
+    if (!actor) return
+
+    const filters = getStaffReportFilters(req, res)
+    if (filters) await callback(filters)
+  }
+
+  app.get('/api/staff/reports', async (req, res) => {
+    await withStaffReportAccess(req, res, async (filters) => {
+      try {
+        const requests = await store.listRequestsForStaffReports?.()
+        if (!Array.isArray(requests)) throw new Error('Request storage is unavailable.')
+        return res.json(getStaffRequestReport(requests, filters))
+      } catch (error) {
+        console.error('staff reports query failed', error)
+        return res.status(500).json({ message: 'Unable to load service reports.' })
+      }
+    })
+  })
+
+  app.get('/api/staff/reports/export.csv', async (req, res) => {
+    await withStaffReportAccess(req, res, async (filters) => {
+      try {
+        const requests = await store.listRequestsForStaffReports?.()
+        if (!Array.isArray(requests)) throw new Error('Request storage is unavailable.')
+        const csv = createRequestReportCsv(filterStaffReportRequests(requests, filters))
+        const range = filters.from && filters.to
+          ? `${filters.from}-to-${filters.to}`
+          : filters.from || filters.to || 'all-time'
+        res.setHeader('Content-Type', 'text/csv; charset=utf-8')
+        res.setHeader('Content-Disposition', `attachment; filename="service-requests-${range}.csv"`)
+        return res.send(`\uFEFF${csv}`)
+      } catch (error) {
+        console.error('staff reports CSV export failed', error)
+        return res.status(500).json({ message: 'Unable to export service reports.' })
+      }
+    })
+  })
+
+  app.get('/api/staff/residents', async (req, res) => {
+    const actor = await authorizeCurrentActor(req, res, ['staff', 'admin'], 'resident-registry.read')
+    if (!actor) return
+
+    const search = String(req.query.search || '').trim()
+    const birthDate = String(req.query.birthDate || '').trim()
+    const ageRaw = req.query.age
+    const age = ageRaw === undefined || ageRaw === '' ? null : Number(ageRaw)
+    const zoneRaw = req.query.zone
+    const zone = zoneRaw === undefined || zoneRaw === '' ? null : Number(zoneRaw)
+    const purok = String(req.query.purok || '').trim()
+    const page = Math.max(1, Number.parseInt(req.query.page, 10) || 1)
+    const pageSize = Math.min(100, Math.max(1, Number.parseInt(req.query.pageSize, 10) || 25))
+    const today = getManilaDateKey()
+
+    if (search.length > 120 || purok.length > 100) return res.status(400).json({ message: 'Search filters are too long.' })
+    if (birthDate && (!isValidDateKey(birthDate) || birthDate > today)) return res.status(400).json({ message: 'Enter a valid birthdate that is not in the future.' })
+    if (age !== null && (!Number.isInteger(age) || age < 0 || age > 130)) return res.status(400).json({ message: 'Age must be a whole number from 0 to 130.' })
+    if (zone !== null && (!Number.isInteger(zone) || zone < 1 || zone > 7)) return res.status(400).json({ message: 'Choose a valid zone from 1 to 7.' })
+
+    let ageStart = null
+    let ageEnd = null
+    if (age !== null) {
+      ageStart = shiftDateKeyByDays(shiftDateKeyByYears(today, -(age + 1)), 1)
+      ageEnd = shiftDateKeyByYears(today, -age)
+    }
+    try {
+      if (typeof store.listResidentRegistry !== 'function') throw new Error('Resident registry storage is unavailable.')
+      const result = await store.listResidentRegistry({ search, birthDate, ageStart, ageEnd, zone, purok, page, pageSize })
+      const residents = result.residents.map((resident) => ({
+        id: resident.id,
+        firstName: resident.firstName || resident.first_name,
+        lastName: resident.lastName || resident.last_name,
+        birthDate: resident.birthDate || resident.birth_date || null,
+        age: calculateAge(resident.birthDate || resident.birth_date, today),
+        sex: resident.sex || 'Unclassified',
+        householdId: resident.householdId || resident.household_id || null,
+        purok: resident.purok || null,
+        zone: resident.zone === null || resident.zone === undefined ? null : Number(resident.zone),
+        address: resident.address || null,
+        status: resident.status || resident.recordStatus || resident.record_status || 'active',
+        verificationStatus: resident.verificationStatus || resident.verification_status || 'pending',
+        sourceReference: resident.sourceReference || resident.source_reference || null,
+        sourceFilename: resident.sourceFilename || resident.source_filename || null,
+      }))
+      await writeAudit(actor.user, 'resident_registry.read', 'resident_registry', null, {
+        resultCount: result.total,
+        page,
+        pageSize,
+        filters: {
+          zone,
+          hasPurokFilter: purok !== '',
+          hasSearch: search !== '',
+          hasBirthDate: birthDate !== '',
+          hasAge: age !== null,
+        },
+      })
+      return res.json({
+        residents,
+        total: result.total,
+        page,
+        pageSize,
+        filters: { search, birthDate, age, zone, purok },
+      })
+    } catch (error) {
+      console.error('staff resident registry query failed', error)
+      return res.status(500).json({ message: 'Unable to load the resident registry.' })
+    }
+  })
+
+  app.get('/api/staff/demographics', async (req, res) => {
+    const actor = await authorizeCurrentActor(req, res, ['staff', 'admin'], 'resident-registry.read')
+    if (!actor) return
+    const zoneRaw = req.query.zone
+    const zone = zoneRaw === undefined || zoneRaw === '' ? null : Number(zoneRaw)
+    const purok = String(req.query.purok || '').trim()
+    if (zone !== null && (!Number.isInteger(zone) || zone < 1 || zone > 7)) return res.status(400).json({ message: 'Choose a valid zone from 1 to 7.' })
+    if (purok.length > 100) return res.status(400).json({ message: 'Purok filter is too long.' })
+    try {
+      if (typeof store.getResidentDemographics !== 'function') throw new Error('Resident demographic storage is unavailable.')
+      const summary = await store.getResidentDemographics({ zone, purok })
+      await writeAudit(actor.user, 'resident_registry.demographics_read', 'resident_registry', null, {
+        resultCount: summary.overall?.total || 0,
+        filters: { zone, hasPurokFilter: purok !== '' },
+      })
+      return res.json(summary)
+    } catch (error) {
+      console.error('staff resident demographics query failed', error)
+      return res.status(500).json({ message: 'Unable to load demographic totals.' })
+    }
+  })
+
+  app.get('/api/admin/demographics', async (req, res) => {
+    const actor = await authorizeCurrentActor(req, res, ['admin'])
+    if (!actor) return
+    const zoneRaw = req.query.zone
+    const zone = zoneRaw === undefined || zoneRaw === '' ? null : Number(zoneRaw)
+    const purok = String(req.query.purok || '').trim()
+    if (zone !== null && (!Number.isInteger(zone) || zone < 1 || zone > 7)) return res.status(400).json({ message: 'Choose a valid zone from 1 to 7.' })
+    if (purok.length > 100) return res.status(400).json({ message: 'Purok filter is too long.' })
+    try {
+      if (typeof store.getResidentDemographics !== 'function') throw new Error('Resident demographic storage is unavailable.')
+      const summary = await store.getResidentDemographics({ zone, purok }, false)
+      await writeAudit(actor.user, 'resident_registry.demographics_read', 'resident_registry', null, {
+        resultCount: summary.overall?.total || 0,
+        filters: { zone, hasPurokFilter: purok !== '' },
+      })
+      return res.json(summary)
+    } catch (error) {
+      console.error('admin resident demographic query failed', error)
+      return res.status(500).json({ message: 'Unable to load demographic totals.' })
+    }
+  })
+
+  app.post('/api/staff/residents', async (req, res) => {
+    const actor = await authorizeCurrentActor(req, res, ['staff', 'admin'], 'resident-registry.manage')
+    if (!actor) return
+    const firstName = sanitizeText(req.body?.firstName)
+    const lastName = sanitizeText(req.body?.lastName)
+    const birthDate = req.body?.birthDate || null
+    const sex = req.body?.sex || null
+    const householdId = sanitizeText(req.body?.householdId || '')
+    const purok = sanitizeText(req.body?.purok || '')
+    const address = sanitizeText(req.body?.address || '')
+    const sourceReference = sanitizeText(req.body?.sourceReference || '')
+    const sourceFilename = sanitizeText(req.body?.sourceFilename || '')
+    const zoneValue = req.body?.zone
+    const zone = zoneValue === null || zoneValue === undefined || zoneValue === '' ? null : Number(zoneValue)
+    const today = getManilaDateKey()
+
+    if (!firstName || !lastName || firstName.length > 100 || lastName.length > 100) {
+      return res.status(400).json({ message: 'Enter the resident’s first and last names (up to 100 characters each).' })
+    }
+    if (birthDate && (typeof birthDate !== 'string' || !isValidDateKey(birthDate) || birthDate > today)) {
+      return res.status(400).json({ message: 'Enter a valid birthdate that is not in the future.' })
+    }
+    if (sex !== null && !['Male', 'Female', 'Unclassified'].includes(sex)) {
+      return res.status(400).json({ message: 'Choose Male, Female, or Unclassified for sex.' })
+    }
+    if (zone !== null && (!Number.isInteger(zone) || zone < 1 || zone > 7)) {
+      return res.status(400).json({ message: 'Choose a valid zone from 1 to 7.' })
+    }
+    if (householdId.length > 100 || purok.length > 100 || address.length > 255 || sourceReference.length > 255 || sourceFilename.length > 255) {
+      return res.status(400).json({ message: 'One or more resident fields exceed the allowed length.' })
+    }
+
+    try {
+      const potentialMatches = await store.findPotentialRegistryMatches?.(firstName, lastName, birthDate)
+      if (!Array.isArray(potentialMatches)) throw new Error('Duplicate-check storage is unavailable.')
+      if (potentialMatches.length && req.body?.confirmPotentialMatch !== true) {
+        return res.status(409).json({
+          message: 'Review the possible matching records before confirming this registration.',
+          potentialMatches,
+          reviewRequired: true,
+        })
+      }
+
+      const createdAt = new Date().toISOString()
+      const resident = await store.insertRegistryResident?.({
+        id: randomUUID(),
+        firstName,
+        lastName,
+        birthDate,
+        sex,
+        householdId: householdId || null,
+        purok: purok || null,
+        zone,
+        address: address || null,
+        status: 'active',
+        recordStatus: 'active',
+        verificationStatus: 'pending',
+        sourceReference: sourceReference || null,
+        sourceFilename: sourceFilename || null,
+        sourceFingerprint: null,
+        createdBy: actor.id,
+        verifiedBy: null,
+        verifiedAt: null,
+        createdAt,
+        updatedAt: createdAt,
+      })
+      if (!resident) throw new Error('Resident registry storage is unavailable.')
+      await writeAudit(actor, 'resident_registry.created', 'resident_registry', resident.id, {
+        verificationStatus: 'pending',
+        hasSourceReference: Boolean(sourceReference),
+      })
+      return res.status(201).json({
+        resident: {
+          id: resident.id,
+          firstName,
+          lastName,
+          birthDate,
+          age: calculateAge(birthDate, today),
+          sex: sex || 'Unclassified',
+          householdId: householdId || null,
+          purok: purok || null,
+          zone,
+          address: address || null,
+          status: 'active',
+          verificationStatus: 'pending',
+          sourceReference: sourceReference || null,
+          sourceFilename: sourceFilename || null,
+        },
+        potentialMatches,
+        reviewRequired: true,
+      })
+    } catch (error) {
+      console.error('staff resident registration failed', error)
+      return res.status(500).json({ message: 'Unable to save the resident record.' })
+    }
+  })
+
+  app.post('/api/staff/residents/import', async (req, res) => {
+    const actor = await authorizeCurrentActor(req, res, ['staff', 'admin'], 'resident-registry.manage')
+    if (!actor) return
+    const { residents, filename, confirmPotentialMatches } = req.body || {}
+    if (!Array.isArray(residents) || residents.length < 1 || residents.length > 500) {
+      return res.status(400).json({ message: 'Upload between 1 and 500 resident records.' })
+    }
+    if (typeof filename !== 'string' || !filename.trim() || filename.trim().length > 255) {
+      return res.status(400).json({ message: 'A source filename of up to 255 characters is required.' })
+    }
+    if (confirmPotentialMatches !== undefined && typeof confirmPotentialMatches !== 'boolean') {
+      return res.status(400).json({ message: 'Duplicate confirmation must be true or false.' })
+    }
+
+    const today = getManilaDateKey()
+    const validationErrors = []
+    const normalized = residents.map((record, index) => {
+      if (!record || typeof record !== 'object' || Array.isArray(record)) {
+        validationErrors.push({ row: index + 2, field: 'record', message: 'Expected a resident record.' })
+        return null
+      }
+      const rawString = (key) => {
+        const value = record[key]
+        if (value !== null && value !== undefined && typeof value !== 'string') {
+          validationErrors.push({ row: index + 2, field: key, message: 'Must be text.' })
+          return ''
+        }
+        return sanitizeText(value || '')
+      }
+      const firstName = rawString('firstName')
+      const lastName = rawString('lastName')
+      const birthDate = rawString('birthDate')
+      const sex = rawString('sex')
+      const householdId = rawString('householdId')
+      const purok = rawString('purok')
+      const address = rawString('address')
+      const sourceReference = rawString('sourceReference')
+      const zoneText = rawString('zone')
+      const zone = zoneText ? Number(zoneText) : null
+
+      if (!firstName || !lastName || firstName.length > 100 || lastName.length > 100) {
+        validationErrors.push({ row: index + 2, field: 'name', message: 'First and last names are required and must not exceed 100 characters.' })
+      }
+      if (birthDate && (!isValidDateKey(birthDate) || birthDate > today)) {
+        validationErrors.push({ row: index + 2, field: 'birthDate', message: 'Birthdate must be a valid date no later than today.' })
+      }
+      if (sex && !['Male', 'Female', 'Unclassified'].includes(sex)) {
+        validationErrors.push({ row: index + 2, field: 'sex', message: 'Use Male, Female, or Unclassified.' })
+      }
+      if (zoneText && (!Number.isInteger(zone) || zone < 1 || zone > 7)) {
+        validationErrors.push({ row: index + 2, field: 'zone', message: 'Zone must be a whole number from 1 to 7.' })
+      }
+      if (householdId.length > 100 || purok.length > 100 || address.length > 255 || sourceReference.length > 255) {
+        validationErrors.push({ row: index + 2, field: 'length', message: 'A field exceeds its maximum length.' })
+      }
+      return {
+        firstName,
+        lastName,
+        birthDate: birthDate || null,
+        sex: sex || null,
+        householdId: householdId || null,
+        purok: purok || null,
+        zone,
+        address: address || null,
+        sourceReference: sourceReference || null,
+      }
+    })
+    if (validationErrors.length) {
+      return res.status(400).json({ message: 'Correct the invalid rows before importing.', validationErrors })
+    }
+
+    try {
+      if (typeof store.findPotentialRegistryMatches !== 'function' || typeof store.insertRegistryResidents !== 'function') {
+        throw new Error('Bulk resident registry storage is unavailable.')
+      }
+      const potentialMatches = []
+      const seenRows = new Map()
+      for (const [index, resident] of normalized.entries()) {
+        const identityKey = `${resident.firstName.toLowerCase()}\u0000${resident.lastName.toLowerCase()}\u0000${resident.birthDate || ''}`
+        const earlierRow = seenRows.get(identityKey)
+        if (earlierRow !== undefined) {
+          potentialMatches.push({
+            row: index + 2,
+            records: [{ id: `upload-row-${earlierRow + 2}`, firstName: normalized[earlierRow].firstName, lastName: normalized[earlierRow].lastName, birthDate: normalized[earlierRow].birthDate, source: 'same import file' }],
+          })
+        } else {
+          seenRows.set(identityKey, index)
+        }
+        const existing = await store.findPotentialRegistryMatches(resident.firstName, resident.lastName, resident.birthDate)
+        if (existing.length) potentialMatches.push({ row: index + 2, records: existing })
+      }
+      if (potentialMatches.length && confirmPotentialMatches !== true) {
+        return res.status(409).json({
+          message: 'Review every possible duplicate before confirming the import.',
+          potentialMatches,
+          reviewRequired: true,
+        })
+      }
+
+      const createdAt = new Date().toISOString()
+      const records = normalized.map((resident) => ({
+        ...resident,
+        id: randomUUID(),
+        status: 'active',
+        recordStatus: 'active',
+        verificationStatus: 'pending',
+        sourceFilename: filename.trim(),
+        sourceFingerprint: null,
+        createdBy: actor.id,
+        verifiedBy: null,
+        verifiedAt: null,
+        createdAt,
+        updatedAt: createdAt,
+      }))
+      const auditEntry = {
+        id: randomUUID(),
+        actorId: actor.id,
+        actorRole: actor.role,
+        action: 'resident_registry.bulk_imported',
+        targetType: 'resident_registry_batch',
+        targetId: null,
+        metadata: {
+          count: records.length,
+          hasSourceFilename: filename.trim() !== '',
+          potentialMatchCount: potentialMatches.length,
+        },
+        createdAt,
+      }
+      await store.insertRegistryResidents(records, auditEntry)
+      return res.status(201).json({ imported: records.length, verificationStatus: 'pending', potentialMatches })
+    } catch (error) {
+      console.error('staff resident registry import failed', error)
+      return res.status(500).json({ message: 'Unable to import resident records.' })
+    }
+  })
+
+  app.post('/api/staff/residents/print-audit', async (req, res) => {
+    const actor = await authorizeCurrentActor(req, res, ['staff', 'admin'], 'resident-registry.read')
+    if (!actor) return
+    const { count: recordCount, filters = {} } = req.body || {}
+    if (!Number.isInteger(recordCount) || recordCount < 1 || recordCount > 100) {
+      return res.status(400).json({ message: 'Print between 1 and 100 visible resident records.' })
+    }
+    const zone = filters.zone === '' || filters.zone === null || filters.zone === undefined ? null : Number(filters.zone)
+    const purok = typeof filters.purok === 'string' ? filters.purok.trim() : ''
+    const page = Number(filters.page)
+    if ((zone !== null && (!Number.isInteger(zone) || zone < 1 || zone > 7))
+      || purok.length > 100 || !Number.isInteger(page) || page < 1) {
+      return res.status(400).json({ message: 'Print filter values are invalid.' })
+    }
+    try {
+      await writeAudit(actor, 'resident_registry.print.blocked', 'resident_registry', null, {
+        recordCount,
+        filters: { zone, hasPurokFilter: purok !== '', page },
+        dataFields: ['name', 'birthDate', 'age', 'sex', 'householdId', 'purok', 'zone', 'verificationStatus', 'recordStatus'],
+      })
+      return res.status(503).json({ message: 'Managed office printing is not configured. No print job was started.' })
+    } catch (error) {
+      console.error('resident registry print audit failed', error)
+      return res.status(500).json({ message: 'Unable to record the print audit. Printing was not started.' })
+    }
+  })
+
+  app.patch('/api/staff/residents/:id/verify', async (req, res) => {
+    const actor = await authorizeCurrentActor(req, res, ['staff', 'admin'], 'resident-registry.manage')
+    if (!actor) return
+    const verificationStatus = req.body?.verificationStatus
+    if (!['verified', 'needs_review'].includes(verificationStatus)) return res.status(400).json({ message: 'Choose verified or needs_review.' })
+    try {
+      const verifiedAt = new Date().toISOString()
+      const resident = await store.updateRegistryResident?.(req.params.id, {
+        verificationStatus,
+        verifiedBy: actor.id,
+        verifiedAt,
+      })
+      if (!resident) return res.status(404).json({ message: 'Resident record not found.' })
+      await writeAudit(actor, `resident_registry.${verificationStatus}`, 'resident_registry', resident.id)
+      return res.json({ resident: { id: resident.id, firstName: resident.firstName, lastName: resident.lastName, verificationStatus, verifiedBy: actor.id, verifiedAt } })
+    } catch (error) {
+      console.error('resident verification update failed', error)
+      return res.status(500).json({ message: 'Unable to update resident verification.' })
+    }
+  })
+
+  app.patch('/api/staff/residents/:id/status', async (req, res) => {
+    const actor = await authorizeCurrentActor(req, res, ['staff', 'admin'], 'resident-registry.manage')
+    if (!actor) return
+    const status = req.body?.status
+    if (!['active', 'inactive', 'deceased', 'archived'].includes(status)) return res.status(400).json({ message: 'Choose active, inactive, deceased, or archived.' })
+    try {
+      const resident = await store.updateRegistryResident?.(req.params.id, { status })
+      if (!resident) return res.status(404).json({ message: 'Resident record not found.' })
+      await writeAudit(actor, 'resident_registry.status_changed', 'resident_registry', resident.id, { status })
+      return res.json({ resident: { id: resident.id, status } })
+    } catch (error) {
+      console.error('resident record status update failed', error)
+      return res.status(500).json({ message: 'Unable to update resident record status.' })
+    }
+  })
+
+  app.get('/api/admin/emergency-access', async (req, res) => {
+    const actor = await authorizeCurrentActor(req, res, ['admin'])
+    if (!actor) return
+    try {
+      const grant = await store.getActiveEmergencyAccessGrant?.()
+      if (!grant) return res.json({ active: false, grant: null })
+      return res.json({
+        active: true,
+        grant: {
+          id: grant.id,
+          isOwnGrant: grant.adminId === actor.id,
+          reason: grant.reason,
+          scopes: grant.scopes,
+          activatedAt: grant.activatedAt,
+          expiresAt: grant.expiresAt,
+        },
+      })
+    } catch (error) {
+      console.error('emergency access status query failed', error)
+      return res.status(500).json({ message: 'Unable to load emergency access status.' })
+    }
+  })
+
+  app.post('/api/admin/emergency-access', authRateLimit, async (req, res) => {
+    const actor = await authorizeCurrentActor(req, res, ['admin'])
+    if (!actor) return
+    const password = req.body?.currentPassword
+    const reason = String(req.body?.reason || '').trim()
+    if (typeof password !== 'string' || password.length > 200 || reason.length < 20 || reason.length > 500) {
+      return res.status(400).json({ message: 'Enter your current password and an emergency reason of 20 to 500 characters.' })
+    }
+    try {
+      if (!actor.passwordHash || !(await comparePassword(password, actor.passwordHash))) {
+        return res.status(401).json({ message: 'Current password was not accepted.' })
+      }
+      let mfaStep = null
+      const mfaEnabled = Boolean(actor.mfaEnabled ?? actor.mfa_enabled)
+      if (mfaEnabled) {
+        const code = String(req.body?.code || '').trim()
+        if (!/^\d{6}$/.test(code) || !(actor.mfaSecret || actor.mfa_secret)) {
+          return res.status(401).json({ message: 'Enter the current authenticator code to activate emergency access.' })
+        }
+        try {
+          mfaStep = verifyTotp(decryptTotpSecret(actor.mfaSecret || actor.mfa_secret), code)
+        } catch (error) {
+          console.error('emergency access MFA verification is unavailable', error)
+          return res.status(503).json({ message: 'Authenticator verification is unavailable. Contact the system operator.' })
+        }
+        if (mfaStep === null || mfaStep <= Number(actor.mfaLastStep ?? actor.mfa_last_step ?? 0)) {
+          return res.status(401).json({ message: 'Authenticator code is invalid or has already been used.' })
+        }
+      }
+      const now = new Date()
+      const expiresAt = new Date(now.getTime() + 20 * 60 * 1000)
+      const scopes = ['resident-registry.read', 'resident-registry.manage', 'request-processing']
+      const grantInput = {
+        id: randomUUID(),
+        adminId: actor.id,
+        reason,
+        scopes,
+        activeSlot: 'global',
+        activatedAt: now.toISOString(),
+        expiresAt: expiresAt.toISOString(),
+      }
+      const auditEntry = {
+        id: randomUUID(),
+        actorId: actor.id,
+        actorRole: actor.role,
+        action: 'emergency_access.activated',
+        targetType: 'emergency_access_grant',
+        targetId: grantInput.id,
+        metadata: { reason, scopes, expiresAt: grantInput.expiresAt },
+        createdAt: now.toISOString(),
+      }
+      const created = await store.createEmergencyAccessGrant?.(grantInput, mfaStep, auditEntry)
+      if (!created) throw new Error('Emergency access storage is unavailable.')
+      if (created.conflict) return res.status(409).json({ message: 'An emergency access grant is already active. Revoke it or wait for it to expire.' })
+      if (created.replayedMfa) return res.status(409).json({ message: 'Authenticator code has already been used.' })
+      return res.status(201).json({
+        active: true,
+        grant: {
+          id: created.grant.id,
+          isOwnGrant: true,
+          reason,
+          scopes,
+          activatedAt: created.grant.activatedAt,
+          expiresAt: created.grant.expiresAt,
+        },
+      })
+    } catch (error) {
+      console.error('emergency access activation failed', error)
+      return res.status(500).json({ message: 'Unable to activate emergency access.' })
+    }
+  })
+
+  app.post('/api/admin/emergency-access/revoke', async (req, res) => {
+    const actor = await authorizeCurrentActor(req, res, ['admin'])
+    if (!actor) return
+    try {
+      const grant = await store.getActiveEmergencyAccessGrant?.()
+      if (!grant) return res.status(404).json({ message: 'There is no active emergency access grant to revoke.' })
+      const revokedAt = new Date().toISOString()
+      const auditEntry = {
+        id: randomUUID(),
+        actorId: actor.id,
+        actorRole: actor.role,
+        action: 'emergency_access.revoked',
+        targetType: 'emergency_access_grant',
+        targetId: grant.id,
+        metadata: { activatedBy: grant.adminId, reason: grant.reason },
+        createdAt: revokedAt,
+      }
+      const revoked = await store.revokeEmergencyAccessGrant?.(grant.id, actor.id, revokedAt, auditEntry)
+      if (!revoked) return res.status(404).json({ message: 'There is no active emergency access grant to revoke.' })
+      return res.json({ active: false, revoked: true })
+    } catch (error) {
+      console.error('emergency access revoke failed', error)
+      return res.status(500).json({ message: 'Unable to revoke emergency access.' })
+    }
   })
 
   app.get('/api/admin/users', async (req, res) => {
@@ -1449,91 +1966,57 @@ export function createApp() {
     }
   })
 
-  const getStaffReportFilters = (req, res) => {
-    const from = String(req.query.from || '')
-    const to = String(req.query.to || '')
-    const type = String(req.query.type || '')
-    const status = String(req.query.status || '')
-    const allowedStatuses = ['Pending', 'In Review', 'Needs Information', 'Approved', 'Rejected']
+  app.get('/api/staff/account-approvals', async (req, res) => {
+    const actor = await authorizeCurrentActor(req, res, ['staff'])
+    if (!actor) return
 
-    if ((from && !isValidReportDate(from)) || (to && !isValidReportDate(to)) || (from && to && from > to)) {
-      res.status(400).json({ message: 'Invalid report date range.' })
-      return null
-    }
-    if (type.length > 100 || (status && !allowedStatuses.includes(status))) {
-      res.status(400).json({ message: 'Invalid report filter.' })
-      return null
-    }
-    return { from, to, type, status }
-  }
-
-  const withStaffReportAccess = async (req, res, callback) => {
-    const authHeader = req.headers.authorization || ''
-    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null
-    if (!token) {
-      res.status(401).json({ message: 'Authentication required.' })
-      return
-    }
-
-    let payload
     try {
-      payload = verifyToken(token)
-    } catch {
-      res.status(401).json({ message: 'Invalid or expired token.' })
-      return
-    }
-    if (payload.purpose === 'mfa_pending') {
-      res.status(403).json({ message: 'Complete multi-factor authentication first.' })
-      return
-    }
-
-    let actor
-    try {
-      actor = await store.findUserById?.(payload.sub)
+      const users = await store.listAllUsers?.() || []
+      const approvals = users
+        .filter((user) => user.role === 'resident' && user.status === 'Pending Verification')
+        .map((user) => ({
+          id: user.id,
+          firstName: user.firstName || user.first_name || '',
+          lastName: user.lastName || user.last_name || '',
+          email: user.email || '',
+          mobile: user.mobile || '',
+          address: user.address || '',
+          zone: user.zone ?? user.zoneNumber ?? null,
+          createdAt: user.createdAt || user.created_at || null,
+        }))
+      return res.json({ approvals })
     } catch (error) {
-      console.error('staff report authorization lookup error', error)
-      res.status(500).json({ message: 'Unable to verify staff access.' })
-      return
+      console.error('staff account approvals load failed', error)
+      return res.status(500).json({ message: 'Unable to load pending resident accounts.' })
     }
-    if (!actor || !['staff', 'admin'].includes(actor.role) || ['Suspended', 'Disabled'].includes(actor.status)) {
-      res.status(403).json({ message: 'Staff access required.' })
-      return
-    }
-
-    const filters = getStaffReportFilters(req, res)
-    if (filters) await callback(filters)
-  }
-
-  app.get('/api/staff/reports', async (req, res) => {
-    await withStaffReportAccess(req, res, async (filters) => {
-      try {
-        const requests = await store.listRequestsForStaffReports?.()
-        if (!Array.isArray(requests)) throw new Error('Request storage is unavailable.')
-        return res.json(getStaffRequestReport(requests, filters))
-      } catch (error) {
-        console.error('staff reports query failed', error)
-        return res.status(500).json({ message: 'Unable to load service reports.' })
-      }
-    })
   })
 
-  app.get('/api/staff/reports/export.csv', async (req, res) => {
-    await withStaffReportAccess(req, res, async (filters) => {
-      try {
-        const requests = await store.listRequestsForStaffReports?.()
-        if (!Array.isArray(requests)) throw new Error('Request storage is unavailable.')
-        const csv = createRequestReportCsv(filterStaffReportRequests(requests, filters))
-        const range = filters.from && filters.to
-          ? `${filters.from}-to-${filters.to}`
-          : filters.from || filters.to || 'all-time'
-        res.setHeader('Content-Type', 'text/csv; charset=utf-8')
-        res.setHeader('Content-Disposition', `attachment; filename="service-requests-${range}.csv"`)
-        return res.send(`\uFEFF${csv}`)
-      } catch (error) {
-        console.error('staff reports CSV export failed', error)
-        return res.status(500).json({ message: 'Unable to export service reports.' })
+  app.patch('/api/staff/account-approvals/:id', async (req, res) => {
+    const actor = await authorizeCurrentActor(req, res, ['staff'])
+    if (!actor) return
+
+    const status = req.body?.status
+    if (!['Active Resident', 'Rejected'].includes(status)) {
+      return res.status(400).json({ message: 'Choose Active Resident or Rejected.' })
+    }
+
+    try {
+      const existing = await store.findUserById?.(req.params.id)
+      if (!existing || existing.role !== 'resident') {
+        return res.status(404).json({ message: 'Pending resident account not found.' })
       }
-    })
+      if (existing.status !== 'Pending Verification') {
+        return res.status(409).json({ message: 'This resident account has already been reviewed.' })
+      }
+
+      const updated = await store.updateUser?.(req.params.id, { status })
+      if (!updated) return res.status(404).json({ message: 'Pending resident account not found.' })
+      await writeAudit(actor, status === 'Active Resident' ? 'resident_account.approved' : 'resident_account.rejected', 'resident_account', req.params.id, { status })
+      return res.json({ user: { id: updated.id, status: updated.status } })
+    } catch (error) {
+      console.error('staff resident account decision failed', error)
+      return res.status(500).json({ message: 'Unable to update the resident account review.' })
+    }
   })
 
   app.get('/api/staff/members', async (req, res) => {
@@ -1641,110 +2124,6 @@ export function createApp() {
     }
   })
 
-  app.post('/api/staff/presence', async (req, res) => {
-    const authHeader = req.headers.authorization || ''
-    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null
-    if (!token) return res.status(401).json({ message: 'Authentication required.' })
-
-    let actor
-    try {
-      actor = await getCurrentActor(token)
-    } catch {
-      return res.status(401).json({ message: 'Invalid or expired token.' })
-    }
-    if (!actor || actor.user.role !== 'staff') {
-      return res.status(403).json({ message: 'Staff access required.' })
-    }
-
-    try {
-      const lastSeen = new Date().toISOString()
-      const updated = await store.updateUser?.(actor.user.id, { lastSeen })
-      if (!updated) return res.status(404).json({ message: 'Staff account not found.' })
-      return res.json({ ok: true, lastSeen })
-    } catch (error) {
-      console.error('failed to update staff presence', error)
-      return res.status(500).json({ message: 'Unable to update staff presence.' })
-    }
-  })
-
-  app.get('/api/admin/staff/presence', async (req, res) => {
-    const authHeader = req.headers.authorization || ''
-    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null
-    if (!token) return res.status(401).json({ message: 'Authentication required.' })
-
-    let actor
-    try {
-      actor = await getCurrentActor(token)
-    } catch {
-      return res.status(401).json({ message: 'Invalid or expired token.' })
-    }
-    if (!actor || actor.user.role !== 'admin') {
-      return res.status(403).json({ message: 'Administrator access required.' })
-    }
-
-    try {
-      const staff = (await store.listAllUsers?.() || [])
-        .filter((user) => user.role === 'staff')
-        .map((user) => ({
-          id: user.id,
-          firstName: user.first_name || user.firstName,
-          lastName: user.last_name || user.lastName,
-          position: user.position || 'Staff',
-          email: user.email,
-          mobile: user.mobile,
-          status: user.status,
-          lastSeen: user.last_seen || user.lastSeen || null,
-        }))
-      return res.json({ staff })
-    } catch (error) {
-      console.error('failed to load staff presence', error)
-      return res.status(500).json({ message: 'Unable to load staff presence.' })
-    }
-  })
-
-  app.post('/api/admin/staff/:id/password', async (req, res) => {
-    const authHeader = req.headers.authorization || ''
-    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null
-
-    if (!token) {
-      return res.status(401).json({ message: 'Authentication required.' })
-    }
-
-    let actor
-    try {
-      actor = await getCurrentActor(token)
-    } catch {
-      return res.status(401).json({ message: 'Invalid or expired token.' })
-    }
-
-    if (!actor || actor.user.role !== 'admin') {
-      return res.status(403).json({ message: 'Administrator access required.' })
-    }
-
-    const newPassword = String(req.body?.password || '').trim()
-    if (!isValidPassword(newPassword)) {
-      return res.status(400).json({ message: `Password must have ${passwordRequirements}.` })
-    }
-
-    try {
-      const targetUser = await store.findUserById?.(req.params.id)
-      if (!targetUser || targetUser.role !== 'staff') {
-        return res.status(404).json({ message: 'Staff member not found.' })
-      }
-
-      const updatedUser = await store.updateUser?.(targetUser.id, { passwordHash: await hashPassword(newPassword) })
-      if (!updatedUser) {
-        return res.status(404).json({ message: 'Staff member not found.' })
-      }
-
-      await writeAudit(actor.user, 'staff.password_reset', 'user', targetUser.id, { email: targetUser.email })
-      return res.json({ ok: true })
-    } catch (error) {
-      console.error('failed to reset staff password', error)
-      return res.status(500).json({ message: 'Unable to reset staff password.' })
-    }
-  })
-
   app.post('/api/admin/users', async (req, res) => {
     const authHeader = req.headers.authorization || ''
     const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null
@@ -1827,29 +2206,15 @@ export function createApp() {
   })
 
   app.post('/api/staff/archive-requests', async (req, res) => {
-    const authHeader = req.headers.authorization || ''
-    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null
-    if (!token) return res.status(401).json({ message: 'Authentication required.' })
-
     try {
-      const payload = verifyToken(token)
-      if (!(await hasCurrentRole(token, ['staff', 'admin']))) {
-        return res.status(403).json({ message: 'Staff access required.' })
-      }
+      const actor = await authorizeCurrentActor(req, res, ['staff', 'admin'], 'request-processing')
+      if (!actor) return
 
       const rawDays = req.body?.days
-      const missingRetention = rawDays === undefined
-        || rawDays === null
-        || (typeof rawDays === 'string' && rawDays.trim() === '')
-      const days = missingRetention ? 30 : Number(rawDays)
-      if ((!missingRetention && !['number', 'string'].includes(typeof rawDays)) || !Number.isInteger(days) || days < 0) {
-        return res.status(400).json({ message: 'Retention days must be a non-negative whole number.' })
-      }
-      if (typeof store.archiveProcessedRequestsOlderThan !== 'function') {
-        throw new Error('Processed request archiving is not available for the configured storage backend.')
-      }
-      const result = await store.archiveProcessedRequestsOlderThan(days)
-      return res.json({ archive: result })
+      const parsedDays = rawDays === undefined || rawDays === null || rawDays === '' ? 1 : Number(rawDays)
+      const days = Number.isFinite(parsedDays) ? Math.max(0, parsedDays) : 1
+      const result = await store.archiveProcessedRequestsOlderThan?.(days)
+      return res.json({ archive: result || null })
     } catch (e) {
       console.error('archive-requests error', e)
       return res.status(500).json({ message: 'Failed to archive queue and approval records.' })
@@ -1857,19 +2222,11 @@ export function createApp() {
   })
 
   app.get('/api/staff/archives', async (req, res) => {
-    const authHeader = req.headers.authorization || ''
-    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null
-    if (!token) return res.status(401).json({ message: 'Authentication required.' })
-
     try {
-      const payload = verifyToken(token)
-      if (!(await hasCurrentRole(token, ['staff', 'admin']))) {
-        return res.status(403).json({ message: 'Staff access required.' })
-      }
-
-      const actor = await getCurrentActor(token)
+      const actor = await authorizeCurrentActor(req, res, ['staff', 'admin'], 'request-processing')
+      if (!actor) return
       const archives = await store.listArchives?.() || []
-      const visibleArchives = actor?.user.role === 'admin'
+      const visibleArchives = actor.role === 'admin'
         ? archives
         : archives.filter((archive) => archive.name.startsWith('queue-approvals-'))
       return res.json({ archives: visibleArchives })
@@ -1880,21 +2237,15 @@ export function createApp() {
   })
 
   app.get('/api/staff/archive-file', async (req, res) => {
-    const authHeader = req.headers.authorization || ''
-    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null
-    if (!token) return res.status(401).json({ message: 'Authentication required.' })
-
     try {
-      const actor = await getCurrentActor(token)
-      if (!actor || !['staff', 'admin'].includes(actor.user.role) || ['Suspended', 'Disabled'].includes(actor.user.status)) {
-        return res.status(403).json({ message: 'Staff access required.' })
-      }
+      const actor = await authorizeCurrentActor(req, res, ['staff', 'admin'], 'request-processing')
+      if (!actor) return
 
       const name = req.query.name
       if (!name || typeof name !== 'string' || name.includes('..') || !/^[\w\-.]+$/.test(name)) {
         return res.status(400).json({ message: 'Invalid file name.' })
       }
-      if (actor.user.role !== 'admin' && !name.startsWith('queue-approvals-')) {
+      if (actor.role !== 'admin' && !name.startsWith('queue-approvals-')) {
         return res.status(403).json({ message: 'This archive is not available to staff.' })
       }
 
@@ -2091,18 +2442,9 @@ export function createApp() {
       const updatedUser = await store.updateUser?.(resident.id, { status: 'Disabled' })
       if (!updatedUser) return res.status(404).json({ message: 'Resident not found.' })
 
-      try {
-        await writeAudit(actor.user, 'resident.archived', 'user', resident.id, {
-          previousStatus: resident.status || null,
-        })
-      } catch (error) {
-        console.error('resident archived but audit log failed', error)
-        return res.status(500).json({
-          message: 'Resident account was archived, but the audit log could not be recorded. Refresh and verify the account status before retrying.',
-          archived: true,
-          user: sanitizeUserRecord(updatedUser),
-        })
-      }
+      await writeAudit(actor.user, 'resident.archived', 'user', resident.id, {
+        previousStatus: resident.status || null,
+      })
       return res.json({ success: true, user: sanitizeUserRecord(updatedUser) })
     } catch (error) {
       if (['JsonWebTokenError', 'TokenExpiredError', 'NotBeforeError'].includes(error?.name)) {
@@ -2268,13 +2610,13 @@ export function createApp() {
       if (!(await hasCurrentRole(token, ['admin']))) return res.status(403).json({ message: 'Admin access required.' })
 
       const users = filterVisibleUsers(await store.listAllUsers?.() || [])
-      const accessUsers = users.map((user) => ({
-        id: user.id,
-        firstName: user.firstName ?? user.first_name ?? '',
-        lastName: user.lastName ?? user.last_name ?? '',
-        zone: user.zone ?? user.zone_number ?? null,
-        createdAt: user.createdAt ?? user.created_at ?? null,
-      }))
+      const accessUsers = users
+        .map((user) => toAccessUserSummary(user))
+        .sort((a, b) => {
+          const nameA = `${a.firstName || ''} ${a.lastName || ''}`.trim().toLowerCase()
+          const nameB = `${b.firstName || ''} ${b.lastName || ''}`.trim().toLowerCase()
+          return nameA.localeCompare(nameB)
+        })
       return res.json({ users: accessUsers })
     } catch (error) {
       console.error('admin access users error', error)
@@ -2291,7 +2633,8 @@ export function createApp() {
       if (!(await hasCurrentRole(token, ['admin']))) return res.status(403).json({ message: 'Admin access required.' })
       const user = await store.findUserById?.(req.params.id)
       if (!user) return res.status(404).json({ message: 'User not found.' })
-      return res.json({ user: sanitizeUserRecord(user) })
+      const safeUser = toAccessUserSummary(user)
+      return res.json({ user: safeUser })
     } catch (error) {
       console.error('admin access user detail error', error)
       return res.status(401).json({ message: 'Invalid or expired token.' })
@@ -2321,22 +2664,13 @@ export function createApp() {
     const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null
     if (!token) return res.status(401).json({ message: 'Authentication required.' })
     try {
-      verifyToken(token)
-    } catch {
-      return res.status(401).json({ message: 'Invalid or expired token.' })
-    }
-    try {
+      const payload = verifyToken(token)
       if (!(await hasCurrentRole(token, ['admin']))) return res.status(403).json({ message: 'Admin access required.' })
       const rawDays = req.body?.days
-      const days = rawDays === undefined || rawDays === null || rawDays === '' ? 30 : Number(rawDays)
-      if (!Number.isInteger(days) || days < 0) {
-        return res.status(400).json({ message: 'Retention days must be a non-negative whole number.' })
-      }
-      if (typeof store.archiveApprovalsOlderThan !== 'function') {
-        throw new Error('Approval archiving is not available for the configured storage backend.')
-      }
-      const result = await store.archiveApprovalsOlderThan(days)
-      return res.json({ archive: result })
+      const parsedDays = rawDays === undefined || rawDays === null || rawDays === '' ? 7 : Number(rawDays)
+      const days = Number.isFinite(parsedDays) ? Math.max(0, parsedDays) : 7
+      const result = await store.archiveApprovalsOlderThan?.(days)
+      return res.json({ archive: result || null })
     } catch (e) {
       console.error('archive-approvals error', e.message, e.stack)
       return res.status(500).json({ message: 'Failed to archive approvals.', error: e.message })
@@ -2425,19 +2759,9 @@ export function createApp() {
   })
 
   app.patch('/api/requests/:id/status', async (req, res) => {
-    const authHeader = req.headers.authorization || ''
-    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null
-
-    if (!token) {
-      return res.status(401).json({ message: 'Authentication required.' })
-    }
-
     try {
-      const payload = verifyToken(token)
-      const actor = await store.findUserById?.(payload.sub)
-      if (!actor || !['staff', 'admin'].includes(actor.role) || ['Suspended', 'Disabled'].includes(actor.status)) {
-        return res.status(403).json({ message: 'Staff access required.' })
-      }
+      const actor = await authorizeCurrentActor(req, res, ['staff', 'admin'], 'request-processing')
+      if (!actor) return
 
       const status = sanitizeText(req.body?.status)
       if (!['Pending', 'In Review', 'Needs Information', 'Approved', 'Rejected'].includes(status)) {
@@ -2498,14 +2822,14 @@ export function createApp() {
         const approval = {
           id: `APP-${String(Date.now()).slice(-8)}`,
           requestId: req.params.id,
-          approvedBy: payload.sub,
-          approvedByRole: payload.role,
+          approvedBy: actor.id,
+          approvedByRole: actor.role,
           dateApproved: new Date().toISOString(),
           requestSnapshot: updated,
         }
         try {
           await store.addApproval?.(approval)
-          const archived = await store.archiveApprovalsOlderThan?.(30)
+          const archived = await store.archiveApprovalsOlderThan?.(7)
           // return archive info optionally
           return res.json({ request: updated, approval, archive: archived || null })
         } catch (err) {
@@ -2534,7 +2858,7 @@ export function createApp() {
       if (!actor) return res.status(403).json({ message: 'Account access is disabled or authentication is incomplete.' })
       const { user } = actor
       if (user.role === 'resident' && user.status !== 'Active Resident') {
-        return res.status(403).json({ message: 'Your account is pending barangay verification. You can submit requests after an administrator approves your account.' })
+        return res.status(403).json({ message: 'Your account is pending barangay verification. You can submit requests after Staff approves your account.' })
       }
 
       const type = sanitizeText(req.body?.type)
@@ -2704,7 +3028,7 @@ export function createApp() {
 
 export async function startServer() {
   try {
-    if (process.env.DATABASE_URL) {
+    if (usePostgres) {
       await pgDb.initDatabase()
     } else if (!SHOULD_SKIP_SEED) {
       await seedDemoResident()

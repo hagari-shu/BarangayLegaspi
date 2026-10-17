@@ -1,0 +1,72 @@
+name: Frontend and Node checks
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/frontend-and-node-checks.yml'
+      - 'src/**'
+      - 'server/**'
+      - 'tests/**'
+      - 'scripts/**'
+      - 'public/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.env.example'
+      - 'index.html'
+      - 'server.js'
+      - 'render.yaml'
+      - 'vercel.json'
+      - 'vite.config.js'
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/frontend-and-node-checks.yml'
+      - 'src/**'
+      - 'server/**'
+      - 'tests/**'
+      - 'scripts/**'
+      - 'public/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.env.example'
+      - 'index.html'
+      - 'server.js'
+      - 'render.yaml'
+      - 'vercel.json'
+      - 'vite.config.js'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: frontend-node-checks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend-and-node:
+    name: Frontend and Node quality gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Run Node test suite
+        run: npm test
+
+      - name: Run lint
+        run: npm run lint
+
+      - name: Build frontend
+        run: npm run build

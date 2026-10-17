@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { createApp, seedDemoResident } from '../server/app.js'
+import * as jsonDb from '../server/db.js'
 import { DB_PATH } from '../server/config.js'
 
 const testDbPath = DB_PATH
@@ -25,7 +26,7 @@ const createTestServer = async () => {
   }
 }
 
-test('resident can schedule and fetch due reminders', async () => {
+test('resident can schedule reminders while admin account changes remain blocked', async () => {
   const { server, baseUrl } = await createTestServer()
   const testEmail = `reminder.${Date.now()}@example.com`
   const testMobile = `091${Math.floor(10000000 + Math.random() * 90000000)}`
@@ -78,7 +79,12 @@ test('resident can schedule and fetch due reminders', async () => {
         role: 'resident',
       }),
     })
-    assert.equal(approvalResponse.status, 200)
+    assert.equal(approvalResponse.status, 403)
+    const testDatabase = await jsonDb.readDb()
+    const residentRecord = testDatabase.users.find((user) => user.email === testEmail)
+    assert.ok(residentRecord)
+    residentRecord.status = 'Active Resident'
+    await jsonDb.writeDb(testDatabase)
 
     const residentSessionResponse = await fetch(`${baseUrl}/api/login`, {
       method: 'POST',

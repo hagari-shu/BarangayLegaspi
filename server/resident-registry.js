@@ -98,7 +98,7 @@ const makeAuditEntry = (actor, action, targetType, targetId, metadata = {}) => (
   createdAt: new Date().toISOString(),
 })
 
-export function registerResidentRegistryRoutes(app, { store }) {
+export function registerResidentRegistryRoutes(app, { store, sourceReviewsOnly = false }) {
   const authorizeStaff = async (req, res) => {
     const authorization = req.headers.authorization || ''
     const token = authorization.startsWith('Bearer ') ? authorization.slice(7) : null
@@ -218,6 +218,8 @@ export function registerResidentRegistryRoutes(app, { store }) {
       return res.status(500).json({ message: 'Unable to resolve the source-review warning.' })
     }
   })
+
+  if (sourceReviewsOnly) return
 
   app.get('/api/staff/residents', async (req, res) => {
     if (!await authorizeStaff(req, res)) return
