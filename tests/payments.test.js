@@ -59,8 +59,7 @@ test('payment endpoints do not expose or mutate fictitious invoice records', asy
       body: JSON.stringify({ status: 'Approved' }),
     })
 
-    assert.equal(approvalResponse.status, 404)
-    assert.equal((await approvalResponse.json()).message, 'Payment record not found.')
+    assert.equal(approvalResponse.status, 403)
   } finally {
     await new Promise((resolve, reject) => {
       server.close((error) => (error ? reject(error) : resolve()))

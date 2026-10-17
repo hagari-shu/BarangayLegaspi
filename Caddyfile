@@ -1,0 +1,10 @@
+{$DOMAIN} {
+	encode zstd gzip
+
+	@notStagingOperator {
+		not remote_ip {$STAGING_ALLOWED_CIDR}
+	}
+	respond @notStagingOperator "Staging access is restricted." 403
+
+	reverse_proxy frontend:80
+}

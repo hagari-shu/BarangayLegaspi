@@ -5,15 +5,20 @@
   "type": "module",
   "scripts": {
     "dev": "concurrently \"npm run dev:client\" \"npm run dev:legacy-server\"",
+    "predev:client": "node scripts/prepare-ocr-assets.js",
     "dev:client": "vite",
     "dev:api": "cd laravel-api && php artisan serve --host=0.0.0.0 --port=8000",
     "dev:legacy-server": "node --watch server.js",
     "start:legacy": "node server.js",
+    "prebuild": "node scripts/prepare-ocr-assets.js",
     "build": "vite build",
     "lint": "oxlint",
     "preview": "vite preview",
-    "test": "node --test tests/api.test.js tests/mau-and-mfa.test.js tests/mfa-key-rotation.test.js tests/meta-social.test.js tests/payments.test.js tests/postgres-seeding.test.js tests/registry-csv.test.js tests/reminders.test.js tests/request-reporting.test.js tests/translations.test.js",
-    "mfa:rotate-key": "node scripts/rotate-mfa-encryption.js"
+    "test": "node --test tests/api.test.js tests/mau-and-mfa.test.js tests/mfa-key-rotation.test.js tests/payments.test.js tests/postgres-seeding.test.js tests/registry-csv.test.js tests/registry-scan.test.js tests/resident-registry-export.test.js tests/reminders.test.js tests/request-reporting.test.js tests/translations.test.js",
+    "mfa:rotate-key": "node scripts/rotate-mfa-encryption.js",
+    "staff:invite": "node scripts/create-staff-invitation.js",
+    "demo:registry": "node scripts/registry-scale-demo.js",
+    "registry:preflight": "node scripts/preflight-resident-roster.js"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1149.0",
@@ -30,9 +35,11 @@
     "pg": "^8.23.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
-    "react-router-dom": "^7.18.3"
+    "react-router-dom": "^7.18.3",
+    "tesseract.js": "^7.0.0"
   },
   "devDependencies": {
+    "@tesseract.js-data/eng": "^1.0.0",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.4",
     "@vitejs/plugin-react": "^6.1.0",

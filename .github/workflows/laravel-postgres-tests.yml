@@ -1,0 +1,70 @@
+name: Laravel PostgreSQL tests
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/laravel-postgres-tests.yml'
+      - 'laravel-api/**'
+      - 'render.yaml'
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/laravel-postgres-tests.yml'
+      - 'laravel-api/**'
+      - 'render.yaml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  laravel-postgres-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: barangay_test
+          POSTGRES_USER: laravel_test
+          POSTGRES_PASSWORD: laravel_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U laravel_test -d barangay_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: mbstring, pdo_pgsql, fileinfo
+          coverage: none
+          tools: composer:v2
+
+      - name: Install Laravel dependencies
+        working-directory: laravel-api
+        env:
+          APP_ENV: testing
+        run: composer install --no-interaction --prefer-dist --no-progress
+
+      - name: Run Laravel feature suite on PostgreSQL
+        working-directory: laravel-api
+        env:
+          APP_ENV: testing
+          APP_KEY: base64:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+          DB_CONNECTION: pgsql
+          DB_HOST: 127.0.0.1
+          DB_PORT: 5432
+          DB_DATABASE: barangay_test
+          DB_USERNAME: laravel_test
+          DB_PASSWORD: laravel_test
+          DB_URL: ''
+          DATABASE_URL: ''
+        run: vendor/bin/phpunit

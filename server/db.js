@@ -2,6 +2,13 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { DB_PATH } from './config.js'
+import {
+  createResidentNameSearchTokens,
+  decryptResidentPrivateData,
+  encryptResidentPrivateData,
+  residentNameSearchCandidates,
+  residentNameSearchTokensNeedRefresh,
+} from './resident-registry-crypto.js'
 
 const dbDir = path.dirname(DB_PATH)
 let registryMutationQueue = Promise.resolve()
@@ -11,23 +18,43 @@ const serializeRegistryMutation = (operation) => {
   registryMutationQueue = result.then(() => undefined, () => undefined)
   return result
 }
+const residentPrivateFields = [
+  'firstName',
+  'lastName',
+  'birthDate',
+  'sex',
+  'householdId',
+  'maritalStatus',
+  'occupation',
+  'address',
+  'sourceReference',
+  'sourceFilename',
+]
+
+let writeQueue = Promise.resolve()
+let auditWriteQueue = Promise.resolve()
 
 async function writeJsonFile(data) {
-  await fs.mkdir(dbDir, { recursive: true })
-  const tempPath = `${DB_PATH}.tmp`
-  await fs.writeFile(tempPath, JSON.stringify(data, null, 2), 'utf8')
+  const write = writeQueue.then(async () => {
+    await fs.mkdir(dbDir, { recursive: true })
+    const tempPath = `${DB_PATH}.${process.pid}.${randomUUID()}.tmp`
+    await fs.writeFile(tempPath, JSON.stringify(data, null, 2), 'utf8')
 
-  try {
-    await fs.rename(tempPath, DB_PATH)
-  } catch (error) {
-    if (error && (error.code === 'EEXIST' || error.code === 'EPERM')) {
-      await fs.rm(DB_PATH, { force: true })
+    try {
       await fs.rename(tempPath, DB_PATH)
-      return
-    }
+    } catch (error) {
+      if (error && (error.code === 'EEXIST' || error.code === 'EPERM')) {
+        await fs.rm(DB_PATH, { force: true })
+        await fs.rename(tempPath, DB_PATH)
+        return
+      }
 
-    throw error
-  }
+      await fs.rm(tempPath, { force: true })
+      throw error
+    }
+  })
+  writeQueue = write.then(() => undefined, () => undefined)
+  return write
 }
 
 function stripPlaintextUserPasswords(data) {
@@ -46,15 +73,73 @@ function stripPlaintextUserPasswords(data) {
   return { data: changed ? { ...data, users } : data, changed }
 }
 
-export async function readDb() {
+function encryptRegistryRecord(record) {
+  const privateData = record.encryptedData
+    ? null
+    : Object.fromEntries(residentPrivateFields.map((field) => [
+        field,
+        record[field] ?? record[field.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`)] ?? null,
+      ]))
+  const encryptedData = record.encryptedData || encryptResidentPrivateData(Object.fromEntries(
+    residentPrivateFields.map((field) => [field, privateData[field]])
+  ), record.id)
+  const refreshNameSearchTokens = residentNameSearchTokensNeedRefresh(record.nameSearchTokens)
+  const searchData = privateData || (refreshNameSearchTokens ? decryptResidentPrivateData(encryptedData, record.id) : null)
+  const safeRecord = {
+    ...record,
+    encryptedData,
+    nameSearchTokens: refreshNameSearchTokens
+      ? createResidentNameSearchTokens(searchData.firstName, searchData.lastName)
+      : record.nameSearchTokens,
+  }
+  for (const field of residentPrivateFields) {
+    delete safeRecord[field]
+    delete safeRecord[field.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`)]
+  }
+
+  return safeRecord
+}
+
+function decryptRegistryRecord(record) {
+  return {
+    ...record,
+    ...decryptResidentPrivateData(record.encryptedData, record.id),
+  }
+}
+
+export async function readDb({ decryptRegistry = true } = {}) {
   try {
     const raw = await fs.readFile(DB_PATH, 'utf8')
-    const { data, changed } = stripPlaintextUserPasswords(JSON.parse(raw))
-    if (changed) await writeJsonFile(data)
-    return data
+    const { data, changed: passwordsChanged } = stripPlaintextUserPasswords(JSON.parse(raw))
+    const registry = Array.isArray(data.residentRegistry) ? data.residentRegistry : []
+    const needsRegistryEncryption = registry.some((record) => !record.encryptedData)
+    const needsNameSearchTokens = registry.some((record) => residentNameSearchTokensNeedRefresh(record.nameSearchTokens))
+    const protectedData = {
+      ...data,
+      residentRegistry: registry.map(encryptRegistryRecord),
+    }
+    if (passwordsChanged || needsRegistryEncryption || needsNameSearchTokens) await writeJsonFile(protectedData)
+
+    return {
+      ...data,
+      residentRegistry: decryptRegistry
+        ? protectedData.residentRegistry.map(decryptRegistryRecord)
+        : protectedData.residentRegistry,
+    }
   } catch (error) {
     if (error.code === 'ENOENT') {
-      const fallbackDb = { users: [], requests: [], announcements: [], reports: [], approvals: [], residentRegistry: [], registrySourceReviews: [], auditLogs: [] }
+      const fallbackDb = {
+        users: [],
+        requests: [],
+        announcements: [],
+        reports: [],
+        approvals: [],
+        residentRegistry: [],
+        registrySourceReviews: [],
+        emergencyAccessGrants: [],
+        auditLogs: [],
+        staffInvitations: [],
+        }
       await writeJsonFile(fallbackDb)
       return fallbackDb
     }
@@ -64,7 +149,11 @@ export async function readDb() {
 }
 
 export async function writeDb(data) {
-  await writeJsonFile(stripPlaintextUserPasswords(data).data)
+  const safeData = stripPlaintextUserPasswords(data).data
+  const residentRegistry = Array.isArray(safeData.residentRegistry)
+    ? safeData.residentRegistry.map(encryptRegistryRecord)
+    : safeData.residentRegistry
+  await writeJsonFile({ ...safeData, residentRegistry })
 }
 
 export async function findUserByIdentifier(identifier) {
@@ -334,25 +423,10 @@ export async function listAnnouncements() {
   return Array.isArray(db.announcements) ? db.announcements : []
 }
 
-export async function getAnnouncement(id) {
-  const db = await readDb()
-  return (db.announcements || []).find((item) => String(item.id || item.title) === String(id)) || null
-}
-
 export async function saveAnnouncement(announcement) {
   const db = await readDb()
   db.announcements = Array.isArray(db.announcements) ? db.announcements : []
   db.announcements.unshift(announcement)
-  await writeDb(db)
-  return announcement
-}
-
-export async function updateAnnouncement(id, updates) {
-  const db = await readDb()
-  db.announcements = Array.isArray(db.announcements) ? db.announcements : []
-  const announcement = db.announcements.find((item) => String(item.id || item.title) === String(id))
-  if (!announcement) return null
-  Object.assign(announcement, updates)
   await writeDb(db)
   return announcement
 }
@@ -363,83 +437,125 @@ export async function deleteAnnouncement(id) {
   const announcement = db.announcements.find((item) => String(item.id || item.title) === String(id))
   if (!announcement) return null
   db.announcements = db.announcements.filter((item) => String(item.id || item.title) !== String(id))
-  db.messengerAnnouncementDeliveries = (db.messengerAnnouncementDeliveries || [])
-    .filter((delivery) => String(delivery.announcementId) !== String(id))
   await writeDb(db)
   return announcement
 }
 
-export async function upsertMessengerSubscriber({ psid, optedIn, lastMessageAt }) {
-  const db = await readDb()
-  db.messengerSubscribers = Array.isArray(db.messengerSubscribers) ? db.messengerSubscribers : []
-  const subscriber = db.messengerSubscribers.find((item) => item.psid === psid)
-  if (subscriber) {
-    subscriber.optedIn = Boolean(optedIn)
-    subscriber.lastMessageAt = lastMessageAt
-  } else {
-    db.messengerSubscribers.push({ psid, optedIn: Boolean(optedIn), lastMessageAt })
-  }
-  await writeDb(db)
-}
-
-export async function recordMessengerContact({ psid, lastMessageAt }) {
-  const db = await readDb()
-  db.messengerSubscribers = Array.isArray(db.messengerSubscribers) ? db.messengerSubscribers : []
-  const subscriber = db.messengerSubscribers.find((item) => item.psid === psid)
-  if (subscriber) subscriber.lastMessageAt = lastMessageAt
-  else db.messengerSubscribers.push({ psid, optedIn: false, lastMessageAt })
-  await writeDb(db)
-}
-
-export async function listEligibleMessengerSubscribers(since, until) {
-  const db = await readDb()
-  const cutoff = Date.parse(since)
-  const deadline = Date.parse(until)
-  return (db.messengerSubscribers || []).filter((subscriber) => (
-    subscriber.optedIn === true
-    && Date.parse(subscriber.lastMessageAt) >= cutoff
-    && Date.parse(subscriber.lastMessageAt) <= deadline
-  ))
-}
-
-export async function recordMessengerAnnouncementDelivery({ announcementId, psid, sentAt }) {
-  const db = await readDb()
-  db.messengerAnnouncementDeliveries = Array.isArray(db.messengerAnnouncementDeliveries)
-    ? db.messengerAnnouncementDeliveries
-    : []
-  if (!db.messengerAnnouncementDeliveries.some((delivery) => (
-    String(delivery.announcementId) === String(announcementId) && delivery.psid === psid
-  ))) {
-    db.messengerAnnouncementDeliveries.push({ announcementId, psid, sentAt })
-    await writeDb(db)
-  }
-}
-
-export async function listEligibleMessengerAnnouncementRecipients(announcementId, since, until) {
-  const db = await readDb()
-  const cutoff = Date.parse(since)
-  const deadline = Date.parse(until)
-  const eligiblePsids = new Set((db.messengerSubscribers || [])
-    .filter((subscriber) => (
-      subscriber.optedIn === true
-      && Date.parse(subscriber.lastMessageAt) >= cutoff
-      && Date.parse(subscriber.lastMessageAt) <= deadline
-    ))
-    .map((subscriber) => subscriber.psid))
-  return (db.messengerAnnouncementDeliveries || [])
-    .filter((delivery) => (
-      String(delivery.announcementId) === String(announcementId)
-      && eligiblePsids.has(delivery.psid)
-    ))
-    .map((delivery) => ({ psid: delivery.psid }))
-}
-
 export async function addAuditLog(entry) {
-  const db = await readDb()
-  db.auditLogs = db.auditLogs || []
-  db.auditLogs.push(entry)
-  await writeDb(db)
-  return entry
+  const write = auditWriteQueue.then(async () => {
+    const db = await readDb()
+    db.auditLogs = db.auditLogs || []
+    db.auditLogs.push(entry)
+    await writeDb(db)
+    return entry
+  })
+  auditWriteQueue = write.then(() => undefined, () => undefined)
+  return write
+}
+
+export async function createStaffInvitation(invitation) {
+  return serializeRegistryMutation(async () => {
+    const email = String(invitation.email || '').trim().toLowerCase()
+    const mobile = String(invitation.mobile || '').trim()
+    const db = await readDb()
+    db.staffInvitations = Array.isArray(db.staffInvitations) ? db.staffInvitations : []
+    db.users = Array.isArray(db.users) ? db.users : []
+
+    const now = Date.now()
+    db.staffInvitations = db.staffInvitations.map((item) => (
+      !item.acceptedAt && !item.revokedAt && Date.parse(item.expiresAt) <= now
+        ? { ...item, revokedAt: new Date(now).toISOString() }
+        : item
+    ))
+
+    const identityExists = db.users.some((user) => (
+      String(user.email || '').toLowerCase() === email
+      || String(user.mobile || '') === mobile
+    ))
+    const invitationExists = db.staffInvitations.some((item) => (
+      !item.acceptedAt && !item.revokedAt
+      && (item.email === email || item.mobile === mobile)
+    ))
+    if (identityExists) throw new Error('STAFF_INVITATION_ACCOUNT_EXISTS')
+    if (invitationExists) throw new Error('STAFF_INVITATION_ALREADY_PENDING')
+
+    db.staffInvitations.push({
+      id: invitation.id,
+      tokenHash: invitation.tokenHash,
+      email,
+      mobile,
+      expiresAt: invitation.expiresAt,
+      createdAt: invitation.createdAt,
+      acceptedAt: null,
+      revokedAt: null,
+    })
+    db.auditLogs = Array.isArray(db.auditLogs) ? db.auditLogs : []
+    db.auditLogs.push({
+      id: randomUUID(),
+      actorId: null,
+      actorRole: 'deployment_operator',
+      action: 'staff.invitation.created',
+      targetType: 'staff_invitation',
+      targetId: invitation.id,
+      metadata: { expiresAt: invitation.expiresAt, operatorId: invitation.operatorId },
+      createdAt: invitation.createdAt,
+    })
+    await writeDb(db)
+    return { id: invitation.id, expiresAt: invitation.expiresAt }
+  })
+}
+
+export async function redeemStaffInvitation({ tokenHash, firstName, lastName, passwordHash, userId, now = new Date().toISOString() }) {
+  return serializeRegistryMutation(async () => {
+    const db = await readDb()
+    db.staffInvitations = Array.isArray(db.staffInvitations) ? db.staffInvitations : []
+    db.users = Array.isArray(db.users) ? db.users : []
+    const invitation = db.staffInvitations.find((item) => item.tokenHash === tokenHash)
+    if (!invitation || invitation.acceptedAt || invitation.revokedAt || Date.parse(invitation.expiresAt) <= Date.parse(now)) {
+      return null
+    }
+
+    const identityExists = db.users.some((user) => (
+      String(user.email || '').toLowerCase() === invitation.email
+      || String(user.mobile || '') === invitation.mobile
+    ))
+    if (identityExists) return null
+
+    const user = {
+      id: userId,
+      firstName,
+      lastName,
+      mobile: invitation.mobile,
+      email: invitation.email,
+      passwordHash,
+      role: 'staff',
+      householdId: null,
+      familyMembers: 1,
+      householdMembers: [],
+      status: 'On Duty',
+      address: 'Barangay Hall, Legaspi',
+      zone: 0,
+      position: 'Staff',
+      availability: 'Available',
+      createdAt: now,
+    }
+    invitation.acceptedAt = now
+    invitation.redeemedUserId = userId
+    db.users.push(user)
+    db.auditLogs = Array.isArray(db.auditLogs) ? db.auditLogs : []
+    db.auditLogs.push({
+      id: randomUUID(),
+      actorId: userId,
+      actorRole: 'staff',
+      action: 'staff.invitation.redeemed',
+      targetType: 'user',
+      targetId: userId,
+      metadata: { invitationId: invitation.id },
+      createdAt: now,
+    })
+    await writeDb(db)
+    return { id: user.id, email: user.email }
+  })
 }
 
 export async function listAuditLogs(limit = 100) {
@@ -504,6 +620,9 @@ const normalizeRegistryResident = (record) => ({
   lastName: record.lastName ?? record.last_name ?? '',
   birthDate: record.birthDate ?? record.birth_date ?? null,
   householdId: record.householdId ?? record.household_id ?? null,
+  household: record.household ?? record.householdId ?? record.household_id ?? null,
+  maritalStatus: record.maritalStatus ?? record.marital_status ?? null,
+  occupation: record.occupation ?? null,
   verificationStatus: record.verificationStatus ?? record.verification_status ?? 'pending',
   sourceReference: record.sourceReference ?? record.source_reference ?? null,
   sourceFilename: record.sourceFilename ?? record.source_filename ?? null,
@@ -515,29 +634,49 @@ const normalizeRegistryResident = (record) => ({
 })
 
 export async function listResidentRegistry(filters = {}) {
-  const db = await readDb()
-  const matches = (db.residentRegistry || []).map(normalizeRegistryResident).filter((resident) => {
-    const nameParts = String(filters.search || '').toLowerCase().split(/\s+/).filter(Boolean)
-    const firstName = resident.firstName.toLocaleLowerCase()
-    const lastName = resident.lastName.toLocaleLowerCase()
-    if (nameParts.some((part) => !firstName.startsWith(part) && !lastName.startsWith(part))) return false
+  const db = await readDb({ decryptRegistry: false })
+  const searchCandidates = residentNameSearchCandidates(filters.search)
+  const rawMatches = (db.residentRegistry || []).filter((record) => {
+    if (searchCandidates.some((candidates) => !candidates.some((token) => record.nameSearchTokens?.includes(token)))) return false
+    if (filters.zone && Number(record.zone) !== Number(filters.zone)) return false
+    if (filters.purok && record.purok !== filters.purok) return false
+    return true
+  })
+  const offset = (filters.page - 1) * filters.pageSize
+  const recordsToRead = searchCandidates.length || filters.birthDate || filters.ageStart || filters.ageEnd || filters.maritalStatus || filters.occupation
+    ? rawMatches.map(decryptRegistryRecord).map(normalizeRegistryResident).filter((resident) => {
     if (filters.birthDate && resident.birthDate !== filters.birthDate) return false
     if (filters.ageStart && filters.ageEnd && (!resident.birthDate || resident.birthDate < filters.ageStart || resident.birthDate > filters.ageEnd)) return false
-    if (filters.zone && Number(resident.zone) !== Number(filters.zone)) return false
-    if (filters.purok && resident.purok !== filters.purok) return false
+    if (filters.maritalStatus && String(resident.maritalStatus || '').trim().toLocaleLowerCase('en') !== filters.maritalStatus.trim().toLocaleLowerCase('en')) return false
+    if (filters.occupation && String(resident.occupation || '').trim().toLocaleLowerCase('en') !== filters.occupation.trim().toLocaleLowerCase('en')) return false
     return true
-  }).sort((left, right) => (
-    Number(left.zone || 99) - Number(right.zone || 99)
-    || String(left.purok || '').localeCompare(String(right.purok || ''))
-    || left.lastName.localeCompare(right.lastName)
-    || left.firstName.localeCompare(right.firstName)
-    || String(left.id).localeCompare(String(right.id))
-  ))
-  const offset = (filters.page - 1) * filters.pageSize
-  return { residents: matches.slice(offset, offset + filters.pageSize), total: matches.length }
+    }).sort((left, right) => (
+      Number(left.zone || 99) - Number(right.zone || 99)
+      || String(left.purok || '').localeCompare(String(right.purok || ''))
+      || left.lastName.localeCompare(right.lastName)
+      || left.firstName.localeCompare(right.firstName)
+      || String(left.id).localeCompare(String(right.id))
+    ))
+    : rawMatches
+      .sort((left, right) => (
+        Number(left.zone || 99) - Number(right.zone || 99)
+        || String(left.purok || '').localeCompare(String(right.purok || ''))
+        || String(left.createdAt || '').localeCompare(String(right.createdAt || ''))
+        || String(left.id).localeCompare(String(right.id))
+      ))
+      .slice(offset, offset + filters.pageSize)
+      .map(decryptRegistryRecord)
+      .map(normalizeRegistryResident)
+  const total = searchCandidates.length || filters.birthDate || filters.ageStart || filters.ageEnd || filters.maritalStatus || filters.occupation
+    ? recordsToRead.length
+    : rawMatches.length
+  const residents = searchCandidates.length || filters.birthDate || filters.ageStart || filters.ageEnd || filters.maritalStatus || filters.occupation
+    ? recordsToRead.slice(offset, offset + filters.pageSize)
+    : recordsToRead
+  return { residents, total }
 }
 
-export async function getResidentDemographics(filters = {}) {
+export async function getResidentDemographics(filters = {}, includeHouseholds = true) {
   const db = await readDb()
   const eligible = (db.residentRegistry || []).map(normalizeRegistryResident).filter((resident) => (
     resident.recordStatus === 'active'
@@ -549,7 +688,6 @@ export async function getResidentDemographics(filters = {}) {
     total: residents.length,
     male: residents.filter((item) => String(item.sex || '').toLowerCase() === 'male').length,
     female: residents.filter((item) => String(item.sex || '').toLowerCase() === 'female').length,
-    unclassified: residents.filter((item) => !['male', 'female'].includes(String(item.sex || '').toLowerCase())).length,
     households: new Set(residents.filter((item) => item.householdId).map((item) => (
       `${item.zone || ''}\u0000${item.purok || ''}\u0000${item.householdId}`
     ))).size,
@@ -575,7 +713,7 @@ export async function getResidentDemographics(filters = {}) {
       ...counts,
     }
   }).sort((left, right) => (left.zone || 99) - (right.zone || 99) || String(left.purok || '').localeCompare(String(right.purok || '')))
-  const byHousehold = [...households.entries()].map(([key, residents]) => {
+  const byHousehold = includeHouseholds ? [...households.entries()].map(([key, residents]) => {
     const [zoneValue, purok, householdId] = key.split('\u0000')
     const counts = count(residents)
     return {
@@ -585,14 +723,14 @@ export async function getResidentDemographics(filters = {}) {
       total: counts.total,
       male: counts.male,
       female: counts.female,
-      unclassified: counts.unclassified,
     }
-  })
+  }) : undefined
+
   return {
-    eligibility: 'Active records with verified household/resident status; unclassified sex is reported separately.',
+    eligibility: 'Active records with verified household/resident status.',
     overall: count(eligible),
     byPurok,
-    byHousehold,
+    ...(includeHouseholds ? { byHousehold } : {}),
     filters: { zone: filters.zone || null, purok: filters.purok || '' },
   }
 }
@@ -603,7 +741,7 @@ export async function findPotentialRegistryMatches(firstName, lastName, birthDat
     resident.firstName.trim().toLowerCase() === firstName.trim().toLowerCase()
     && resident.lastName.trim().toLowerCase() === lastName.trim().toLowerCase()
     && (!birthDate || !resident.birthDate || resident.birthDate === birthDate)
-  )).map((resident) => ({
+  )).slice(0, 5).map((resident) => ({
     id: resident.id,
     firstName: resident.firstName,
     lastName: resident.lastName,
@@ -615,87 +753,95 @@ export async function findPotentialRegistryMatches(firstName, lastName, birthDat
   }))
 }
 
-const matchRegistryRows = (residents, registry) => residents.map((resident, index) => ({
-  row: index + 2,
-  records: registry.map(normalizeRegistryResident).filter((candidate) => (
-    candidate.firstName.trim().toLocaleLowerCase() === resident.firstName.trim().toLocaleLowerCase()
-    && candidate.lastName.trim().toLocaleLowerCase() === resident.lastName.trim().toLocaleLowerCase()
-    && (!resident.birthDate || !candidate.birthDate || candidate.birthDate === resident.birthDate)
-  )).map((candidate) => ({
-    id: candidate.id,
-    firstName: candidate.firstName,
-    lastName: candidate.lastName,
-    birthDate: candidate.birthDate,
-    householdId: candidate.householdId,
-    purok: candidate.purok,
-    zone: candidate.zone,
-    verificationStatus: candidate.verificationStatus,
-  })),
-})).filter((match) => match.records.length)
-
-const storedMatchSnapshot = (matches) => matches.map((match) => ({
-  row: match.row,
-  ids: match.records.map((record) => String(record.id)).sort(),
-}))
-
-export async function findPotentialRegistryMatchesForResidents(residents) {
-  const db = await readDb()
-  return residents.map((resident) => (db.residentRegistry || []).map(normalizeRegistryResident).filter((candidate) => (
-    candidate.firstName.trim().toLocaleLowerCase() === resident.firstName.trim().toLocaleLowerCase()
-    && candidate.lastName.trim().toLocaleLowerCase() === resident.lastName.trim().toLocaleLowerCase()
-    && (!resident.birthDate || !candidate.birthDate || candidate.birthDate === resident.birthDate)
-  )).map((candidate) => ({
-    id: candidate.id,
-    firstName: candidate.firstName,
-    lastName: candidate.lastName,
-    birthDate: candidate.birthDate,
-    householdId: candidate.householdId,
-    purok: candidate.purok,
-    zone: candidate.zone,
-    verificationStatus: candidate.verificationStatus,
-  })))
+export async function insertRegistryResident(resident, auditEntry = null) {
+  return serializeRegistryMutation(async () => {
+    const db = await readDb()
+    db.residentRegistry = db.residentRegistry || []
+    db.residentRegistry.push(resident)
+    if (auditEntry) {
+      db.auditLogs = db.auditLogs || []
+      db.auditLogs.push(auditEntry)
+    }
+    await writeDb(db)
+    return resident
+  })
 }
 
-export async function insertRegistryResidents(residents, auditEntry, options = {}) {
+export async function insertRegistryResidents(residents, auditEntry) {
   return serializeRegistryMutation(async () => {
     const db = await readDb()
     db.residentRegistry = db.residentRegistry || []
     db.auditLogs = db.auditLogs || []
-    const potentialMatches = matchRegistryRows(residents, db.residentRegistry)
-      .map((match) => ({ ...match, row: match.row - 2 + (options.rowOffset ?? 2) }))
-    const currentReviewedMatches = storedMatchSnapshot(potentialMatches)
-    if ((potentialMatches.length && options.confirmPotentialMatches !== true)
-      || JSON.stringify(currentReviewedMatches) !== JSON.stringify(options.reviewedMatches || [])) {
-      return { inserted: [], skipped: 0, reviewRequired: true, potentialMatches, reviewedMatches: currentReviewedMatches }
-    }
-    const fingerprints = new Set(db.residentRegistry.map((resident) => resident.sourceFingerprint).filter(Boolean))
-    const existing = db.residentRegistry.filter((resident) => (
-      resident.sourceFingerprint && residents.some((candidate) => candidate.sourceFingerprint === resident.sourceFingerprint)
-    )).map((resident) => ({ id: resident.id, sourceFingerprint: resident.sourceFingerprint }))
-    const inserted = residents.filter((resident) => {
-      if (!resident.sourceFingerprint || fingerprints.has(resident.sourceFingerprint)) return !resident.sourceFingerprint
-      fingerprints.add(resident.sourceFingerprint)
-      return true
-    })
-    if (inserted.length) {
-      db.residentRegistry.push(...inserted)
-      db.auditLogs.push({ ...auditEntry, metadata: { ...auditEntry.metadata, count: inserted.length } })
-      await writeDb(db)
-    }
-    return { inserted, existing, skipped: residents.length - inserted.length, reviewRequired: false }
+    db.residentRegistry.push(...residents)
+    db.auditLogs.push(auditEntry)
+    await writeDb(db)
+    return residents
   })
 }
 
-export async function updateRegistryResidentWithAudit(id, updates, auditEntry) {
+export async function updateRegistryResident(id, updates) {
   return serializeRegistryMutation(async () => {
     const db = await readDb()
     const resident = (db.residentRegistry || []).find((item) => item.id === id)
     if (!resident) return null
-    Object.assign(resident, updates, updates.status ? { recordStatus: updates.status } : {})
-    db.auditLogs = db.auditLogs || []
-    db.auditLogs.push(auditEntry)
+    Object.assign(resident, updates)
+    if (Object.keys(updates).some((field) => residentPrivateFields.includes(field))) {
+      delete resident.encryptedData
+    }
+    if (Object.prototype.hasOwnProperty.call(updates, 'firstName') || Object.prototype.hasOwnProperty.call(updates, 'lastName')) {
+      resident.nameSearchTokens = []
+    }
     await writeDb(db)
     return normalizeRegistryResident(resident)
+  })
+}
+
+export async function getActiveEmergencyAccessGrant() {
+  const db = await readDb()
+  const now = Date.now()
+  const grant = (db.emergencyAccessGrants || []).find((item) => (
+    item.activeSlot === 'global' && !item.revokedAt && new Date(item.expiresAt).getTime() > now
+  ))
+  return grant || null
+}
+
+export async function createEmergencyAccessGrant(grant, mfaStep = null, auditEntry = null) {
+  return serializeRegistryMutation(async () => {
+    const db = await readDb()
+    db.emergencyAccessGrants = db.emergencyAccessGrants || []
+    for (const prior of db.emergencyAccessGrants) {
+      if (prior.activeSlot === 'global' && new Date(prior.expiresAt).getTime() <= Date.now()) prior.activeSlot = null
+    }
+    if (db.emergencyAccessGrants.some((item) => item.activeSlot === 'global' && !item.revokedAt)) return { conflict: true }
+    if (mfaStep !== null) {
+      const user = db.users.find((item) => item.id === grant.adminId)
+      if (!user || Number(user.mfaLastStep || user.mfa_last_step || 0) >= mfaStep) return { replayedMfa: true }
+      user.mfaLastStep = mfaStep
+    }
+    db.emergencyAccessGrants.push(grant)
+    if (auditEntry) {
+      db.auditLogs = db.auditLogs || []
+      db.auditLogs.push(auditEntry)
+    }
+    await writeDb(db)
+    return { grant }
+  })
+}
+
+export async function revokeEmergencyAccessGrant(grantId, revokedBy, revokedAt, auditEntry = null) {
+  return serializeRegistryMutation(async () => {
+    const db = await readDb()
+    const grant = (db.emergencyAccessGrants || []).find((item) => item.id === grantId && item.activeSlot === 'global')
+    if (!grant) return null
+    grant.activeSlot = null
+    grant.revokedBy = revokedBy
+    grant.revokedAt = revokedAt
+    if (auditEntry) {
+      db.auditLogs = db.auditLogs || []
+      db.auditLogs.push(auditEntry)
+    }
+    await writeDb(db)
+    return grant
   })
 }
 
@@ -713,38 +859,32 @@ export async function archiveApprovalsOlderThan(days = 30) {
 
   if (old.length === 0) return { count: 0, filename: null }
 
-  await fs.mkdir(archiveDirectory, { recursive: true })
+  const path = DB_PATH.replace('db.json', '')
+  const archiveDir = `${path}archives/`
+  try {
+    await fs.mkdir(archiveDir, { recursive: true })
+  } catch (err) {
+    // ignore
+  }
 
   const from = new Date(Math.min(...old.map((o) => new Date(o.dateApproved).getTime()))).toISOString().slice(0,10)
   const to = new Date(Math.max(...old.map((o) => new Date(o.dateApproved).getTime()))).toISOString().slice(0,10)
-  const filename = `approvals-${from}_to_${to}-${Date.now()}-${randomUUID().slice(0, 8)}.json`
-  const archivePath = path.join(archiveDirectory, filename)
-  await fs.writeFile(archivePath, JSON.stringify(old, null, 2), 'utf8')
+  const filename = `${archiveDir}approvals-${from}_to_${to}.json`
+  await fs.writeFile(filename, JSON.stringify(old, null, 2), 'utf8')
 
   db.approvals = db.approvals.filter((a) => !old.find((o) => o.id === a.id))
   await writeDb(db)
 
-  return { filename: archivePath, count: old.length }
+  return { filename, count: old.length }
 }
 
-export async function archiveProcessedRequestsOlderThan(days = 30) {
+export async function archiveProcessedRequestsOlderThan() {
   const db = await readDb()
   db.requests = db.requests || []
 
-  const processed = db.requests.filter((request) => ['Approved', 'Rejected'].includes(request.status))
-  const daysValue = Number(days)
-  if (!Number.isInteger(daysValue) || daysValue < 0) {
-    throw new TypeError('Archive retention days must be a non-negative whole number.')
-  }
-  const cutoff = Date.now() - daysValue * 24 * 60 * 60 * 1000
-
-  const old = daysValue === 0
-    ? processed
-    : processed.filter((request) => {
-        const source = request.updatedAt || request.date || request.createdAt || new Date().toISOString()
-        const timestamp = new Date(source).getTime()
-        return Number.isFinite(timestamp) && timestamp <= cutoff
-      })
+  const old = db.requests
+    .filter((request) => ['Approved', 'Rejected'].includes(request.status))
+    .slice(0, 500)
 
   if (old.length === 0) {
     return { count: 0, filename: null, archivedAt: null }
@@ -752,21 +892,54 @@ export async function archiveProcessedRequestsOlderThan(days = 30) {
 
   await fs.mkdir(archiveDirectory, { recursive: true })
 
-  const today = new Date().toISOString().slice(0, 10)
-  const filename = `queue-approvals-${today}-${Date.now()}-${randomUUID().slice(0, 8)}.json`
+  const archivedAt = new Date().toISOString()
+  const filename = `queue-approvals-${archivedAt.replace(/[:.]/g, '-')}-${randomUUID()}.json`
   const archivePath = path.join(archiveDirectory, filename)
   const archivePayload = {
-    archivedAt: new Date().toISOString(),
-    archivedFor: daysValue === 0 ? 'all processed requests' : `${daysValue} day(s)`,
+    archivedAt,
+    archivedFor: 'manual',
     total: old.length,
     records: old,
   }
-  await fs.writeFile(archivePath, JSON.stringify(archivePayload, null, 2), 'utf8')
+  await fs.writeFile(archivePath, JSON.stringify(archivePayload, null, 2), { encoding: 'utf8', flag: 'wx' })
 
-  db.requests = db.requests.filter((request) => !old.some((archived) => archived.id === request.id))
+  const archivedIds = new Set(old.map((request) => request.id))
+  db.requests = db.requests.filter((request) => !archivedIds.has(request.id))
   await writeDb(db)
 
-  return { count: old.length, filename, archivedAt: archivePayload.archivedAt }
+  return {
+    count: old.length,
+    filename,
+    archivedAt,
+    remaining: db.requests.filter((request) => ['Approved', 'Rejected'].includes(request.status)).length,
+  }
+}
+
+export async function restoreArchivedRequests(filename) {
+  if (typeof filename !== 'string' || !/^queue-approvals-[\w.-]+\.json$/.test(filename)) {
+    throw new TypeError('Only queue-approval archives can be restored.')
+  }
+  const archive = await getArchive(filename)
+  if (!archive) return null
+  if (!Array.isArray(archive.records)
+    || archive.records.some((record) => !record || typeof record.id !== 'string' || !['Approved', 'Rejected'].includes(record.status))) {
+    throw new TypeError('The selected archive is invalid or does not contain closed requests.')
+  }
+
+  const db = await readDb()
+  db.requests = db.requests || []
+  const activeIds = new Set(db.requests.map((request) => request.id))
+  const restorable = archive.records.filter((record) => {
+    if (activeIds.has(record.id)) return false
+    activeIds.add(record.id)
+    return true
+  })
+  const conflictCount = archive.records.length - restorable.length
+  if (restorable.length) {
+    db.requests.push(...restorable)
+    await writeDb(db)
+  }
+  return { restoredCount: restorable.length, conflictCount }
 }
 
 export async function clearData(options = { keepAdmins: true }) {

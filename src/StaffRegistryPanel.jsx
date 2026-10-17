@@ -1,8 +1,11 @@
-import { useEffect, useMemo, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { parseRegistryCsv, registryCsvTemplate } from './registry-csv'
+import { createResidentRegistryCsv } from './resident-registry-export'
 import './StaffRegistryPanel.css'
 
 const API_BASE = (import.meta.env.VITE_API_BASE || (import.meta.env.DEV ? 'http://localhost:3001/api' : '')).replace(/\/$/, '')
+const isScaleDemo = import.meta.env.VITE_REGISTRY_SCALE_DEMO === 'true'
+const maritalStatusOptions = ['Single', 'Married', 'Widowed', 'Live-in', 'Divorced', 'Annulled', 'Separate']
 
 const text = {
   en: {
@@ -11,10 +14,10 @@ const text = {
     sourceReviewTitle: 'Source list follow-up',
     sourceReviewHelp: 'Record an incomplete or unclear source sheet for follow-up. Do not include resident names or sensitive details; resolve the warning only after the source list is reconciled.',
     sourceReviewAttention: 'Source list is incomplete or contains unclear entries; staff review is required.',
-    sourceReviewLocation: 'Purok for follow-up',
+    sourceReviewLocation: 'Location for follow-up',
     sourceReviewOpen: 'Add warning',
     sourceReviewResolve: 'Mark resolved',
-    sourceReviewConfirm: 'Confirm the source list for this purok has been reconciled and all remaining residents have been accounted for?',
+    sourceReviewConfirm: 'Confirm the source list for this location has been reconciled and all remaining residents have been accounted for?',
     sourceReviewLoadError: 'Unable to load source-review warnings.',
     sourceReviewCreateError: 'Unable to add the source-review warning.',
     sourceReviewResolveError: 'Unable to resolve the source-review warning.',
@@ -22,26 +25,48 @@ const text = {
     sourceReviewAlreadyOpen: 'An open warning already exists for this location.',
     sourceReviewNone: 'No open source-review warnings.',
     privacyTitle: 'Personal information — authorized use only',
-    privacyNotice: 'Use these records only for authorized barangay duties. Enter only information needed from an official source; leave unknown fields blank. Do not share screenshots or exports outside approved work. New entries stay pending, and resident, import, verification, status, and source-warning changes are recorded in the audit log.',
+    privacyNotice: 'Use these records only for authorized barangay duties. Enter only information needed from an official source; leave unknown fields blank. Do not share screenshots or exports outside approved work. New entries stay pending, and resident, import, edit, verification, status, and source-warning changes are recorded in the audit log.',
     search: 'Search full name',
+    searchButton: 'Search',
+    clearSearch: 'Clear',
+    searchHint: 'Enter the start of each name word',
+    searchResultsTitle: 'Search results',
+    searchMatchZone: 'Search match',
     birthDate: 'Exact birthdate',
+    birthDateDetail: 'Birthdate',
     age: 'Exact age',
+    ageDetail: 'Age',
     zone: 'Zone',
+    residentDetails: 'Resident details',
+    viewResidentDetails: 'View all resident details',
+    closeDetails: 'Close details',
     allZones: 'All zones',
-    purok: 'Purok (exact)',
-    anyPurok: 'Any purok',
+    zoneTabLabel: 'Filter registry by zone',
+    zoneCardHelp: 'Search residents by name or details to highlight their zone. Select a zone to view its residents.',
+    zoneResidentCount: 'active, verified residents',
+    closeZone: 'Close zone',
+    birthdateAndAge: 'Birthdate and age',
+    editRecord: 'Edit record',
+    editResident: 'Edit resident record',
+    hiddenNameHint: 'Stored name is hidden. Enter a replacement only if it needs correction.',
+    saveChanges: 'Save changes',
+    cancelEdit: 'Cancel editing',
+    updateError: 'Unable to update the resident record.',
+    updateSuccess: 'Resident record updated.',
+    noZoneRecords: 'No resident records were found for this zone.',
+    maritalStatus: 'Marital status',
+    optional: 'Not provided',
+    occupation: 'Occupation',
+    household: 'Household',
     residents: 'Matching records',
     total: 'Verified population',
     male: 'Male',
     female: 'Female',
-    unclassified: 'Unclassified sex',
     households: 'Households',
-    byPurok: 'Population by purok / zone',
     byHousehold: 'Population by household',
     name: 'Resident',
     birthAndAge: 'Birthdate / age',
-    location: 'Purok / zone',
-    household: 'Household',
+    location: 'Zone',
     status: 'Verification',
     recordStatus: 'Record status',
     verified: 'Verified',
@@ -57,21 +82,20 @@ const text = {
     flagReview: 'Flag for review',
     noRecords: 'No matching registry records. The reference roster may not have been imported yet.',
     noGroup: 'No verified demographic records for this filter.',
-    loading: 'Loading resident records…',
+    loading: 'Searching resident records…',
     loadError: 'Unable to load the staff registry.',
+    demographicsLoadError: 'Unable to load the registry summary.',
     invalidSearch: 'Use a valid birthdate and an age from 0 to 130.',
     add: 'Add a resident for verification',
     firstName: 'First name',
     lastName: 'Last name',
     sex: 'Sex',
-    selectSex: 'Choose or leave unclassified',
+    selectSex: 'Choose sex',
     maleOption: 'Male',
     femaleOption: 'Female',
-    unclassifiedOption: 'Unclassified',
-    householdId: 'Household identifier',
-    address: 'Address / location description',
-    sourceRef: 'Source record reference',
-    sourceFile: 'Source filename',
+    sexNeedsCorrection: 'Sex needs correction from source',
+    sourceRef: 'Source record reference (optional)',
+    sourceFile: 'Source filename (optional)',
     save: 'Save as pending verification',
     confirmAdd: 'Continue after reviewing possible matches',
     cancelAdd: 'Cancel and review',
@@ -102,6 +126,12 @@ const text = {
     previewRows: 'Preview (first 10 records)',
     row: 'CSV row',
     noFile: 'Choose a CSV file to preview.',
+    exportSpreadsheet: 'Download Excel-ready CSV',
+    exportConfirm: 'Download all resident records matching the current filters? The file contains private resident information and must be kept in approved storage.',
+    exportError: 'Unable to export the resident spreadsheet.',
+    exportBusy: 'Preparing spreadsheet…',
+    exportDone: 'Spreadsheet downloaded. Keep it in approved storage and do not share it outside authorized work.',
+    exportLimit: 'Add filters to keep the export at or below 10,000 records.',
   },
   fil: {
     title: 'Talaan ng mga residente at sambahayan',
@@ -109,10 +139,10 @@ const text = {
     sourceReviewTitle: 'Follow-up sa source list',
     sourceReviewHelp: 'Itala para sa follow-up ang hindi kumpleto o hindi malinaw na source sheet. Huwag ilagay ang pangalan ng residente o sensitibong detalye; lutasin lamang ang babala kapag naitugma na ang source list.',
     sourceReviewAttention: 'Hindi kumpleto ang source list o may hindi malinaw na tala; kailangan itong suriin ng kawani.',
-    sourceReviewLocation: 'Purok na susuriin',
+    sourceReviewLocation: 'Lokasyong susuriin',
     sourceReviewOpen: 'Magdagdag ng babala',
     sourceReviewResolve: 'Markahang nalutas',
-    sourceReviewConfirm: 'Kumpirmahing naitugma na ang source list para sa purok na ito at naisama na ang lahat ng natitirang residente?',
+    sourceReviewConfirm: 'Kumpirmahing naitugma na ang source list para sa lokasyong ito at naisama na ang lahat ng natitirang residente?',
     sourceReviewLoadError: 'Hindi makuha ang mga babala sa pagsusuri ng source.',
     sourceReviewCreateError: 'Hindi maidagdag ang babala sa pagsusuri ng source.',
     sourceReviewResolveError: 'Hindi malutas ang babala sa pagsusuri ng source.',
@@ -120,26 +150,48 @@ const text = {
     sourceReviewAlreadyOpen: 'May bukas nang babala para sa lokasyong ito.',
     sourceReviewNone: 'Walang bukas na babala sa pagsusuri ng source.',
     privacyTitle: 'Personal na impormasyon — para lamang sa awtorisadong gawain',
-    privacyNotice: 'Gamitin lamang ang mga tala para sa awtorisadong tungkulin ng barangay. Ilagay lamang ang impormasyong kailangan mula sa opisyal na sanggunian; iwang blangko ang hindi alam. Huwag magbahagi ng screenshot o kopya sa labas ng aprubadong gawain. Mananatiling pending ang mga bagong tala, at itinatala sa audit log ang pagbabago ng resident, import, beripikasyon, status, at source-warning.',
+    privacyNotice: 'Gamitin lamang ang mga tala para sa awtorisadong tungkulin ng barangay. Ilagay lamang ang impormasyong kailangan mula sa opisyal na sanggunian; iwang blangko ang hindi alam. Huwag magbahagi ng screenshot o kopya sa labas ng aprubadong gawain. Mananatiling pending ang mga bagong tala, at itinatala sa audit log ang pagbabago ng resident, import, pag-edit, beripikasyon, status, at source-warning.',
     search: 'Hanapin ang buong pangalan',
+    searchHint: 'Ilagay ang paunang bahagi ng bawat salita sa pangalan',
+    searchButton: 'Maghanap',
+    clearSearch: 'I-clear',
+    searchResultsTitle: 'Mga resulta ng paghahanap',
+    searchMatchZone: 'Tugma sa paghahanap',
     birthDate: 'Eksaktong petsa ng kapanganakan',
+    birthDateDetail: 'Petsa ng kapanganakan',
     age: 'Eksaktong edad',
+    ageDetail: 'Edad',
     zone: 'Zone',
+    residentDetails: 'Detalye ng residente',
+    viewResidentDetails: 'Tingnan ang buong detalye ng residente',
+    closeDetails: 'Isara ang detalye',
     allZones: 'Lahat ng zone',
-    purok: 'Purok (eksakto)',
-    anyPurok: 'Anumang purok',
+    zoneTabLabel: 'Salain ang rehistro ayon sa zone',
+    zoneCardHelp: 'Maghanap ayon sa pangalan o detalye upang ma-highlight ang zone. Pumili ng zone upang makita ang mga residente nito.',
+    zoneResidentCount: 'aktibo at beripikadong residente',
+    closeZone: 'Isara ang zone',
+    birthdateAndAge: 'Petsa ng kapanganakan at edad',
+    editRecord: 'I-edit ang tala',
+    editResident: 'I-edit ang tala ng residente',
+    hiddenNameHint: 'Nakatago ang naka-save na pangalan. Maglagay lamang ng pamalit kung kailangang itama.',
+    saveChanges: 'I-save ang mga pagbabago',
+    cancelEdit: 'Kanselahin ang pag-edit',
+    updateError: 'Hindi ma-update ang tala ng residente.',
+    updateSuccess: 'Na-update ang tala ng residente.',
+    noZoneRecords: 'Walang nakitang tala ng residente para sa zone na ito.',
+    maritalStatus: 'Katayuan sa pag-aasawa',
+    optional: 'Hindi ibinigay',
+    occupation: 'Trabaho',
+    household: 'Sambahayan',
     residents: 'Mga katugmang tala',
     total: 'Beripikadong populasyon',
     male: 'Lalaki',
     female: 'Babae',
-    unclassified: 'Hindi natukoy na kasarian',
     households: 'Mga sambahayan',
-    byPurok: 'Populasyon ayon sa purok / zone',
     byHousehold: 'Populasyon ayon sa sambahayan',
     name: 'Residente',
     birthAndAge: 'Kapanganakan / edad',
-    location: 'Purok / zone',
-    household: 'Sambahayan',
+    location: 'Zone',
     status: 'Beripikasyon',
     recordStatus: 'Katayuan ng tala',
     verified: 'Beripikado',
@@ -155,21 +207,20 @@ const text = {
     flagReview: 'Ipa-review',
     noRecords: 'Walang tugmang tala. Maaaring hindi pa na-import ang talaan.',
     noGroup: 'Walang beripikadong demograpikong tala para sa filter na ito.',
-    loading: 'Kinukuha ang mga tala…',
+    loading: 'Hinahanap ang mga tala ng residente…',
     loadError: 'Hindi makuha ang pribadong talaan ng kawani.',
+    demographicsLoadError: 'Hindi makuha ang buod ng rehistro.',
     invalidSearch: 'Gumamit ng wastong petsa ng kapanganakan at edad na 0 hanggang 130.',
     add: 'Magdagdag ng residente para beripikahin',
     firstName: 'Pangalan',
     lastName: 'Apelyido',
     sex: 'Kasarian',
-    selectSex: 'Pumili o iwang hindi natukoy',
+    selectSex: 'Pumili ng kasarian',
     maleOption: 'Lalaki',
     femaleOption: 'Babae',
-    unclassifiedOption: 'Hindi natukoy',
-    householdId: 'ID ng sambahayan',
-    address: 'Tirahan / paglalarawan ng lokasyon',
-    sourceRef: 'Sanggunian ng pinagmulang tala',
-    sourceFile: 'Pangalan ng source file',
+    sexNeedsCorrection: 'Kailangang itama ang kasarian mula sa source',
+    sourceRef: 'Sanggunian ng pinagmulang tala (opsyonal)',
+    sourceFile: 'Pangalan ng source file (opsyonal)',
     save: 'I-save bilang naghihintay ng beripikasyon',
     confirmAdd: 'Ituloy matapos suriin ang mga posibleng tugma',
     cancelAdd: 'Kanselahin at suriin',
@@ -200,6 +251,12 @@ const text = {
     previewRows: 'Preview (unang 10 tala)',
     row: 'CSV row',
     noFile: 'Pumili ng CSV file para sa preview.',
+    exportSpreadsheet: 'I-download ang CSV para sa Excel',
+    exportConfirm: 'I-download ang lahat ng tala ng residente na tumutugma sa kasalukuyang mga filter? May pribadong impormasyon ang file at dapat itong itago sa aprubadong imbakan.',
+    exportError: 'Hindi ma-export ang spreadsheet ng rehistro.',
+    exportBusy: 'Inihahanda ang spreadsheet…',
+    exportDone: 'Na-download ang spreadsheet. Itago ito sa aprubadong imbakan at huwag ibahagi sa labas ng awtorisadong gawain.',
+    exportLimit: 'Magdagdag ng mga filter upang hindi lumampas sa 10,000 tala ang export.',
   },
 }
 
@@ -211,15 +268,33 @@ function formatDate(value, language) {
     : new Intl.DateTimeFormat(language === 'fil' ? 'fil-PH' : 'en-PH', { dateStyle: 'medium', timeZone: 'Asia/Manila' }).format(parsed)
 }
 
+function ResidentDetails({ resident, labels, language }) {
+  return (
+    <section className="registry-resident-quick-view" aria-label={labels.residentDetails}>
+      <h4>{[resident.firstName, resident.lastName].filter(Boolean).join(' ') || labels.name}</h4>
+      <dl>
+        <div><dt>{labels.birthDateDetail}</dt><dd>{formatDate(resident.birthDate, language) || labels.noDob}</dd></div>
+        <div><dt>{labels.ageDetail}</dt><dd>{resident.age === null || resident.age === undefined ? labels.noDob : resident.age}</dd></div>
+        <div><dt>{labels.zone}</dt><dd>{resident.zone ? `${labels.zone} ${resident.zone}` : labels.unassigned}</dd></div>
+        <div><dt>{labels.household}</dt><dd>{resident.household || resident.householdId || labels.unassigned}</dd></div>
+        <div><dt>{labels.sex}</dt><dd>{resident.sex || labels.noDob}</dd></div>
+        <div><dt>{labels.maritalStatus}</dt><dd>{resident.maritalStatus || labels.noDob}</dd></div>
+        <div><dt>{labels.occupation}</dt><dd>{resident.occupation || labels.noDob}</dd></div>
+        <div><dt>{labels.status}</dt><dd>{resident.verificationStatus === 'verified' ? labels.verified : resident.verificationStatus === 'needs_review' ? labels.needsReview : labels.pending}</dd></div>
+      </dl>
+    </section>
+  )
+}
+
 export default function StaffRegistryPanel({ language = 'en' }) {
   const labels = text[language] || text.en
   const [search, setSearch] = useState('')
   const [birthDate, setBirthDate] = useState('')
   const [age, setAge] = useState('')
   const [zone, setZone] = useState('')
-  const [purok, setPurok] = useState('')
-  const [debounced, setDebounced] = useState({ search: '', birthDate: '', age: '', zone: '', purok: '' })
+  const [debounced, setDebounced] = useState({ search: '', birthDate: '', age: '', zone: '' })
   const [records, setRecords] = useState([])
+  const [residentDetailsId, setResidentDetailsId] = useState(null)
   const [demographics, setDemographics] = useState(null)
   const [sourceReviews, setSourceReviews] = useState([])
   const [sourceReviewPurok, setSourceReviewPurok] = useState('')
@@ -232,6 +307,16 @@ export default function StaffRegistryPanel({ language = 'en' }) {
   const [pageSize] = useState(25)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const [demographicsError, setDemographicsError] = useState('')
+  const [selectedZone, setSelectedZone] = useState('')
+  const [editResident, setEditResident] = useState(null)
+  const [editBusy, setEditBusy] = useState(false)
+  const [editError, setEditError] = useState('')
+  const [editMessage, setEditMessage] = useState('')
+  const [editForm, setEditForm] = useState(null)
+  const residentDialogRef = useRef(null)
+  const closeResidentDialogRef = useRef(null)
+  const searchDebounceRef = useRef(null)
   const [formOpen, setFormOpen] = useState(false)
   const [formBusy, setFormBusy] = useState(false)
   const [formMessage, setFormMessage] = useState('')
@@ -248,20 +333,59 @@ export default function StaffRegistryPanel({ language = 'en' }) {
   const [importError, setImportError] = useState('')
   const [importMessage, setImportMessage] = useState('')
   const [importBusy, setImportBusy] = useState(false)
+  const [exportBusy, setExportBusy] = useState(false)
+  const [exportError, setExportError] = useState('')
+  const [exportMessage, setExportMessage] = useState('')
   const [refreshKey, setRefreshKey] = useState(0)
   const [form, setForm] = useState({
-    firstName: '', lastName: '', birthDate: '', sex: '', householdId: '', purok: '', zone: '', address: '', sourceReference: '', sourceFilename: '',
+    firstName: '', lastName: '', birthDate: '', sex: '', household: '', maritalStatus: '', zone: '', occupation: '', sourceReference: '', sourceFilename: '',
   })
 
-  const formValid = useMemo(() => form.firstName.trim() && form.lastName.trim(), [form.firstName, form.lastName])
-
+  const formValid = useMemo(() => (
+    form.firstName.trim()
+    && form.lastName.trim()
+    && ['Male', 'Female'].includes(form.sex)
+  ), [form.firstName, form.lastName, form.sex])
+  const queryPending = search.trim() !== debounced.search
+    || birthDate !== debounced.birthDate
+    || age !== debounced.age
+    || zone !== debounced.zone
+  const hasActiveFilters = Boolean(search.trim() || birthDate || age || zone)
+  const hasDebouncedFilters = Boolean(
+    debounced.search || debounced.birthDate || debounced.age || debounced.zone,
+  )
+  const matchedZones = useMemo(() => new Set(
+    hasActiveFilters && !queryPending
+      ? records.map((resident) => resident.zone).filter((residentZone) => residentZone !== null && residentZone !== undefined).map(String)
+      : [],
+  ), [hasActiveFilters, queryPending, records])
   useEffect(() => {
     const timer = window.setTimeout(() => {
+      searchDebounceRef.current = null
       setPage(1)
-      setDebounced({ search: search.trim(), birthDate, age, zone, purok: purok.trim() })
-    }, 300)
-    return () => window.clearTimeout(timer)
-  }, [search, birthDate, age, zone, purok])
+      setDebounced({
+        search: search.trim(),
+        birthDate,
+        age,
+        zone,
+      })
+    }, 150)
+    searchDebounceRef.current = timer
+    return () => {
+      window.clearTimeout(timer)
+      if (searchDebounceRef.current === timer) searchDebounceRef.current = null
+    }
+  }, [search, birthDate, age, zone])
+
+  useEffect(() => {
+    if (!selectedZone) return undefined
+    const dialog = residentDialogRef.current
+    if (dialog && !dialog.open) dialog.showModal()
+    closeResidentDialogRef.current?.focus()
+    return () => {
+      if (dialog?.open) dialog.close()
+    }
+  }, [selectedZone])
 
   useEffect(() => {
     let active = true
@@ -271,29 +395,33 @@ export default function StaffRegistryPanel({ language = 'en' }) {
       birthDate: debounced.birthDate,
       age: debounced.age,
       zone: debounced.zone,
-      purok: debounced.purok,
       page: String(page),
       pageSize: String(pageSize),
     })
-    const demographicParams = new URLSearchParams({ zone: debounced.zone, purok: debounced.purok })
     const load = async () => {
+      if (!hasDebouncedFilters || queryPending) {
+        setRecords([])
+        setTotal(0)
+        setResidentDetailsId(null)
+        setLoading(hasDebouncedFilters && queryPending)
+        setError('')
+        return
+      }
       setLoading(true)
       setError('')
       try {
-        const [residentResponse, demographicResponse] = await Promise.all([
-          fetch(`${API_BASE}/staff/residents?${params}`, { signal: controller.signal }),
-          fetch(`${API_BASE}/staff/demographics?${demographicParams}`, { signal: controller.signal }),
-        ])
-        const [residentData, demographicData] = await Promise.all([
-          residentResponse.json().catch(() => ({})),
-          demographicResponse.json().catch(() => ({})),
-        ])
+        const residentResponse = await fetch(`${API_BASE}/staff/residents?${params}`, { signal: controller.signal })
+        const residentData = await residentResponse.json().catch(() => ({}))
         if (!residentResponse.ok) throw new Error(residentData.message || labels.loadError)
-        if (!demographicResponse.ok) throw new Error(demographicData.message || labels.loadError)
         if (active) {
-          setRecords(Array.isArray(residentData.residents) ? residentData.residents : [])
+          const resultResidents = Array.isArray(residentData.residents) ? residentData.residents : []
+          setRecords(resultResidents)
           setTotal(Number(residentData.total) || 0)
-          setDemographics(demographicData)
+          const normalizeName = (value) => value.trim().toLocaleLowerCase().replace(/\s+/g, ' ')
+          const exactFullName = resultResidents.length === 1
+            && Number(residentData.total) === 1
+            && normalizeName(`${resultResidents[0].firstName || ''} ${resultResidents[0].lastName || ''}`) === normalizeName(debounced.search)
+          setResidentDetailsId(exactFullName ? resultResidents[0].id : null)
         }
       } catch (loadError) {
         if (loadError.name !== 'AbortError' && active) {
@@ -309,7 +437,34 @@ export default function StaffRegistryPanel({ language = 'en' }) {
       active = false
       controller.abort()
     }
-  }, [debounced, page, pageSize, labels.loadError, refreshKey])
+  }, [debounced, hasDebouncedFilters, page, pageSize, labels.loadError, queryPending, refreshKey])
+
+  useEffect(() => {
+    let active = true
+    const controller = new AbortController()
+    const params = new URLSearchParams()
+    const loadDemographics = async () => {
+      try {
+        const response = await fetch(`${API_BASE}/staff/demographics?${params}`, { signal: controller.signal })
+        const data = await response.json().catch(() => ({}))
+        if (!response.ok) throw new Error(data.message || labels.demographicsLoadError)
+        if (active) {
+          setDemographics(data)
+          setDemographicsError('')
+        }
+      } catch (loadError) {
+        if (loadError.name !== 'AbortError' && active) {
+          console.error('load resident registry summary failed', loadError)
+          setDemographicsError(loadError.message || labels.demographicsLoadError)
+        }
+      }
+    }
+    loadDemographics()
+    return () => {
+      active = false
+      controller.abort()
+    }
+  }, [labels.demographicsLoadError, refreshKey])
 
   useEffect(() => {
     let active = true
@@ -393,10 +548,10 @@ export default function StaffRegistryPanel({ language = 'en' }) {
           ...form,
           birthDate: form.birthDate || null,
           sex: form.sex || null,
-          householdId: form.householdId.trim() || null,
-          purok: form.purok.trim() || null,
+          household: form.household.trim() || null,
+          maritalStatus: form.maritalStatus.trim() || null,
           zone: form.zone || null,
-          address: form.address.trim() || null,
+          occupation: form.occupation.trim() || null,
           sourceReference: form.sourceReference.trim() || null,
           sourceFilename: form.sourceFilename.trim() || null,
           confirmPotentialMatch,
@@ -415,7 +570,7 @@ export default function StaffRegistryPanel({ language = 'en' }) {
       setReviewedMatches([])
       setConfirmMatchRequired(false)
       setFormMessage(data.created === false ? labels.alreadySaved : labels.saved)
-      setForm({ firstName: '', lastName: '', birthDate: '', sex: '', householdId: '', purok: '', zone: '', address: '', sourceReference: '', sourceFilename: '' })
+      setForm({ firstName: '', lastName: '', birthDate: '', sex: '', household: '', maritalStatus: '', zone: '', occupation: '', sourceReference: '', sourceFilename: '' })
       setPage(1)
       setRefreshKey((current) => current + 1)
       setSearch('')
@@ -428,44 +583,64 @@ export default function StaffRegistryPanel({ language = 'en' }) {
   }
   const submitResident = (event) => saveResident(event, false)
 
-  const updateVerification = async (resident, verificationStatus) => {
-    const message = verificationStatus === 'verified' ? labels.confirmVerify : labels.confirmFlag
-    if (!window.confirm(message)) return
-    setError('')
-    try {
-      const response = await fetch(`${API_BASE}/staff/residents/${encodeURIComponent(resident.id)}/verify`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ verificationStatus }),
-      })
-      const data = await response.json().catch(() => ({}))
-      if (!response.ok) throw new Error(data.message || labels.loadError)
-      setRecords((current) => current.map((item) => item.id === resident.id
-        ? { ...item, verificationStatus: data.resident.verificationStatus }
-        : item))
-      setRefreshKey((current) => current + 1)
-    } catch (verifyError) {
-      console.error('update resident verification failed', verifyError)
-      setError(verifyError.message || labels.loadError)
-    }
+  const beginResidentEdit = (resident) => {
+    setEditResident(resident)
+    setEditError('')
+    setEditMessage('')
+    setEditForm({
+      firstName: '',
+      lastName: '',
+      birthDate: resident.birthDate || '',
+      sex: resident.sex || '',
+      household: resident.household || resident.householdId || '',
+      zone: resident.zone ? String(resident.zone) : '',
+      maritalStatus: resident.maritalStatus || '',
+      occupation: resident.occupation || '',
+      sourceReference: resident.sourceReference || '',
+      sourceFilename: resident.sourceFilename || '',
+      verificationStatus: resident.verificationStatus || 'pending',
+      status: resident.status || 'active',
+    })
   }
 
-  const updateRecordStatus = async (resident, status) => {
-    if (!window.confirm(labels.confirmStatus)) return
-    setError('')
+  const saveResidentEdit = async (event) => {
+    event.preventDefault()
+    if (!editResident || !editForm) return
+    setEditBusy(true)
+    setEditError('')
+    setEditMessage('')
+    const updates = {
+      birthDate: editForm.birthDate || null,
+      household: editForm.household.trim() || null,
+      zone: editForm.zone || null,
+      maritalStatus: editForm.maritalStatus.trim() || null,
+      occupation: editForm.occupation.trim() || null,
+      sourceReference: editForm.sourceReference.trim() || null,
+      sourceFilename: editForm.sourceFilename.trim() || null,
+      status: editForm.status,
+      verificationStatus: editForm.verificationStatus,
+    }
+    if (editForm.firstName.trim()) updates.firstName = editForm.firstName.trim()
+    if (editForm.lastName.trim()) updates.lastName = editForm.lastName.trim()
+    if (editForm.sex) updates.sex = editForm.sex
     try {
-      const response = await fetch(`${API_BASE}/staff/residents/${encodeURIComponent(resident.id)}/status`, {
+      const response = await fetch(`${API_BASE}/staff/residents/${encodeURIComponent(editResident.id)}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status }),
+        body: JSON.stringify(updates),
       })
       const data = await response.json().catch(() => ({}))
-      if (!response.ok) throw new Error(data.message || labels.loadError)
-      setRecords((current) => current.map((item) => item.id === resident.id ? { ...item, status: data.resident.status } : item))
+      if (!response.ok) throw new Error(data.message || labels.updateError)
+      setRecords((current) => current.map((record) => record.id === editResident.id ? { ...record, ...data.resident } : record))
+      setEditMessage(labels.updateSuccess)
+      setEditResident(null)
+      setEditForm(null)
       setRefreshKey((current) => current + 1)
-    } catch (statusError) {
-      console.error('update resident registry status failed', statusError)
-      setError(statusError.message || labels.loadError)
+    } catch (updateError) {
+      console.error('update resident registry record failed', updateError)
+      setEditError(updateError.message || labels.updateError)
+    } finally {
+      setEditBusy(false)
     }
   }
 
@@ -547,17 +722,93 @@ export default function StaffRegistryPanel({ language = 'en' }) {
     URL.revokeObjectURL(url)
   }
 
-  const count = demographics?.overall || { total: 0, male: 0, female: 0, unclassified: 0, households: 0 }
+  const downloadResidentSpreadsheet = async () => {
+    if (exportBusy || queryPending || !window.confirm(labels.exportConfirm)) return
+    setExportBusy(true)
+    setExportError('')
+    setExportMessage('')
+    try {
+      const filters = {
+        search: debounced.search,
+        birthDate: debounced.birthDate,
+        age: debounced.age,
+        zone: debounced.zone,
+      }
+      const residents = []
+      let expectedTotal = null
+      for (let exportPage = 1; expectedTotal === null || residents.length < expectedTotal; exportPage += 1) {
+        const params = new URLSearchParams({ ...filters, page: String(exportPage), pageSize: '100' })
+        const response = await fetch(`${API_BASE}/staff/residents?${params}`)
+        const data = await response.json().catch(() => ({}))
+        if (!response.ok) throw new Error(data.message || labels.exportError)
+        if (!Array.isArray(data.residents) || !Number.isInteger(data.total) || data.total < 0) {
+          throw new Error(labels.exportError)
+        }
+        if (expectedTotal === null) expectedTotal = data.total
+        if (data.total !== expectedTotal || data.residents.length === 0 && residents.length < expectedTotal) {
+          throw new Error(labels.exportError)
+        }
+        if (expectedTotal > 10000) throw new Error(labels.exportLimit)
+        residents.push(...data.residents)
+      }
+      if (residents.length !== expectedTotal || new Set(residents.map((resident) => resident.id)).size !== residents.length) {
+        throw new Error(labels.exportError)
+      }
+      if (residents.length === 0) throw new Error(labels.noRecords)
+
+      const auditResponse = await fetch(`${API_BASE}/staff/residents/export-audit`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          count: residents.length,
+          grouping: 'zone_household_name',
+          format: 'csv',
+          filters: {
+            hasSearch: Boolean(filters.search),
+            hasBirthDate: Boolean(filters.birthDate),
+            hasAge: Boolean(filters.age),
+            hasZone: Boolean(filters.zone),
+            hasMaritalStatusFilter: false,
+            hasOccupationFilter: false,
+          },
+        }),
+      })
+      const auditData = await auditResponse.json().catch(() => ({}))
+      if (!auditResponse.ok) throw new Error(auditData.message || labels.exportError)
+
+      const csv = createResidentRegistryCsv(residents)
+      const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }))
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = `resident-registry-${new Date().toISOString().slice(0, 10)}.csv`
+      anchor.click()
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+      setExportMessage(labels.exportDone)
+    } catch (downloadError) {
+      console.error('download resident registry spreadsheet failed', downloadError)
+      setExportError(downloadError.message || labels.exportError)
+    } finally {
+      setExportBusy(false)
+    }
+  }
+
   const maxPage = Math.max(1, Math.ceil(total / pageSize))
 
   return (
     <section className="registry-panel" aria-labelledby="resident-registry-title">
+      {isScaleDemo && (
+        <aside className="registry-scale-demo-banner" role="note">
+          <strong>Synthetic scale demo — fictional records only</strong>
+          <span>This local preview uses a temporary isolated database. It is not connected to production or real resident information.</span>
+        </aside>
+      )}
       <div className="registry-panel-header">
         <div>
           <h2 id="resident-registry-title">{labels.title}</h2>
           <p>{labels.subtitle}</p>
         </div>
         <div className="registry-row-actions registry-toolbar-actions">
+          <button type="button" className="secondary-btn small" onClick={downloadResidentSpreadsheet} disabled={exportBusy || queryPending}>{exportBusy ? labels.exportBusy : labels.exportSpreadsheet}</button>
           <button type="button" className="secondary-btn small" onClick={() => setImportOpen((open) => !open)}>{labels.importTitle}</button>
           <button type="button" className="primary-btn small" onClick={() => { setFormOpen((open) => !open); setFormMessage(''); setFormError(''); setPotentialMatches([]); setReviewedMatches([]); setConfirmMatchRequired(false) }}>
             {formOpen ? labels.close : labels.add}
@@ -569,6 +820,55 @@ export default function StaffRegistryPanel({ language = 'en' }) {
         <strong>{labels.privacyTitle}</strong>
         <p>{labels.privacyNotice}</p>
       </aside>
+      {exportError && <p className="registry-message error" role="alert">{exportError}</p>}
+      {exportMessage && <p className="registry-message" role="status">{exportMessage}</p>}
+
+      <form className="registry-filters" onSubmit={(event) => {
+        event.preventDefault()
+        if (searchDebounceRef.current !== null) {
+          window.clearTimeout(searchDebounceRef.current)
+          searchDebounceRef.current = null
+        }
+        setPage(1)
+        setDebounced({
+          search: search.trim(),
+          birthDate,
+          age,
+          zone,
+        })
+      }}>
+        <label>{labels.search}
+          <input value={search} maxLength={120} onChange={(event) => { setSearch(event.target.value); setResidentDetailsId(null) }} placeholder={labels.searchHint} />
+        </label>
+        <label>{labels.birthDate}
+          <input type="date" value={birthDate} onChange={(event) => { setBirthDate(event.target.value); setResidentDetailsId(null) }} />
+        </label>
+        <label>{labels.age}
+          <input type="number" min="0" max="130" value={age} onChange={(event) => { setAge(event.target.value); setResidentDetailsId(null) }} />
+        </label>
+        <label>{labels.zone}
+          <select value={zone} onChange={(event) => { setZone(event.target.value); setResidentDetailsId(null) }}>
+            <option value="">{labels.allZones}</option>
+            {[1, 2, 3, 4, 5, 6, 7].map((number) => <option key={number} value={number}>{number}</option>)}
+          </select>
+        </label>
+        <div className="registry-row-actions registry-filter-actions">
+          <button type="submit" className="primary-btn small">{labels.searchButton}</button>
+          <button type="button" className="secondary-btn small" onClick={() => {
+            if (searchDebounceRef.current !== null) {
+              window.clearTimeout(searchDebounceRef.current)
+              searchDebounceRef.current = null
+            }
+            setSearch('')
+            setBirthDate('')
+            setAge('')
+            setZone('')
+            setPage(1)
+            setDebounced({ search: '', birthDate: '', age: '', zone: '' })
+            setResidentDetailsId(null)
+          }}>{labels.clearSearch}</button>
+        </div>
+      </form>
 
       <section className="registry-source-reviews" aria-labelledby="registry-source-review-title">
         <div className="registry-source-review-heading">
@@ -622,8 +922,8 @@ export default function StaffRegistryPanel({ language = 'en' }) {
                     <tr key={`${index}-${resident.firstName}-${resident.lastName}`}>
                       <td>{resident.firstName} {resident.lastName}</td>
                       <td>{resident.birthDate || labels.noDob}</td>
-                      <td>{resident.purok || (resident.zone ? `Zone ${resident.zone}` : labels.unassigned)}{resident.zone && resident.purok ? ` · Zone ${resident.zone}` : ''}</td>
-                      <td>{resident.householdId || labels.unassigned}</td>
+                      <td>{resident.zone ? `${labels.zone} ${resident.zone}` : labels.unassigned}</td>
+                      <td>{resident.household || resident.householdId || labels.unassigned}</td>
                     </tr>
                   ))}</tbody>
                 </table>
@@ -650,11 +950,11 @@ export default function StaffRegistryPanel({ language = 'en' }) {
           <label>{labels.firstName}<input value={form.firstName} maxLength={100} onChange={(event) => setForm((current) => ({ ...current, firstName: event.target.value }))} required /></label>
           <label>{labels.lastName}<input value={form.lastName} maxLength={100} onChange={(event) => setForm((current) => ({ ...current, lastName: event.target.value }))} required /></label>
           <label>{labels.birthDate}<input type="date" max={new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Manila', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date())} value={form.birthDate} onChange={(event) => setForm((current) => ({ ...current, birthDate: event.target.value }))} /></label>
-          <label>{labels.sex}<select value={form.sex} onChange={(event) => setForm((current) => ({ ...current, sex: event.target.value }))}><option value="">{labels.selectSex}</option><option value="Male">{labels.maleOption}</option><option value="Female">{labels.femaleOption}</option><option value="Unclassified">{labels.unclassifiedOption}</option></select></label>
-          <label>{labels.householdId}<input value={form.householdId} maxLength={100} onChange={(event) => setForm((current) => ({ ...current, householdId: event.target.value }))} /></label>
+          <label>{labels.sex}<select value={form.sex} onChange={(event) => setForm((current) => ({ ...current, sex: event.target.value }))} required><option value="">{labels.selectSex}</option><option value="Male">{labels.maleOption}</option><option value="Female">{labels.femaleOption}</option></select></label>
+          <label>{labels.household}<input value={form.household} maxLength={100} onChange={(event) => setForm((current) => ({ ...current, household: event.target.value }))} /></label>
           <label>{labels.zone}<select value={form.zone} onChange={(event) => setForm((current) => ({ ...current, zone: event.target.value }))}><option value="">{labels.unassigned}</option>{[1, 2, 3, 4, 5, 6, 7].map((number) => <option key={number} value={number}>{number}</option>)}</select></label>
-          <label>{labels.purok}<input value={form.purok} maxLength={100} onChange={(event) => setForm((current) => ({ ...current, purok: event.target.value }))} /></label>
-          <label>{labels.address}<input value={form.address} maxLength={255} onChange={(event) => setForm((current) => ({ ...current, address: event.target.value }))} /></label>
+          <label>{labels.maritalStatus}<select value={form.maritalStatus} onChange={(event) => setForm((current) => ({ ...current, maritalStatus: event.target.value }))}><option value="">{labels.optional}</option>{maritalStatusOptions.map((status) => <option key={status} value={status}>{status}</option>)}</select></label>
+          <label>{labels.occupation}<input value={form.occupation} maxLength={255} onChange={(event) => setForm((current) => ({ ...current, occupation: event.target.value }))} /></label>
           <label>{labels.sourceRef}<input value={form.sourceReference} maxLength={255} onChange={(event) => setForm((current) => ({ ...current, sourceReference: event.target.value }))} /></label>
           <label>{labels.sourceFile}<input value={form.sourceFilename} maxLength={255} onChange={(event) => setForm((current) => ({ ...current, sourceFilename: event.target.value }))} /></label>
           {formError && <p className="registry-message error" role="alert">{formError}</p>}
@@ -662,7 +962,7 @@ export default function StaffRegistryPanel({ language = 'en' }) {
           {potentialMatches.length > 0 && (
             <div className="registry-message warning" role="alert">
               <strong>{labels.duplicate}</strong>
-              <ul>{potentialMatches.map((match) => <li key={match.id}>{match.firstName} {match.lastName} · {formatDate(match.birthDate, language) || labels.noDob} · {match.purok || (match.zone ? `Zone ${match.zone}` : labels.unassigned)} · {match.verificationStatus === 'verified' ? labels.verified : match.verificationStatus === 'needs_review' ? labels.needsReview : labels.pending}</li>)}</ul>
+              <ul>{potentialMatches.map((match) => <li key={match.id}>{match.firstName} {match.lastName} · {formatDate(match.birthDate, language) || labels.noDob} · {match.zone ? `Zone ${match.zone}` : labels.unassigned} · {match.verificationStatus === 'verified' ? labels.verified : match.verificationStatus === 'needs_review' ? labels.needsReview : labels.pending}</li>)}</ul>
               {confirmMatchRequired && <div className="registry-row-actions"><button type="button" className="primary-btn small" disabled={formBusy} onClick={() => saveResident(null, true)}>{labels.confirmAdd}</button><button type="button" className="secondary-btn small" disabled={formBusy} onClick={() => { setConfirmMatchRequired(false); setPotentialMatches([]) }}>{labels.cancelAdd}</button></div>}
             </div>
           )}
@@ -670,62 +970,156 @@ export default function StaffRegistryPanel({ language = 'en' }) {
         </form>
       )}
 
-      <div className="registry-filters" aria-label={labels.title}>
-        <label>{labels.search}<input type="search" value={search} onChange={(event) => setSearch(event.target.value)} /></label>
-        <label>{labels.birthDate}<input type="date" value={birthDate} onChange={(event) => setBirthDate(event.target.value)} /></label>
-        <label>{labels.age}<input type="number" min="0" max="130" inputMode="numeric" value={age} onChange={(event) => setAge(event.target.value)} /></label>
-        <label>{labels.zone}<select value={zone} onChange={(event) => { setZone(event.target.value); setPurok('') }}><option value="">{labels.allZones}</option>{[1, 2, 3, 4, 5, 6, 7].map((number) => <option key={number} value={number}>{number}</option>)}</select></label>
-        <label>{labels.purok}<input value={purok} onChange={(event) => setPurok(event.target.value)} /></label>
-      </div>
-      {age !== '' && (!/^\d+$/.test(age) || Number(age) > 130) && <p className="registry-message error" role="alert">{labels.invalidSearch}</p>}
-
       {error && <p className="registry-message error" role="alert">{error}</p>}
-      <div className="registry-summary-grid" aria-label={labels.total}>
-        <article><span>{labels.total}</span><strong>{count.total}</strong></article>
-        <article><span>{labels.male}</span><strong>{count.male}</strong></article>
-        <article><span>{labels.female}</span><strong>{count.female}</strong></article>
-        <article><span>{labels.unclassified}</span><strong>{count.unclassified}</strong></article>
-        <article><span>{labels.households}</span><strong>{count.households}</strong></article>
+      {demographicsError && <p className="registry-message error" role="alert">{demographicsError}</p>}
+      <p className="registry-zone-help">{labels.zoneCardHelp}</p>
+      <div className="registry-zone-cards" role="group" aria-label={labels.zoneTabLabel}>
+        {[1, 2, 3, 4, 5, 6, 7].map((number) => {
+          const value = String(number)
+          const zoneResidents = demographics?.byPurok
+            ?.filter((group) => Number(group.zone) === number)
+            .reduce((sum, group) => sum + Number(group.total || 0), 0) || 0
+          const hasSearchMatch = matchedZones.has(value)
+          return (
+            <button
+              key={value}
+              type="button"
+              className={`registry-zone-card${hasSearchMatch ? ' is-search-match' : ''}`}
+              aria-label={`${labels.zone} ${number}: ${zoneResidents} ${labels.zoneResidentCount}${hasSearchMatch ? `, ${labels.searchMatchZone}` : ''}`}
+              onClick={() => {
+                setZone(value)
+                setSelectedZone(value)
+                setResidentDetailsId(null)
+                setPage(1)
+                setEditResident(null)
+              }}
+            >
+              <strong>{labels.zone} {number}</strong>
+              <span>{zoneResidents}</span>
+              <small>{labels.zoneResidentCount}</small>
+              {hasSearchMatch && <small className="registry-zone-match-label">{labels.searchMatchZone}</small>}
+            </button>
+          )
+        })}
       </div>
-
-      {loading && <p className="registry-message" role="status" aria-live="polite">{labels.loading}</p>}
-      {!loading && !error && records.length === 0 && <p className="registry-message" role="status">{labels.noRecords}</p>}
-      {records.length > 0 && (
-        <div className="registry-table-wrap">
-          <table className="registry-table">
-            <thead><tr><th scope="col">{labels.name}</th><th scope="col">{labels.birthAndAge}</th><th scope="col">{labels.location}</th><th scope="col">{labels.household}</th><th scope="col">{labels.status}</th><th scope="col">{labels.recordStatus}</th><th scope="col"><span className="sr-only">Actions</span></th></tr></thead>
-            <tbody>{records.map((resident) => (
-              <tr key={resident.id}>
-                <td>{resident.firstName} {resident.lastName}<small>{resident.sex || labels.unclassifiedOption}</small></td>
-                <td>{formatDate(resident.birthDate, language) || labels.noDob}<small>{resident.age === null ? labels.noDob : `${resident.age}`}</small></td>
-                <td>{resident.purok || (resident.zone ? `Zone ${resident.zone}` : labels.unassigned)}</td>
-                <td>{resident.householdId || labels.unassigned}</td>
-                <td><span className={`registry-status is-${resident.verificationStatus}`}>{resident.verificationStatus === 'verified' ? labels.verified : resident.verificationStatus === 'needs_review' ? labels.needsReview : labels.pending}</span></td>
-                <td><label className="registry-status-select"><span className="sr-only">{labels.updateStatus}: {resident.firstName} {resident.lastName}</span><select value={resident.status} onChange={(event) => updateRecordStatus(resident, event.target.value)}><option value="active">{labels.active}</option><option value="inactive">{labels.inactive}</option><option value="deceased">{labels.deceased}</option><option value="archived">{labels.archived}</option></select></label></td>
-                <td>{resident.verificationStatus !== 'verified' && <div className="registry-row-actions"><button type="button" className="secondary-btn tiny" onClick={() => updateVerification(resident, 'verified')}>{labels.markVerified}</button><button type="button" className="secondary-btn tiny" onClick={() => updateVerification(resident, 'needs_review')}>{labels.flagReview}</button></div>}</td>
-              </tr>
-            ))}</tbody>
-          </table>
-          <div className="registry-pagination">
-            <span>{labels.page} {page} {labels.of} {maxPage} · {total}</span>
-            <div><button type="button" className="secondary-btn small" disabled={page <= 1 || loading} onClick={() => setPage((current) => current - 1)}>{labels.previous}</button><button type="button" className="secondary-btn small" disabled={page >= maxPage || loading} onClick={() => setPage((current) => current + 1)}>{labels.next}</button></div>
-          </div>
-        </div>
+      {hasActiveFilters && !selectedZone && (
+        <section className="registry-search-results" aria-labelledby="registry-search-results-title">
+          <h3 id="registry-search-results-title">{labels.searchResultsTitle}</h3>
+          {queryPending || loading ? (
+            <p className="registry-message" role="status" aria-live="polite">{labels.loading}</p>
+          ) : records.length ? (
+            <>
+              <p>{total} {labels.residents}</p>
+              <div className="registry-table-wrap">
+                <table className="registry-table registry-search-results-table">
+                  <thead><tr><th scope="col">{labels.name}</th><th scope="col">{labels.birthAndAge}</th><th scope="col">{labels.household}</th><th scope="col">{labels.location}</th></tr></thead>
+                  <tbody>{records.map((resident) => {
+                    const residentName = [resident.firstName, resident.lastName].filter(Boolean).join(' ') || labels.name
+                    const detailsOpen = residentDetailsId === resident.id
+                    return (
+                      <Fragment key={resident.id}>
+                        <tr>
+                          <td><button type="button" className="registry-resident-link" aria-expanded={detailsOpen} onClick={() => setResidentDetailsId(detailsOpen ? null : resident.id)}>{residentName}</button></td>
+                          <td>{formatDate(resident.birthDate, language) || labels.noDob} · {resident.age === null || resident.age === undefined ? labels.noDob : resident.age}</td>
+                          <td>{resident.household || resident.householdId || labels.unassigned}</td>
+                          <td>{resident.zone ? `${labels.zone} ${resident.zone}` : labels.unassigned}</td>
+                        </tr>
+                        {detailsOpen && <tr key={`${resident.id}-details`}><td colSpan={4}><ResidentDetails resident={resident} labels={labels} language={language} /></td></tr>}
+                      </Fragment>
+                    )
+                  })}</tbody>
+                </table>
+              </div>
+              <div className="registry-pagination">
+                <span>{labels.page} {page} {labels.of} {maxPage} · {total}</span>
+                <div>
+                  <button type="button" className="secondary-btn small" disabled={page <= 1 || loading} onClick={() => setPage((current) => current - 1)}>{labels.previous}</button>
+                  <button type="button" className="secondary-btn small" disabled={page >= maxPage || loading} onClick={() => setPage((current) => current + 1)}>{labels.next}</button>
+                </div>
+              </div>
+            </>
+          ) : (
+            <p className="registry-message">{labels.noRecords}</p>
+          )}
+        </section>
       )}
-      <div className="registry-breakdowns">
-        <section>
-          <h3>{labels.byPurok}</h3>
-          {demographics?.byPurok?.length ? (
-            <div className="registry-table-wrap"><table className="registry-table"><thead><tr><th>{labels.location}</th><th>{labels.total}</th><th>{labels.male}</th><th>{labels.female}</th><th>{labels.unclassified}</th><th>{labels.households}</th></tr></thead><tbody>{demographics.byPurok.map((group) => <tr key={`${group.zone ?? 'none'}-${group.purok || 'none'}`}><td>{group.label}</td><td>{group.total}</td><td>{group.male}</td><td>{group.female}</td><td>{group.unclassified}</td><td>{group.households}</td></tr>)}</tbody></table></div>
-          ) : <p>{labels.noGroup}</p>}
-        </section>
-        <section>
-          <h3>{labels.byHousehold}</h3>
-          {demographics?.byHousehold?.length ? (
-            <div className="registry-table-wrap"><table className="registry-table"><thead><tr><th>{labels.household}</th><th>{labels.location}</th><th>{labels.total}</th><th>{labels.male}</th><th>{labels.female}</th><th>{labels.unclassified}</th></tr></thead><tbody>{demographics.byHousehold.map((group) => <tr key={`${group.zone ?? 'none'}-${group.purok || 'none'}-${group.householdId}`}><td>{group.householdId}</td><td>{group.purok ? `${group.purok}${group.zone ? ` · Zone ${group.zone}` : ''}` : (group.zone ? `Zone ${group.zone}` : labels.unassigned)}</td><td>{group.total}</td><td>{group.male}</td><td>{group.female}</td><td>{group.unclassified}</td></tr>)}</tbody></table></div>
-          ) : <p>{labels.noGroup}</p>}
-        </section>
-      </div>
+      {(loading || (selectedZone && queryPending)) && <p className="registry-message" role="status" aria-live="polite">{labels.loading}</p>}
+      {selectedZone && (
+        <dialog
+          ref={residentDialogRef}
+          className="registry-resident-modal registry-zone-modal"
+          aria-labelledby="registry-zone-modal-title"
+          onCancel={(event) => { event.preventDefault(); residentDialogRef.current?.close() }}
+          onClose={() => {
+            setSelectedZone('')
+            setZone('')
+            setEditResident(null)
+            setEditForm(null)
+          }}
+          onClick={(event) => { if (event.target === event.currentTarget) residentDialogRef.current?.close() }}
+        >
+          <div className="registry-resident-modal-heading">
+            <div><h3 id="registry-zone-modal-title">{labels.zone} {selectedZone}</h3>{editResident && <p>{labels.editResident}</p>}</div>
+            <button ref={closeResidentDialogRef} type="button" className="secondary-btn small" onClick={() => {
+              if (editResident) {
+                setEditResident(null)
+                setEditForm(null)
+                setEditError('')
+              } else {
+                residentDialogRef.current?.close()
+              }
+            }}>{editResident ? labels.cancelEdit : labels.closeZone}</button>
+          </div>
+          {editResident && editForm ? (
+            <form className="registry-entry-form registry-edit-form" onSubmit={saveResidentEdit}>
+              <p className="registry-field-help">{labels.hiddenNameHint}</p>
+              <label>{labels.firstName}<input value={editForm.firstName} maxLength={100} placeholder="••••••••" onChange={(event) => setEditForm((current) => ({ ...current, firstName: event.target.value }))} /></label>
+              <label>{labels.lastName}<input value={editForm.lastName} maxLength={100} placeholder="••••••••" onChange={(event) => setEditForm((current) => ({ ...current, lastName: event.target.value }))} /></label>
+              <label>{labels.birthDate}<input type="date" max={new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Manila', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date())} value={editForm.birthDate} onChange={(event) => setEditForm((current) => ({ ...current, birthDate: event.target.value }))} /></label>
+              <label>{labels.sex}<select value={editForm.sex} onChange={(event) => setEditForm((current) => ({ ...current, sex: event.target.value }))}><option value="">{labels.selectSex}</option><option value="Male">{labels.maleOption}</option><option value="Female">{labels.femaleOption}</option></select></label>
+              <label>{labels.household}<input value={editForm.household} maxLength={100} onChange={(event) => setEditForm((current) => ({ ...current, household: event.target.value }))} /></label>
+              <label>{labels.zone}<select value={editForm.zone} onChange={(event) => setEditForm((current) => ({ ...current, zone: event.target.value }))}><option value="">{labels.unassigned}</option>{[1, 2, 3, 4, 5, 6, 7].map((number) => <option key={number} value={number}>{number}</option>)}</select></label>
+              <label>{labels.maritalStatus}<select value={editForm.maritalStatus} onChange={(event) => setEditForm((current) => ({ ...current, maritalStatus: event.target.value }))}><option value="">{labels.optional}</option>{maritalStatusOptions.map((status) => <option key={status} value={status}>{status}</option>)}</select></label>
+              <label>{labels.occupation}<input value={editForm.occupation} maxLength={255} onChange={(event) => setEditForm((current) => ({ ...current, occupation: event.target.value }))} /></label>
+              <label>{labels.sourceRef}<input value={editForm.sourceReference} maxLength={255} onChange={(event) => setEditForm((current) => ({ ...current, sourceReference: event.target.value }))} /></label>
+              <label>{labels.sourceFile}<input value={editForm.sourceFilename} maxLength={255} onChange={(event) => setEditForm((current) => ({ ...current, sourceFilename: event.target.value }))} /></label>
+              <label>{labels.status}<select value={editForm.verificationStatus} onChange={(event) => setEditForm((current) => ({ ...current, verificationStatus: event.target.value }))}><option value="pending">{labels.pending}</option><option value="verified">{labels.verified}</option><option value="needs_review">{labels.needsReview}</option></select></label>
+              <label>{labels.recordStatus}<select value={editForm.status} onChange={(event) => setEditForm((current) => ({ ...current, status: event.target.value }))}><option value="active">{labels.active}</option><option value="inactive">{labels.inactive}</option><option value="deceased">{labels.deceased}</option><option value="archived">{labels.archived}</option></select></label>
+              {editError && <p className="registry-message error" role="alert">{editError}</p>}
+              <div className="registry-row-actions registry-edit-actions">
+                <button type="submit" className="primary-btn small" disabled={editBusy}>{editBusy ? labels.saving : labels.saveChanges}</button>
+                <button type="button" className="secondary-btn small" disabled={editBusy} onClick={() => { setEditResident(null); setEditForm(null); setEditError('') }}>{labels.cancelEdit}</button>
+              </div>
+            </form>
+          ) : (
+            <>
+              {editMessage && <p className="registry-message" role="status">{editMessage}</p>}
+              {loading ? <p className="registry-message" role="status">{labels.loading}</p> : records.length ? (
+                <div className="registry-zone-resident-list">
+                  {records.map((resident) => {
+                    const residentName = [resident.firstName, resident.lastName].filter(Boolean).join(' ') || labels.name
+                    return (
+                      <article key={resident.id} className="registry-zone-resident">
+                        <div>
+                          <button type="button" className="registry-resident-link" aria-expanded={residentDetailsId === resident.id} onClick={() => setResidentDetailsId(residentDetailsId === resident.id ? null : resident.id)}>{residentName}</button>
+                          <span>{formatDate(resident.birthDate, language) || labels.noDob} · {resident.age === null ? labels.noDob : `${resident.age}`}</span>
+                          {resident.zone && <small>{labels.zone} {resident.zone}</small>}
+                          {residentDetailsId === resident.id && <ResidentDetails resident={resident} labels={labels} language={language} />}
+                        </div>
+                        <button type="button" className="secondary-btn small" onClick={() => beginResidentEdit(resident)}>{labels.editRecord}</button>
+                      </article>
+                    )
+                  })}
+                  <div className="registry-pagination">
+                    <span>{labels.page} {page} {labels.of} {maxPage} · {total}</span>
+                    <div><button type="button" className="secondary-btn small" disabled={page <= 1 || loading} onClick={() => setPage((current) => current - 1)}>{labels.previous}</button><button type="button" className="secondary-btn small" disabled={page >= maxPage || loading} onClick={() => setPage((current) => current + 1)}>{labels.next}</button></div>
+                  </div>
+                </div>
+              ) : !loading && <p className="registry-message">{labels.noZoneRecords}</p>}
+            </>
+          )}
+        </dialog>
+      )}
     </section>
   )
 }

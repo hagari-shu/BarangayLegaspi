@@ -2,7 +2,7 @@ services:
   - type: web
     name: brgy-legaspi-laravel
     runtime: docker
-    plan: free
+    plan: 0.5c-1g
     region: singapore
     dockerfilePath: ./laravel-api/Dockerfile
     dockerContext: ./laravel-api
@@ -16,6 +16,8 @@ services:
         sync: false
       - key: APP_TIMEZONE
         value: Asia/Manila
+      - key: DB_SSLMODE
+        value: require
       - key: JWT_SECRET
         sync: false
       - key: DATABASE_URL
@@ -26,5 +28,15 @@ services:
         sync: false
       - key: CORS_ORIGINS
         sync: false
-      - key: PUBLIC_CONTENT_API_BASE
-        value: https://barangaylegaspi.onrender.com/api
+      - key: OBJECT_STORAGE_ENDPOINT
+        sync: false
+      - key: OBJECT_STORAGE_REGION
+        value: auto
+      - key: OBJECT_STORAGE_BUCKET
+        sync: false
+      - key: OBJECT_STORAGE_ACCESS_KEY_ID
+        sync: false
+      - key: OBJECT_STORAGE_SECRET_ACCESS_KEY
+        sync: false
+      - key: OBJECT_STORAGE_FORCE_PATH_STYLE
+        value: "false"

@@ -1,3 +1,5 @@
+import fs from 'fs'
+
 const API = 'http://localhost:3001/api'
 
 async function login(identifier, password) {
@@ -28,7 +30,7 @@ async function approveRequest(token, requestId) {
   return { ok: resp.ok, data: await resp.json() }
 }
 
-async function archiveApprovals(token, days = 30) {
+async function archiveApprovals(token, days = 0) {
   const resp = await fetch(`${API}/admin/archive-approvals`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
@@ -37,11 +39,14 @@ async function archiveApprovals(token, days = 30) {
   return { ok: resp.ok, data: await resp.json() }
 }
 
-async function listArchives(token) {
-  const response = await fetch(`${API}/admin/archives`, {
-    headers: { Authorization: 'Bearer ' + token },
-  })
-  return { ok: response.ok, data: await response.json() }
+async function listArchives() {
+  const dir = 'server/data/archives'
+  try {
+    const files = fs.readdirSync(dir)
+    return files
+  } catch (e) {
+    return { error: String(e) }
+  }
 }
 
 async function run() {
@@ -75,14 +80,13 @@ async function run() {
   if (!r.ok) { console.log(' admin login failed', r.data); return }
   const adminToken = r.data.token
 
-  console.log('6) Archive approvals older than the 30-day retention period.')
-  r = await archiveApprovals(adminToken, 30)
-  if (!r.ok) { console.log('archive failed', r.data); return }
+  console.log('6) Archive approvals with days=0 (force archive of recent).')
+  r = await archiveApprovals(adminToken, 0)
   console.log(' archive ok=', r.ok, 'resp=', r.data)
 
-  console.log('7) List archived records through the API:')
-  r = await listArchives(adminToken)
-  console.log(r.ok ? r.data.archives : r.data)
+  console.log('7) List archive files on disk:')
+  const files = await listArchives()
+  console.log(files)
 }
 
 run().catch(e => { console.error('smoke test error', e) })

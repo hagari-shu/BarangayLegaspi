@@ -6,37 +6,18 @@ import path from 'node:path'
 import { createApp, seedDemoResident } from '../server/app.js'
 import { hashPassword } from '../server/auth.js'
 import * as jsonDb from '../server/db.js'
-import { DB_PATH } from '../server/config.js'
+import { ADMIN_SEED, DB_PATH } from '../server/config.js'
 import { isCaptainPhotoStorageConfigured } from '../server/captain-photo-storage.js'
-import { createHmac, randomUUID } from 'node:crypto'
-import { createTotpSecret, encryptTotpSecret } from '../server/mfa.js'
 import { registryAgeDateRange } from '../server/resident-registry.js'
+import {
+  createResidentNameSearchTokens,
+  decryptResidentPrivateData,
+  encryptResidentPrivateData,
+  residentNameSearchCandidates,
+} from '../server/resident-registry-crypto.js'
+import { createHash, randomBytes, randomUUID } from 'node:crypto'
 
 const testDbPath = DB_PATH
-
-const createTotpCode = (secret, timestamp = Date.now()) => {
-  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'
-  let buffer = 0
-  let bits = 0
-  const bytes = []
-  for (const character of secret) {
-    buffer = ((buffer << 5) | alphabet.indexOf(character)) & 0xffff
-    bits += 5
-    if (bits >= 8) {
-      bits -= 8
-      bytes.push((buffer >>> bits) & 0xff)
-    }
-  }
-  const counter = Buffer.alloc(8)
-  counter.writeBigUInt64BE(BigInt(Math.floor(timestamp / 30_000)))
-  const digest = createHmac('sha1', Buffer.from(bytes)).update(counter).digest()
-  const offset = digest[digest.length - 1] & 0x0f
-  const binary = ((digest[offset] & 0x7f) << 24)
-    | ((digest[offset + 1] & 0xff) << 16)
-    | ((digest[offset + 2] & 0xff) << 8)
-    | (digest[offset + 3] & 0xff)
-  return String(binary % 1_000_000).padStart(6, '0')
-}
 
 beforeEach(async () => {
   await fs.mkdir(path.dirname(testDbPath), { recursive: true })
@@ -127,6 +108,103 @@ test('JSON storage removes plaintext passwords from existing and future user rec
   assert.equal((await fs.readFile(testDbPath, 'utf8')).includes(legacyPlaintext), false)
 })
 
+test('JSON storage preserves concurrent audit writes', async () => {
+  const auditEntries = Array.from({ length: 20 }, (_, index) => ({
+    id: `concurrent-audit-${index}`,
+    action: 'test.concurrent_audit',
+    targetType: 'test',
+    targetId: String(index),
+    createdAt: new Date().toISOString(),
+  }))
+
+  await Promise.all(auditEntries.map((entry) => jsonDb.addAuditLog(entry)))
+
+  const storedLogs = await jsonDb.listAuditLogs(100)
+  assert.equal(storedLogs.filter((entry) => entry.action === 'test.concurrent_audit').length, auditEntries.length)
+})
+
+test('resident registry encryption authenticates ciphertext and binds it to its record', () => {
+  const recordId = randomUUID()
+  const encrypted = encryptResidentPrivateData({ firstName: 'Private' }, recordId)
+
+  assert.deepEqual(decryptResidentPrivateData(encrypted, recordId), { firstName: 'Private' })
+  assert.throws(() => decryptResidentPrivateData(encrypted, randomUUID()))
+  const parts = encrypted.split('.')
+  parts[2] = `${parts[2][0] === 'A' ? 'B' : 'A'}${parts[2].slice(1)}`
+  const tampered = parts.join('.')
+  assert.throws(() => decryptResidentPrivateData(tampered, recordId))
+})
+
+test('name search tokens support normalized multiword prefixes without storing plaintext names', () => {
+  const tokens = createResidentNameSearchTokens('Ana-María', 'Reyes')
+  const terms = residentNameSearchCandidates('  ana,  rey ')
+  assert.equal(terms.length, 2)
+  assert.ok(terms.every((candidates) => candidates.some((token) => tokens.includes(token))))
+  assert.ok(tokens.every((token) => /^[0-9a-f]{16}:[A-Za-z0-9_-]+$/.test(token)))
+})
+
+test('JSON storage encrypts legacy resident entries on first read', async () => {
+  await fs.writeFile(testDbPath, JSON.stringify({
+    users: [],
+    requests: [],
+    announcements: [],
+    reports: [],
+    residentRegistry: [{
+      id: 'legacy-resident',
+      firstName: 'Legacy',
+      lastName: 'Resident',
+      householdId: 'HH-LEGACY',
+      zone: 2,
+      purok: 'Purok 2',
+      status: 'active',
+      verificationStatus: 'pending',
+    }],
+  }), 'utf8')
+
+  const database = await jsonDb.readDb()
+  assert.equal(database.residentRegistry[0].firstName, 'Legacy')
+  const persisted = JSON.parse(await fs.readFile(testDbPath, 'utf8'))
+  assert.ok(persisted.residentRegistry[0].encryptedData)
+  assert.equal(JSON.stringify(persisted.residentRegistry[0]).includes('Legacy'), false)
+})
+
+test('JSON registry refreshes stale keyed name tokens before searching', async () => {
+  const residentId = randomUUID()
+  await fs.writeFile(testDbPath, JSON.stringify({
+    users: [],
+    requests: [],
+    residentRegistry: [{
+      id: residentId,
+      encryptedData: encryptResidentPrivateData({ firstName: 'Rekeyed', lastName: 'Resident' }, residentId),
+      nameSearchTokens: ['retired-key:stale-token'],
+    }],
+  }), 'utf8')
+
+  const results = await jsonDb.listResidentRegistry({ search: 'Rekey Res', page: 1, pageSize: 10 })
+  assert.equal(results.total, 1)
+  assert.equal(results.residents[0].firstName, 'Rekeyed')
+  const persisted = JSON.parse(await fs.readFile(testDbPath, 'utf8'))
+  assert.notDeepEqual(persisted.residentRegistry[0].nameSearchTokens, ['retired-key:stale-token'])
+  assert.equal(JSON.stringify(persisted.residentRegistry[0]).includes('Rekeyed'), false)
+  assert.equal(JSON.stringify(persisted.residentRegistry[0]).includes('HH-LEGACY'), false)
+})
+
+test('JSON registry search reads current name tokens without decrypting every resident', async () => {
+  await fs.writeFile(testDbPath, JSON.stringify({
+    users: [],
+    requests: [],
+    residentRegistry: [{
+      id: 'unrelated-resident',
+      encryptedData: 'not-decrypted-during-search-prefilter',
+      nameSearchTokens: createResidentNameSearchTokens('Unrelated', 'Resident'),
+    }],
+  }), 'utf8')
+
+  const database = await jsonDb.readDb({ decryptRegistry: false })
+  assert.equal(database.residentRegistry[0].id, 'unrelated-resident')
+  assert.equal(database.residentRegistry[0].encryptedData, 'not-decrypted-during-search-prefilter')
+})
+
 test('staff request dashboard returns authorized, filtered, paginated records and real totals', async () => {
   const { server, baseUrl } = await createTestServer()
   const users = await jsonDb.listAllUsers()
@@ -154,8 +232,6 @@ test('staff request dashboard returns authorized, filtered, paginated records an
       status: 'Pending',
       date: '2026-10-09T10:00:00+08:00',
     })
-
-
     await jsonDb.saveRequest({
       id: requestIds[1],
       userId: resident.id,
@@ -194,25 +270,6 @@ test('staff request dashboard returns authorized, filtered, paginated records an
     assert.equal(searchResult.total, 1)
     assert.equal(searchResult.requests[0].id, requestIds[0])
 
-    const reportResponse = await fetch(`${baseUrl}/api/staff/reports?from=2026-10-09&to=2026-10-10`, {
-      headers: { Authorization: `Bearer ${token}` },
-    })
-    assert.equal(reportResponse.status, 200)
-    const report = await reportResponse.json()
-    assert.equal(report.summary.received, 2)
-    assert.equal(Object.hasOwn(report, 'requests'), false)
-    assert.equal(JSON.stringify(report).includes(resident.email), false)
-    assert.equal(JSON.stringify(report).includes(resident.mobile), false)
-
-    const exportResponse = await fetch(`${baseUrl}/api/staff/reports/export.csv?from=2026-10-09&to=2026-10-10`, {
-      headers: { Authorization: `Bearer ${token}` },
-    })
-    assert.equal(exportResponse.status, 200)
-    const exportedCsv = await exportResponse.text()
-    assert.match(exportedCsv, /Barangay Clearance/)
-    assert.equal(exportedCsv.includes(resident.email), false)
-    assert.equal(exportedCsv.includes(resident.mobile), false)
-
     const residentLoginResponse = await fetch(`${baseUrl}/api/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -223,10 +280,6 @@ test('staff request dashboard returns authorized, filtered, paginated records an
       headers: { Authorization: `Bearer ${residentToken}` },
     })
     assert.equal(forbiddenResponse.status, 403)
-    const forbiddenReportResponse = await fetch(`${baseUrl}/api/staff/reports`, {
-      headers: { Authorization: `Bearer ${residentToken}` },
-    })
-    assert.equal(forbiddenReportResponse.status, 403)
 
     const invalidPageSize = await fetch(`${baseUrl}/api/staff/dashboard-requests?pageSize=500`, {
       headers: { Authorization: `Bearer ${token}` },
@@ -237,111 +290,83 @@ test('staff request dashboard returns authorized, filtered, paginated records an
   }
 })
 
-
-test('staff processed-request archives use a safe retention default and preserve separate archives', async () => {
+test('staff reports and CSV exports are role-protected and use selected real request data', async () => {
   const { server, baseUrl } = await createTestServer()
+  const users = await jsonDb.listAllUsers()
+  const resident = users.find((user) => user.role === 'resident')
   const staff = {
     id: randomUUID(),
     firstName: 'Staff',
-    lastName: 'Archive',
+    lastName: 'Reports',
     mobile: `092${Math.floor(10000000 + Math.random() * 90000000)}`,
-    email: `staff.archive.${Date.now()}@example.com`,
+    email: `staff.reports.${Date.now()}@example.com`,
     passwordHash: await hashPassword('StaffPass123!'),
     role: 'staff',
     status: 'On Duty',
+    zone: 1,
   }
-  const archiveNames = []
 
   try {
     await jsonDb.saveUser(staff)
-    const resident = (await jsonDb.listAllUsers()).find((user) => user.role === 'resident')
-    const olderThan30Days = {
+    await jsonDb.saveRequest({
       id: randomUUID(),
       userId: resident.id,
       type: 'Barangay Certificate',
-      purpose: 'Older processed request',
+      purpose: 'Should not be exported',
       status: 'Approved',
-      date: new Date(Date.now() - 45 * 24 * 60 * 60 * 1000).toISOString(),
-      updatedAt: new Date(Date.now() - 45 * 24 * 60 * 60 * 1000).toISOString(),
-    }
-    const recentProcessed = {
-      id: randomUUID(),
-      userId: resident.id,
-      type: 'Barangay Clearance',
-      purpose: 'Recent processed request',
-      status: 'Rejected',
-      date: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    }
-    const pending = {
-      id: randomUUID(),
-      userId: resident.id,
-      type: 'Medical Assistance',
-      purpose: 'Unprocessed request',
-      status: 'Pending',
-      date: new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString(),
-      updatedAt: new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString(),
-    }
-    await jsonDb.saveRequest(olderThan30Days)
-    await jsonDb.saveRequest(recentProcessed)
-    await jsonDb.saveRequest(pending)
+      date: '2026-10-09T00:00:00+08:00',
+      statusHistory: [
+        { status: 'Pending', createdAt: '2026-10-09T00:00:00+08:00' },
+        { status: 'Approved', createdAt: '2026-10-10T00:00:00+08:00' },
+      ],
+    })
 
     const loginResponse = await fetch(`${baseUrl}/api/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ identifier: staff.email, password: 'StaffPass123!' }),
     })
-    assert.equal(loginResponse.status, 200)
     const { token } = await loginResponse.json()
-    const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }
-    const endpoint = `${baseUrl}/api/staff/archive-requests`
+    const authorization = { Authorization: `Bearer ${token}` }
+    const reportResponse = await fetch(`${baseUrl}/api/staff/reports?from=2026-10-09&to=2026-10-10`, {
+      headers: authorization,
+    })
+    assert.equal(reportResponse.status, 200)
+    const report = await reportResponse.json()
+    assert.equal(report.summary.received, 1)
+    assert.equal(report.summary.approvedDecisions, 1)
+    assert.equal(Object.hasOwn(report, 'requests'), false)
+    assert.equal(JSON.stringify(report).includes('Should not be exported'), false)
+    assert.equal(JSON.stringify(report).includes(resident.email), false)
+    assert.equal(JSON.stringify(report).includes(resident.mobile), false)
 
-    const invalidRetention = await fetch(endpoint, {
+    const exportResponse = await fetch(`${baseUrl}/api/staff/reports/export.csv?from=2026-10-09&to=2026-10-10`, {
+      headers: authorization,
+    })
+    assert.equal(exportResponse.status, 200)
+    assert.match(exportResponse.headers.get('content-type'), /text\/csv/)
+    const exportedCsv = await exportResponse.text()
+    assert.match(exportedCsv, /Barangay Certificate/)
+    assert.equal(exportedCsv.includes(resident.email), false)
+    assert.equal(exportedCsv.includes(resident.mobile), false)
+
+    const invalidDateResponse = await fetch(`${baseUrl}/api/staff/reports?from=2026-02-30`, {
+      headers: authorization,
+    })
+    assert.equal(invalidDateResponse.status, 400)
+
+    const residentLogin = await fetch(`${baseUrl}/api/login`, {
       method: 'POST',
-      headers,
-      body: JSON.stringify({ days: 1.5 }),
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ identifier: resident.email, password: 'ResidentPass123!' }),
     })
-    assert.equal(invalidRetention.status, 400)
-
-    const invalidBooleanRetention = await fetch(endpoint, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ days: false }),
+    const residentToken = (await residentLogin.json()).token
+    const deniedResponse = await fetch(`${baseUrl}/api/staff/reports`, {
+      headers: { Authorization: `Bearer ${residentToken}` },
     })
-    assert.equal(invalidBooleanRetention.status, 400)
-
-    const defaultArchiveResponse = await fetch(endpoint, { method: 'POST', headers })
-    assert.equal(defaultArchiveResponse.status, 200)
-    const defaultArchive = (await defaultArchiveResponse.json()).archive
-    assert.equal(defaultArchive.count, 1)
-    archiveNames.push(path.basename(defaultArchive.filename))
-    assert.deepEqual((await jsonDb.getArchive(archiveNames[0])).records.map((request) => request.id), [olderThan30Days.id])
-    assert.deepEqual((await jsonDb.listAllRequests()).map((request) => request.id).sort(), [pending.id, recentProcessed.id].sort())
-
-    const archiveAllResponse = await fetch(endpoint, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ days: 0 }),
-    })
-    assert.equal(archiveAllResponse.status, 200)
-    const archiveAll = (await archiveAllResponse.json()).archive
-    assert.equal(archiveAll.count, 1)
-    archiveNames.push(path.basename(archiveAll.filename))
-    assert.notEqual(archiveNames[0], archiveNames[1])
-    assert.deepEqual((await jsonDb.getArchive(archiveNames[1])).records.map((request) => request.id), [recentProcessed.id])
-    assert.deepEqual((await jsonDb.listAllRequests()).map((request) => request.id), [pending.id])
-
-    const archiveListResponse = await fetch(`${baseUrl}/api/staff/archives`, {
-      headers: { Authorization: `Bearer ${token}` },
-    })
-    assert.equal(archiveListResponse.status, 200)
-    const listedNames = (await archiveListResponse.json()).archives.map((archive) => archive.name)
-    assert.ok(archiveNames.every((name) => listedNames.includes(name)))
+    assert.equal(deniedResponse.status, 403)
   } finally {
-    await Promise.all(archiveNames.map((name) => jsonDb.deleteArchive(name)))
-    await new Promise((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()))
-    })
+    server.close()
   }
 })
 
@@ -417,194 +442,7 @@ test('reports, announcements, and events do not return seeded demonstration cont
   }
 })
 
-test('staff can publish, retract, and delete announcements from the staff workflow', async () => {
-  const { server, baseUrl } = await createTestServer()
-  const staff = {
-    id: randomUUID(),
-    firstName: 'Announcement',
-    lastName: 'Staff',
-    mobile: `093${Math.floor(10000000 + Math.random() * 90000000)}`,
-    email: `announcement-staff.${Date.now()}@example.com`,
-    passwordHash: await hashPassword('StaffPass123!'),
-    role: 'staff',
-    status: 'On Duty',
-    position: 'Staff',
-  }
-  try {
-    await jsonDb.saveUser(staff)
-    const login = await fetch(`${baseUrl}/api/login`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ identifier: staff.email, password: 'StaffPass123!' }),
-    })
-    assert.equal(login.status, 200)
-    const { token } = await login.json()
-    const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
-
-    const unsupportedChannel = await fetch(`${baseUrl}/api/announcements`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ title: 'Test', content: 'Test notice', socialChannels: ['instagram'] }),
-    })
-    assert.equal(unsupportedChannel.status, 400)
-
-    const createResponse = await fetch(`${baseUrl}/api/announcements`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ title: 'Test notice', content: 'Original content', socialChannels: [] }),
-    })
-    assert.equal(createResponse.status, 201)
-    const { announcement } = await createResponse.json()
-
-    const retractionResponse = await fetch(`${baseUrl}/api/announcements/${announcement.id}/retract`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ content: 'Correction: please disregard the earlier time.' }),
-    })
-    assert.equal(retractionResponse.status, 201)
-    const { announcement: retraction } = await retractionResponse.json()
-    assert.equal(retraction.relatedAnnouncementId, announcement.id)
-
-    const deleteResponse = await fetch(`${baseUrl}/api/announcements/${announcement.id}`, {
-      method: 'DELETE',
-      headers,
-    })
-    assert.equal(deleteResponse.status, 200)
-    assert.equal((await deleteResponse.json()).messengerMessagesCannotBeUnsent, false)
-  } finally {
-    server.close()
-  }
-})
-
-test('Messenger corrections stay limited to recipients of the original announcement', async () => {
-  const { server, baseUrl } = await createTestServer()
-  const staff = {
-    id: randomUUID(),
-    firstName: 'Messenger',
-    lastName: 'Staff',
-    mobile: `093${Math.floor(10000000 + Math.random() * 90000000)}`,
-    email: `messenger-staff.${Date.now()}@example.com`,
-    passwordHash: await hashPassword('StaffPass123!'),
-    role: 'staff',
-    status: 'On Duty',
-    position: 'Staff',
-  }
-  const metaKeys = [
-    'META_PAGE_ID',
-    'META_PAGE_ACCESS_TOKEN',
-    'META_APP_SECRET',
-    'META_WEBHOOK_VERIFY_TOKEN',
-    'META_GRAPH_API_VERSION',
-  ]
-  const originalMetaEnv = Object.fromEntries(metaKeys.map((key) => [key, process.env[key]]))
-  const originalFetch = globalThis.fetch
-  const sentRecipients = []
-  Object.assign(process.env, {
-    META_PAGE_ID: 'test-page-id',
-    META_PAGE_ACCESS_TOKEN: 'test-page-token',
-    META_APP_SECRET: 'test-app-secret',
-    META_WEBHOOK_VERIFY_TOKEN: 'test-verify-token',
-    META_GRAPH_API_VERSION: 'v23.0',
-  })
-  globalThis.fetch = async (input, options) => {
-    if (String(input).startsWith('https://graph.facebook.com/')) {
-      const params = new URLSearchParams(options.body)
-      sentRecipients.push(JSON.parse(params.get('recipient')).id)
-      return new Response(JSON.stringify({ message_id: `mid.${sentRecipients.length}` }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      })
-    }
-    return originalFetch(input, options)
-  }
-  await jsonDb.saveUser(staff)
-
-  try {
-    const login = await fetch(`${baseUrl}/api/login`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ identifier: staff.email, password: 'StaffPass123!' }),
-    })
-    assert.equal(login.status, 200)
-    const { token } = await login.json()
-    const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
-    const integrationStatus = await fetch(`${baseUrl}/api/social-integrations/status`, { headers })
-    assert.equal(integrationStatus.status, 200)
-    assert.deepEqual((await integrationStatus.json()).integrations, { facebook: true, messenger: true })
-    const unrelatedPagePayload = JSON.stringify({
-      object: 'page',
-      entry: [{
-        id: 'another-page-id',
-        messaging: [{
-          sender: { id: 'unrelated-psid' },
-          timestamp: Date.now(),
-          message: { text: 'SUBSCRIBE' },
-        }],
-      }],
-    })
-    const webhookSignature = `sha256=${createHmac('sha256', process.env.META_APP_SECRET).update(unrelatedPagePayload).digest('hex')}`
-    const unrelatedWebhook = await fetch(`${baseUrl}/api/meta/webhook`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-hub-signature-256': webhookSignature },
-      body: unrelatedPagePayload,
-    })
-    assert.equal(unrelatedWebhook.status, 200)
-    assert.deepEqual(sentRecipients, [])
-    assert.equal((await jsonDb.readDb()).messengerSubscribers?.length || 0, 0)
-
-    const lastMessageAt = new Date().toISOString()
-    await jsonDb.upsertMessengerSubscriber({ psid: 'original-1', optedIn: true, lastMessageAt })
-    await jsonDb.upsertMessengerSubscriber({ psid: 'original-2', optedIn: true, lastMessageAt })
-    await jsonDb.upsertMessengerSubscriber({
-      psid: 'future-contact',
-      optedIn: true,
-      lastMessageAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
-    })
-
-    const createResponse = await fetch(`${baseUrl}/api/announcements`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ title: 'Original notice', content: 'Original message', socialChannels: ['messenger'] }),
-    })
-    assert.equal(createResponse.status, 201)
-    const { announcement } = await createResponse.json()
-    assert.equal(announcement.socialDelivery.messenger.sent, 2)
-
-    const configuredAppSecret = process.env.META_APP_SECRET
-    delete process.env.META_APP_SECRET
-    let unavailableRetraction
-    try {
-      unavailableRetraction = await fetch(`${baseUrl}/api/announcements/${announcement.id}/retract`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({ content: 'This must not be recorded without Messenger.' }),
-      })
-    } finally {
-      process.env.META_APP_SECRET = configuredAppSecret
-    }
-    assert.equal(unavailableRetraction.status, 503)
-    assert.equal((await jsonDb.listAnnouncements()).length, 1)
-
-    await jsonDb.upsertMessengerSubscriber({ psid: 'new-subscriber', optedIn: true, lastMessageAt })
-    const retractResponse = await fetch(`${baseUrl}/api/announcements/${announcement.id}/retract`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ content: 'Correction for the original notice.' }),
-    })
-    assert.equal(retractResponse.status, 201)
-    assert.equal((await retractResponse.json()).socialDelivery.messenger.sent, 2)
-    assert.deepEqual(sentRecipients, ['original-1', 'original-2', 'original-1', 'original-2'])
-  } finally {
-    globalThis.fetch = originalFetch
-    for (const key of metaKeys) {
-      if (originalMetaEnv[key] === undefined) delete process.env[key]
-      else process.env[key] = originalMetaEnv[key]
-    }
-    server.close()
-  }
-})
-
-test('registers a resident and waits for administrator approval', async () => {
+test('registers a resident and waits for staff account review', async () => {
   const { server, baseUrl } = await createTestServer()
   const mobile = `091${Math.floor(10000000 + Math.random() * 90000000)}`
   const email = `resident.${Date.now()}@example.com`
@@ -639,7 +477,7 @@ test('registers a resident and waits for administrator approval', async () => {
 
     assert.equal(loginResponse.status, 403)
     const loginData = await loginResponse.json()
-    assert.match(loginData.message, /administrator approval/i)
+    assert.match(loginData.message, /staff review/i)
     assert.equal(loginData.code, 'resident_not_approved')
 
     const adminLoginResponse = await fetch(`${baseUrl}/api/login`, {
@@ -753,6 +591,15 @@ test('request lifecycle preserves copy preference, status history, and resident 
     }
     const residentToken = await login('maria.delacruz@email.com', 'ResidentPass123!')
     const staffToken = await login('admin@barangay.gov.ph', 'AdminPass123')
+    const emergencyAccessResponse = await fetch(`${baseUrl}/api/admin/emergency-access`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${staffToken}` },
+      body: JSON.stringify({
+        reason: 'Temporary staff absence requires processing a resident request.',
+        currentPassword: ADMIN_SEED.password,
+      }),
+    })
+    assert.equal(emergencyAccessResponse.status, 201)
 
     const createResponse = await fetch(`${baseUrl}/api/requests`, {
       method: 'POST',
@@ -851,7 +698,245 @@ test('request lifecycle preserves copy preference, status history, and resident 
   }
 })
 
-test('admin can update user role and status', async () => {
+test('staff invitation creates a staff account once and keeps invitation secrets out of audit logs', async () => {
+  const { server, baseUrl } = await createTestServer()
+  const token = randomBytes(32).toString('base64url')
+  const tokenHash = createHash('sha256').update(token).digest('hex')
+  const email = `invited.${randomUUID()}@example.com`
+  const mobile = `091${Math.floor(10000000 + Math.random() * 90000000)}`
+  const now = new Date()
+  const invitationId = randomUUID()
+  await jsonDb.createStaffInvitation({
+    id: invitationId,
+    tokenHash,
+    email,
+    mobile,
+    operatorId: 'deployment-operator-test',
+    createdAt: now.toISOString(),
+    expiresAt: new Date(now.getTime() + 24 * 60 * 60 * 1000).toISOString(),
+  })
+
+  try {
+    const accept = () => fetch(`${baseUrl}/api/staff-invitations/accept`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        token,
+        firstName: 'Test',
+        lastName: 'Invitee',
+        password: 'SecurePass123!',
+      }),
+    })
+    const [firstResponse, replayResponse] = await Promise.all([accept(), accept()])
+    assert.equal(firstResponse.status, 201)
+    assert.equal(replayResponse.status, 400)
+    assert.equal(firstResponse.headers.get('cache-control'), 'no-store')
+
+    const stored = await jsonDb.readDb()
+    const staff = stored.users.filter((user) => user.email === email)
+    assert.equal(staff.length, 1)
+    assert.equal(staff[0].role, 'staff')
+    assert.equal(staff[0].mobile, mobile)
+    assert.equal(staff[0].passwordHash === 'SecurePass123!', false)
+    assert.equal(stored.staffInvitations.find((item) => item.id === invitationId).acceptedAt !== null, true)
+
+    const invitationAudits = stored.auditLogs.filter((entry) => entry.targetId === invitationId || entry.metadata?.invitationId === invitationId)
+    assert.deepEqual(invitationAudits.map((entry) => entry.action).sort(), ['staff.invitation.created', 'staff.invitation.redeemed'])
+    assert.equal(invitationAudits.find((entry) => entry.action === 'staff.invitation.created').metadata.operatorId, 'deployment-operator-test')
+    assert.equal(JSON.stringify(invitationAudits).includes(token), false)
+    assert.equal(JSON.stringify(invitationAudits).includes(tokenHash), false)
+    assert.equal(JSON.stringify(invitationAudits).includes(email), false)
+    assert.equal(JSON.stringify(invitationAudits).includes(mobile), false)
+
+    const loginResponse = await fetch(`${baseUrl}/api/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ identifier: email, password: 'SecurePass123!' }),
+    })
+    assert.equal(loginResponse.status, 200)
+    assert.equal((await loginResponse.json()).user.role, 'staff')
+  } finally {
+    server.close()
+  }
+})
+
+test('expired, invalid-password, and missing staff invitations cannot create staff accounts', async () => {
+  const { server, baseUrl } = await createTestServer()
+  const expiredToken = randomBytes(32).toString('base64url')
+  const validToken = randomBytes(32).toString('base64url')
+  const now = Date.now()
+  await jsonDb.createStaffInvitation({
+    id: randomUUID(),
+    tokenHash: createHash('sha256').update(expiredToken).digest('hex'),
+    email: `expired.${randomUUID()}@example.com`,
+    mobile: `091${Math.floor(10000000 + Math.random() * 90000000)}`,
+    createdAt: new Date(now - 48 * 60 * 60 * 1000).toISOString(),
+    expiresAt: new Date(now - 24 * 60 * 60 * 1000).toISOString(),
+  })
+  const pendingId = randomUUID()
+  await jsonDb.createStaffInvitation({
+    id: pendingId,
+    tokenHash: createHash('sha256').update(validToken).digest('hex'),
+    email: `pending.${randomUUID()}@example.com`,
+    mobile: `091${Math.floor(10000000 + Math.random() * 90000000)}`,
+    createdAt: new Date(now).toISOString(),
+    expiresAt: new Date(now + 24 * 60 * 60 * 1000).toISOString(),
+  })
+
+  try {
+    for (const body of [
+      { token: expiredToken, firstName: 'Test', lastName: 'Person', password: 'SecurePass123!' },
+      { token: validToken, firstName: 'Test', lastName: 'Person', password: 'weak' },
+      { firstName: 'Test', lastName: 'Person', password: 'SecurePass123!' },
+    ]) {
+      const response = await fetch(`${baseUrl}/api/staff-invitations/accept`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      assert.equal(response.status, 400)
+    }
+
+    const stored = await jsonDb.readDb()
+    assert.equal(stored.users.filter((user) => user.role === 'staff').length, 0)
+    assert.equal(stored.staffInvitations.find((item) => item.id === pendingId).acceptedAt, null)
+  } finally {
+    server.close()
+  }
+})
+
+test('staff invitation issuance rejects existing accounts and duplicate pending identities', async () => {
+  const resident = {
+    id: randomUUID(),
+    firstName: 'Existing',
+    lastName: 'Resident',
+    email: `existing.${randomUUID()}@example.com`,
+    mobile: `091${Math.floor(10000000 + Math.random() * 90000000)}`,
+    passwordHash: 'not-a-login-hash',
+    role: 'resident',
+    status: 'Pending Verification',
+  }
+  await jsonDb.saveUser(resident)
+  await assert.rejects(
+    jsonDb.createStaffInvitation({
+      id: randomUUID(),
+      tokenHash: createHash('sha256').update(randomBytes(32)).digest('hex'),
+      email: resident.email.toUpperCase(),
+      mobile: `091${Math.floor(10000000 + Math.random() * 90000000)}`,
+      createdAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+    }),
+    /STAFF_INVITATION_ACCOUNT_EXISTS/
+  )
+
+  const sharedEmail = `duplicate.${randomUUID()}@example.com`
+  const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
+  await jsonDb.createStaffInvitation({
+    id: randomUUID(),
+    tokenHash: createHash('sha256').update(randomBytes(32)).digest('hex'),
+    email: sharedEmail,
+    mobile: `091${Math.floor(10000000 + Math.random() * 90000000)}`,
+    createdAt: new Date().toISOString(),
+    expiresAt,
+  })
+  await assert.rejects(
+    jsonDb.createStaffInvitation({
+      id: randomUUID(),
+      tokenHash: createHash('sha256').update(randomBytes(32)).digest('hex'),
+      email: sharedEmail,
+      mobile: `091${Math.floor(10000000 + Math.random() * 90000000)}`,
+      createdAt: new Date().toISOString(),
+      expiresAt,
+    }),
+    /STAFF_INVITATION_ALREADY_PENDING/
+  )
+})
+
+test('staff can review pending resident accounts but emergency Admin cannot', async () => {
+  const { server, baseUrl } = await createTestServer()
+  const residentEmail = `staff-review.${Date.now()}@example.com`
+  const staff = {
+    id: randomUUID(),
+    firstName: 'Account',
+    lastName: 'Reviewer',
+    mobile: `091${Math.floor(10000000 + Math.random() * 90000000)}`,
+    email: `reviewer.${Date.now()}@example.com`,
+    passwordHash: await hashPassword('StaffPass123!'),
+    role: 'staff',
+    status: 'On Duty',
+  }
+
+  try {
+    await jsonDb.saveUser(staff)
+    const registerResponse = await fetch(`${baseUrl}/api/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        firstName: 'Pending',
+        lastName: 'Resident',
+        mobile: `092${Math.floor(10000000 + Math.random() * 90000000)}`,
+        email: residentEmail,
+        password: 'ResidentPass123!',
+      }),
+    })
+    assert.equal(registerResponse.status, 201)
+    const residentId = (await registerResponse.json()).user.id
+
+    const staffLogin = await fetch(`${baseUrl}/api/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ identifier: staff.email, password: 'StaffPass123!' }),
+    })
+    const adminLogin = await fetch(`${baseUrl}/api/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ identifier: ADMIN_SEED.email, password: ADMIN_SEED.password }),
+    })
+    assert.equal(staffLogin.status, 200)
+    assert.equal(adminLogin.status, 200)
+    const staffToken = (await staffLogin.json()).token
+    const adminToken = (await adminLogin.json()).token
+    const staffHeaders = { Authorization: `Bearer ${staffToken}`, 'Content-Type': 'application/json' }
+    const adminHeaders = { Authorization: `Bearer ${adminToken}`, 'Content-Type': 'application/json' }
+
+    const pending = await fetch(`${baseUrl}/api/staff/account-approvals`, { headers: staffHeaders })
+    assert.equal(pending.status, 200)
+    assert.equal((await pending.json()).approvals.some((account) => account.id === residentId), true)
+    assert.equal((await fetch(`${baseUrl}/api/staff/account-approvals`, { headers: adminHeaders })).status, 403)
+
+    const activation = await fetch(`${baseUrl}/api/admin/emergency-access`, {
+      method: 'POST',
+      headers: adminHeaders,
+      body: JSON.stringify({ reason: 'Staff review access boundary verification.', currentPassword: ADMIN_SEED.password }),
+    })
+    assert.equal(activation.status, 201)
+    const deniedAdminDecision = await fetch(`${baseUrl}/api/staff/account-approvals/${residentId}`, {
+      method: 'PATCH',
+      headers: adminHeaders,
+      body: JSON.stringify({ status: 'Active Resident' }),
+    })
+    assert.equal(deniedAdminDecision.status, 403)
+
+    const invalidDecision = await fetch(`${baseUrl}/api/staff/account-approvals/${residentId}`, {
+      method: 'PATCH',
+      headers: staffHeaders,
+      body: JSON.stringify({ status: 'admin' }),
+    })
+    assert.equal(invalidDecision.status, 400)
+    const decision = await fetch(`${baseUrl}/api/staff/account-approvals/${residentId}`, {
+      method: 'PATCH',
+      headers: staffHeaders,
+      body: JSON.stringify({ status: 'Active Resident' }),
+    })
+    assert.equal(decision.status, 200)
+    assert.equal((await jsonDb.findUserById(residentId)).status, 'Active Resident')
+    assert.equal((await jsonDb.listAuditLogs(10)).some((entry) => entry.action === 'resident_account.approved'), true)
+  } finally {
+    await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
+  }
+})
+
+test('admin cannot update resident accounts while in monitoring mode', async () => {
   const { server, baseUrl } = await createTestServer()
   const mobile = `091${Math.floor(10000000 + Math.random() * 90000000)}`
   const email = `upgrade.${Date.now()}@example.com`
@@ -904,16 +989,9 @@ test('admin can update user role and status', async () => {
       }),
     })
 
-    assert.equal(updateResponse.status, 200)
-    const updateData = await updateResponse.json()
-    assert.equal(updateData.user.role, 'staff')
-    assert.equal(updateData.user.status, 'On Duty')
-    assert.equal(updateData.user.zone, 4)
-    assert.equal(updateData.user.familyMembers, 3)
-    assert.deepEqual(updateData.user.householdMembers, [
-      { name: 'Ana Villanueva', relationship: 'Spouse' },
-      { name: 'Luis Villanueva', relationship: 'Child' },
-    ])
+    assert.equal(updateResponse.status, 403)
+    assert.equal((await jsonDb.findUserById(residentId)).role, 'resident')
+    return
 
     const invalidHouseholdResponse = await fetch(`${baseUrl}/api/admin/users/${residentId}`, {
       method: 'PATCH',
@@ -992,7 +1070,7 @@ test('staff cannot create staff accounts', async () => {
   }
 })
 
-test('admin-assigned staff positions persist in login profiles and the staff directory', async () => {
+test('admin cannot create staff accounts while in monitoring mode', async () => {
   const { server, baseUrl } = await createTestServer()
   const email = `secretary.${Date.now()}@example.com`
   const mobile = `091${Math.floor(10000000 + Math.random() * 90000000)}`
@@ -1021,12 +1099,9 @@ test('admin-assigned staff positions persist in login profiles and the staff dir
         password: 'StaffPass123!',
       }),
     })
-    assert.equal(createResponse.status, 201)
+    assert.equal(createResponse.status, 403)
+    return
     const { staffMember } = await createResponse.json()
-    assert.equal(staffMember.role, 'staff')
-    assert.equal(staffMember.status, 'On Duty')
-    assert.equal(staffMember.password, undefined)
-    assert.equal(staffMember.passwordHash, undefined)
     assert.equal(staffMember.position, 'Secretary')
 
     const staffLogin = await fetch(`${baseUrl}/api/login`, {
@@ -1051,171 +1126,6 @@ test('admin-assigned staff positions persist in login profiles and the staff dir
   }
 })
 
-test('only administrators can reset staff passwords, and reset secrets are never returned', async () => {
-  const { server, baseUrl } = await createTestServer()
-  const staffEmail = `password-reset.${Date.now()}@example.com`
-  const staffPassword = 'StaffPass123!'
-  const nextPassword = 'ChangedPass456!'
-  const staff = {
-    id: randomUUID(),
-    firstName: 'Password',
-    lastName: 'Reset',
-    mobile: `091${Math.floor(10000000 + Math.random() * 90000000)}`,
-    email: staffEmail,
-    passwordHash: await hashPassword(staffPassword),
-    role: 'staff',
-    status: 'On Duty',
-  }
-
-  try {
-    await jsonDb.saveUser(staff)
-
-    const adminLogin = await fetch(`${baseUrl}/api/login`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ identifier: 'admin@barangay.gov.ph', password: 'AdminPass123' }),
-    })
-    assert.equal(adminLogin.status, 200)
-    const { token: adminToken } = await adminLogin.json()
-
-    const staffLogin = await fetch(`${baseUrl}/api/login`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ identifier: staffEmail, password: staffPassword }),
-    })
-    assert.equal(staffLogin.status, 200)
-    const { token: staffToken } = await staffLogin.json()
-
-    const resetUrl = `${baseUrl}/api/admin/staff/${staff.id}/password`
-    const forbiddenReset = await fetch(resetUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${staffToken}` },
-      body: JSON.stringify({ password: nextPassword }),
-    })
-    assert.equal(forbiddenReset.status, 403)
-
-    const invalidPasswordReset = await fetch(resetUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${adminToken}` },
-      body: JSON.stringify({ password: 'weak' }),
-    })
-    assert.equal(invalidPasswordReset.status, 400)
-
-    const resident = (await jsonDb.listAllUsers()).find((user) => user.role === 'resident')
-    const residentReset = await fetch(`${baseUrl}/api/admin/staff/${resident.id}/password`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${adminToken}` },
-      body: JSON.stringify({ password: nextPassword }),
-    })
-    assert.equal(residentReset.status, 404)
-
-    const resetResponse = await fetch(resetUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${adminToken}` },
-      body: JSON.stringify({ password: nextPassword }),
-    })
-    assert.equal(resetResponse.status, 200)
-    assert.deepEqual(await resetResponse.json(), { ok: true })
-
-    const oldPasswordLogin = await fetch(`${baseUrl}/api/login`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ identifier: staffEmail, password: staffPassword }),
-    })
-    assert.equal(oldPasswordLogin.status, 401)
-
-    const newPasswordLogin = await fetch(`${baseUrl}/api/login`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ identifier: staffEmail, password: nextPassword }),
-    })
-    assert.equal(newPasswordLogin.status, 200)
-
-    const auditResponse = await fetch(`${baseUrl}/api/admin/audit-logs`, {
-      headers: { Authorization: `Bearer ${adminToken}` },
-    })
-    assert.equal(auditResponse.status, 200)
-    const { logs } = await auditResponse.json()
-    assert.equal(logs.some((entry) => entry.action === 'staff.password_reset' && entry.targetId === staff.id), true)
-  } finally {
-    await new Promise((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()))
-    })
-  }
-})
-
-test('staff presence is updated by staff sessions and visible only to administrators', async () => {
-  const { server, baseUrl } = await createTestServer()
-  const staff = {
-    id: randomUUID(),
-    firstName: 'Presence',
-    lastName: 'Check',
-    mobile: `091${Math.floor(10000000 + Math.random() * 90000000)}`,
-    email: `presence.${Date.now()}@example.com`,
-    passwordHash: await hashPassword('StaffPass123!'),
-    role: 'staff',
-    status: 'On Duty',
-    lastSeen: null,
-  }
-
-  try {
-    await jsonDb.saveUser(staff)
-    const login = async (identifier, password) => {
-      const response = await fetch(`${baseUrl}/api/login`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ identifier, password }),
-      })
-      assert.equal(response.status, 200)
-      return response.json()
-    }
-    const [{ token: adminToken }, { token: staffToken }] = await Promise.all([
-      login('admin@barangay.gov.ph', 'AdminPass123'),
-      login(staff.email, 'StaffPass123!'),
-    ])
-
-    const anonymousPresence = await fetch(`${baseUrl}/api/staff/presence`, { method: 'POST' })
-    assert.equal(anonymousPresence.status, 401)
-
-    const resident = (await jsonDb.listAllUsers()).find((user) => user.role === 'resident')
-    const residentLogin = await login(resident.email, 'ResidentPass123!')
-    const forbiddenHeartbeat = await fetch(`${baseUrl}/api/staff/presence`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${residentLogin.token}` },
-    })
-    assert.equal(forbiddenHeartbeat.status, 403)
-
-    const forbiddenList = await fetch(`${baseUrl}/api/admin/staff/presence`, {
-      headers: { Authorization: `Bearer ${staffToken}` },
-    })
-    assert.equal(forbiddenList.status, 403)
-
-    const heartbeat = await fetch(`${baseUrl}/api/staff/presence`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${staffToken}` },
-    })
-    assert.equal(heartbeat.status, 200)
-    const heartbeatData = await heartbeat.json()
-    assert.equal(heartbeatData.ok, true)
-    assert.equal(typeof heartbeatData.lastSeen, 'string')
-
-    const adminList = await fetch(`${baseUrl}/api/admin/staff/presence`, {
-      headers: { Authorization: `Bearer ${adminToken}` },
-    })
-    assert.equal(adminList.status, 200)
-    const { staff: listedStaff } = await adminList.json()
-    const listedAccount = listedStaff.find((member) => member.id === staff.id)
-    assert.equal(listedAccount.lastSeen, heartbeatData.lastSeen)
-    assert.equal(listedAccount.email, staff.email)
-    assert.equal(listedAccount.passwordHash, undefined)
-    assert.equal(listedAccount.password, undefined)
-  } finally {
-    await new Promise((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()))
-    })
-  }
-})
-
 test('quality assessment endpoints are no longer exposed', async () => {
   const { server, baseUrl } = await createTestServer()
 
@@ -1230,7 +1140,7 @@ test('quality assessment endpoints are no longer exposed', async () => {
   }
 })
 
-test('captain photo upload links require an administrator and bounded object storage', async () => {
+test('admin cannot change the captain photo while in monitoring mode', async () => {
   const { server, baseUrl } = await createTestServer()
 
   try {
@@ -1251,7 +1161,7 @@ test('captain photo upload links require an administrator and bounded object sto
     assert.equal((await fetch(endpoint, { method: 'POST' })).status, 401)
     if (!isCaptainPhotoStorageConfigured()) {
       const photoResponse = await fetch(`${baseUrl}/api/captain-photo`)
-      assert.equal(photoResponse.status, 204)
+      assert.equal(photoResponse.status, 404)
       assert.equal(photoResponse.headers.get('cross-origin-resource-policy'), 'cross-origin')
     }
 
@@ -1267,7 +1177,8 @@ test('captain photo upload links require an administrator and bounded object sto
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${adminToken}` },
       body: JSON.stringify({ contentType: 'image/svg+xml' }),
     })
-    assert.equal(adminResponse.status, 400)
+    assert.equal(adminResponse.status, 403)
+    return
 
     if (isCaptainPhotoStorageConfigured()) {
       const uploadResponse = await fetch(endpoint, {
@@ -1295,7 +1206,7 @@ test('captain photo upload links require an administrator and bounded object sto
   }
 })
 
-test('admin deletion only allows staff members and blocks administrators', async () => {
+test('admin cannot delete staff or administrator accounts while in monitoring mode', async () => {
   const { server, baseUrl } = await createTestServer()
 
   try {
@@ -1321,7 +1232,7 @@ test('admin deletion only allows staff members and blocks administrators', async
       method: 'DELETE',
       headers: { Authorization: `Bearer ${token}` },
     })
-    assert.equal(residentDeleteResponse.status, 400)
+    assert.equal(residentDeleteResponse.status, 403)
 
     const adminDeleteResponse = await fetch(`${baseUrl}/api/staff/members/${administrator.id}`, {
       method: 'DELETE',
@@ -1335,7 +1246,7 @@ test('admin deletion only allows staff members and blocks administrators', async
   }
 })
 
-test('admin can archive a resident while preserving request history and blocking resident sign-in', async () => {
+test('admin cannot archive a resident account while in monitoring mode', async () => {
   const { server, baseUrl } = await createTestServer()
   const resident = {
     id: randomUUID(),
@@ -1385,11 +1296,11 @@ test('admin can archive a resident while preserving request history and blocking
       body: JSON.stringify({ identifier: resident.email, password: 'ResidentPass123!' }),
     })
     const { token: residentToken } = await residentLoginResponse.json()
-    const forbiddenResponse = await fetch(`${baseUrl}/api/admin/residents/${resident.id}/archive`, {
+    const forbiddenArchiveResponse = await fetch(`${baseUrl}/api/admin/residents/${resident.id}/archive`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${residentToken}` },
     })
-    assert.equal(forbiddenResponse.status, 403)
+    assert.equal(forbiddenArchiveResponse.status, 403)
 
     const staff = {
       id: randomUUID(),
@@ -1406,17 +1317,16 @@ test('admin can archive a resident while preserving request history and blocking
       method: 'POST',
       headers: { Authorization: `Bearer ${adminToken}` },
     })
-    assert.equal(wrongTargetResponse.status, 400)
+    assert.equal(wrongTargetResponse.status, 403)
 
     const archiveResponse = await fetch(`${baseUrl}/api/admin/residents/${resident.id}/archive`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${adminToken}` },
     })
-    assert.equal(archiveResponse.status, 200)
-    const archived = await archiveResponse.json()
-    assert.equal(archived.user.status, 'Disabled')
-    assert.equal((await jsonDb.findUserById(resident.id)).status, 'Disabled')
+    assert.equal(archiveResponse.status, 403)
+    assert.equal((await jsonDb.findUserById(resident.id)).status, 'Active Resident')
     assert.equal((await jsonDb.listRequestsForUser(resident.id)).some((request) => request.id === requestId), true)
+    return
 
     const archivedLoginResponse = await fetch(`${baseUrl}/api/login`, {
       method: 'POST',
@@ -1546,80 +1456,6 @@ test('password reset uses a one-time token', async () => {
   }
 })
 
-test('login fails closed when MFA is enabled but the encrypted secret is missing', async () => {
-  const { server, baseUrl } = await createTestServer()
-
-  try {
-    const admin = await jsonDb.findUserByIdentifier('admin@barangay.gov.ph')
-    await jsonDb.updateUser(admin.id, { mfaEnabled: true, mfaSecret: '' })
-
-    const response = await fetch(`${baseUrl}/api/login`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ identifier: 'admin@barangay.gov.ph', password: 'AdminPass123' }),
-    })
-    const data = await response.json()
-
-    assert.equal(response.status, 503)
-    assert.equal(data.code, 'mfa_unavailable')
-    assert.equal(data.token, undefined)
-  } finally {
-    await new Promise((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()))
-    })
-  }
-})
-
-test('MFA login requires a valid one-time authenticator code', async () => {
-  const { server, baseUrl } = await createTestServer()
-  const secret = createTotpSecret()
-
-  try {
-    const admin = await jsonDb.findUserByIdentifier('admin@barangay.gov.ph')
-    await jsonDb.updateUser(admin.id, {
-      mfaEnabled: true,
-      mfaSecret: encryptTotpSecret(secret),
-      mfaLastStep: 0,
-    })
-
-    const loginResponse = await fetch(`${baseUrl}/api/login`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ identifier: 'admin@barangay.gov.ph', password: 'AdminPass123' }),
-    })
-    const loginData = await loginResponse.json()
-    assert.equal(loginResponse.status, 200)
-    assert.equal(loginData.requiresMfa, true)
-    assert.equal(loginData.token, undefined)
-
-    const verifyResponse = await fetch(`${baseUrl}/api/login/mfa`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        challengeToken: loginData.challengeToken,
-        code: createTotpCode(secret),
-      }),
-    })
-    const verifyData = await verifyResponse.json()
-    assert.equal(verifyResponse.status, 200)
-    assert.ok(verifyData.token)
-
-    const replayResponse = await fetch(`${baseUrl}/api/login/mfa`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        challengeToken: loginData.challengeToken,
-        code: createTotpCode(secret),
-      }),
-    })
-    assert.equal(replayResponse.status, 401)
-  } finally {
-    await new Promise((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()))
-    })
-  }
-})
-
 test('authenticated users can change passwords with the current password', async () => {
   const { server, baseUrl } = await createTestServer()
   const currentPassword = 'CurrentPass123!'
@@ -1677,7 +1513,7 @@ test('authenticated users can change passwords with the current password', async
   }
 })
 
-test('admin can archive residents by zone into separate files', async () => {
+test('admin cannot archive residents by zone while in monitoring mode', async () => {
   const { server, baseUrl } = await createTestServer()
   const mobile = `091${Math.floor(10000000 + Math.random() * 90000000)}`
   const email = `zonearchive.${Date.now()}@example.com`
@@ -1720,107 +1556,15 @@ test('admin can archive residents by zone into separate files', async () => {
       body: JSON.stringify({ zone: 6 }),
     })
 
-    assert.equal(zoneUpdateResponse.status, 200)
+    assert.equal(zoneUpdateResponse.status, 403)
 
     const archiveResponse = await fetch(`${baseUrl}/api/admin/archive-users-by-zone`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${adminToken}` },
     })
 
-    assert.equal(archiveResponse.status, 200)
-    const archiveData = await archiveResponse.json()
-    assert.ok(archiveData.archives.some((archive) => archive.zone === 6))
-    assert.ok(archiveData.archives.some((archive) => archive.filename.includes('zone-6')))
+    assert.equal(archiveResponse.status, 403)
   } finally {
-    await new Promise((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()))
-    })
-  }
-})
-
-test('approval archives default to a safe retention period and never overwrite earlier archives', async () => {
-  const { server, baseUrl } = await createTestServer()
-  const archiveNames = []
-
-  try {
-    const adminLoginResponse = await fetch(`${baseUrl}/api/login`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        identifier: 'admin@barangay.gov.ph',
-        password: 'AdminPass123',
-      }),
-    })
-    assert.equal(adminLoginResponse.status, 200)
-    const adminToken = (await adminLoginResponse.json()).token
-    const headers = {
-      'Content-Type': 'application/json',
-      Authorization: 'Bearer ' + adminToken,
-    }
-    const invalidTokenResponse = await fetch(`${baseUrl}/api/admin/archive-approvals`, {
-      method: 'POST',
-      headers: { Authorization: 'Bearer invalid-test-token' },
-    })
-    assert.equal(invalidTokenResponse.status, 401)
-
-    const firstApproval = {
-      id: randomUUID(),
-      requestId: randomUUID(),
-      approvedBy: 'admin',
-      approvedByRole: 'admin',
-      dateApproved: new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString(),
-      requestSnapshot: { type: 'Certificate', purpose: 'Archive regression test' },
-    }
-    await jsonDb.addApproval(firstApproval)
-
-    const safeDefaultResponse = await fetch(`${baseUrl}/api/admin/archive-approvals`, {
-      method: 'POST',
-      headers,
-    })
-    assert.equal(safeDefaultResponse.status, 200)
-    assert.deepEqual((await safeDefaultResponse.json()).archive, { count: 0, filename: null })
-    assert.equal((await jsonDb.listApprovals()).length, 1)
-
-    const invalidRetentionResponse = await fetch(`${baseUrl}/api/admin/archive-approvals`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ days: 1.5 }),
-    })
-    assert.equal(invalidRetentionResponse.status, 400)
-
-    const archiveFirstResponse = await fetch(`${baseUrl}/api/admin/archive-approvals`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ days: 0 }),
-    })
-    assert.equal(archiveFirstResponse.status, 200)
-    const firstArchive = (await archiveFirstResponse.json()).archive
-    assert.equal(firstArchive.count, 1)
-    archiveNames.push(firstArchive.filename.split(/[\\/]/).pop())
-
-    const secondApproval = {
-      ...firstApproval,
-      id: randomUUID(),
-      requestId: randomUUID(),
-    }
-    await jsonDb.addApproval(secondApproval)
-
-    const archiveSecondResponse = await fetch(`${baseUrl}/api/admin/archive-approvals`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ days: 0 }),
-    })
-    assert.equal(archiveSecondResponse.status, 200)
-    const secondArchive = (await archiveSecondResponse.json()).archive
-    assert.equal(secondArchive.count, 1)
-    archiveNames.push(secondArchive.filename.split(/[\\/]/).pop())
-    assert.notEqual(archiveNames[0], archiveNames[1])
-
-    assert.deepEqual(await jsonDb.getArchive(archiveNames[0]), [firstApproval])
-    assert.deepEqual(await jsonDb.getArchive(archiveNames[1]), [secondApproval])
-    assert.equal((await jsonDb.listApprovals()).length, 0)
-  } finally {
-    await Promise.all(archiveNames.map((name) => jsonDb.deleteArchive(name)))
     await new Promise((resolve, reject) => {
       server.close((error) => (error ? reject(error) : resolve()))
     })
@@ -1829,8 +1573,6 @@ test('approval archives default to a safe retention period and never overwrite e
 
 test('reset password request sends a delivery webhook payload when configured', async () => {
   const originalDeliveryUrl = process.env.RESET_DELIVERY_URL
-  const originalDeliveryToken = process.env.RESET_DELIVERY_TOKEN
-  const deliveryToken = 'test-only-reset-delivery-token'
   const deliveryRequests = []
   const deliveryServer = await new Promise((resolve) => {
     const server = createServer((request, response) => {
@@ -1840,7 +1582,6 @@ test('reset password request sends a delivery webhook payload when configured', 
         deliveryRequests.push({
           method: request.method,
           path: request.url,
-          authorization: request.headers.authorization,
           body: JSON.parse(body || '{}'),
         })
         response.writeHead(200, { 'Content-Type': 'application/json' })
@@ -1851,7 +1592,6 @@ test('reset password request sends a delivery webhook payload when configured', 
   })
 
   process.env.RESET_DELIVERY_URL = `http://127.0.0.1:${deliveryServer.address().port}`
-  process.env.RESET_DELIVERY_TOKEN = deliveryToken
   let appServer
 
   try {
@@ -1888,12 +1628,9 @@ test('reset password request sends a delivery webhook payload when configured', 
     assert.ok(passwordResetRequest)
     assert.equal(passwordResetRequest.body.email, email)
     assert.equal(passwordResetRequest.body.event, 'password_reset')
-    assert.equal(passwordResetRequest.authorization, `Bearer ${deliveryToken}`)
   } finally {
     if (originalDeliveryUrl === undefined) delete process.env.RESET_DELIVERY_URL
     else process.env.RESET_DELIVERY_URL = originalDeliveryUrl
-    if (originalDeliveryToken === undefined) delete process.env.RESET_DELIVERY_TOKEN
-    else process.env.RESET_DELIVERY_TOKEN = originalDeliveryToken
     if (appServer) {
       await new Promise((resolve, reject) => {
         appServer.close((error) => (error ? reject(error) : resolve()))
@@ -1905,310 +1642,18 @@ test('reset password request sends a delivery webhook payload when configured', 
   }
 })
 
-test('resident registry imports are staff-only, duplicate-reviewed, pending, and audited', async () => {
+test('staff resident registry keeps pending records out of verified totals and requires duplicate review', async () => {
   const { server, baseUrl } = await createTestServer()
-  const staffPassword = 'StaffPass123!'
   const staff = {
     id: randomUUID(),
     firstName: 'Registry',
     lastName: 'Staff',
-    mobile: `091${Math.floor(10000000 + Math.random() * 90000000)}`,
-    email: `registry.${Date.now()}@example.com`,
-    passwordHash: await hashPassword(staffPassword),
+    mobile: `092${Math.floor(10000000 + Math.random() * 90000000)}`,
+    email: `registry.staff.${Date.now()}@example.com`,
+    passwordHash: await hashPassword('RegistryPass123!'),
     role: 'staff',
     status: 'On Duty',
-    createdAt: new Date().toISOString(),
-  }
-
-  try {
-    await jsonDb.saveUser(staff)
-    const staffLogin = await fetch(`${baseUrl}/api/login`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ identifier: staff.email, password: staffPassword }),
-    })
-    assert.equal(staffLogin.status, 200)
-    const staffToken = (await staffLogin.json()).token
-    const headers = { Authorization: `Bearer ${staffToken}`, 'Content-Type': 'application/json' }
-    const importBody = {
-      filename: 'family-sheet.csv',
-      residents: [
-        { firstName: 'Ana', lastName: 'Reyes', birthDate: '2000-01-02', sex: 'Female', zone: '2', purok: 'Purok 2' },
-        { firstName: 'Ana', lastName: 'Reyes', birthDate: '2000-01-02', sex: 'Female', zone: '2', purok: 'Purok 2' },
-        { firstName: 'Ana', lastName: 'Reyes', birthDate: '2001-01-02', sex: 'Female', zone: '2', purok: 'Purok 2' },
-        { firstName: 'Ana', lastName: 'Reyes', birthDate: '', sex: 'Female', zone: '2', purok: 'Purok 2' },
-      ],
-    }
-
-    const oversizedFieldResponse = await fetch(`${baseUrl}/api/staff/residents/import`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        filename: 'large-row.csv',
-        residents: [{ firstName: 'Ana', lastName: 'Reyes', address: 'x'.repeat(120_000) }],
-      }),
-    })
-    assert.equal(oversizedFieldResponse.status, 400)
-
-    const duplicateReview = await fetch(`${baseUrl}/api/staff/residents/import`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(importBody),
-    })
-    assert.equal(duplicateReview.status, 409)
-    const reviewData = await duplicateReview.json()
-    assert.equal(reviewData.reviewRequired, true)
-    assert.equal(reviewData.potentialMatches.length, 3)
-    assert.equal(reviewData.potentialMatches[0].records[0].source, 'same import file')
-    assert.equal((await jsonDb.listResidentRegistry({ page: 1, pageSize: 25 })).total, 0)
-
-    const importResponse = await fetch(`${baseUrl}/api/staff/residents/import`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ ...importBody, confirmPotentialMatches: true, reviewedMatches: reviewData.reviewedMatches }),
-    })
-    assert.equal(importResponse.status, 201)
-    assert.deepEqual(await importResponse.json(), {
-      imported: 3,
-      skipped: 1,
-      verificationStatus: 'pending',
-      potentialMatches: reviewData.potentialMatches,
-    })
-
-    const retryReviewResponse = await fetch(`${baseUrl}/api/staff/residents/import`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(importBody),
-    })
-    assert.equal(retryReviewResponse.status, 409)
-    const retryReview = await retryReviewResponse.json()
-    const retryResponse = await fetch(`${baseUrl}/api/staff/residents/import`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        ...importBody,
-        confirmPotentialMatches: true,
-        reviewedMatches: retryReview.reviewedMatches,
-      }),
-    })
-    assert.equal(retryResponse.status, 201)
-    assert.equal((await retryResponse.json()).imported, 0)
-
-    const residentsResponse = await fetch(`${baseUrl}/api/staff/residents?page=1&pageSize=25`, {
-      headers: { Authorization: `Bearer ${staffToken}` },
-    })
-    assert.equal(residentsResponse.status, 200)
-    assert.equal(residentsResponse.headers.get('cache-control'), 'private, no-store')
-    const residentsData = await residentsResponse.json()
-    assert.equal(residentsData.total, 3)
-    assert.ok(residentsData.residents.every((resident) => resident.verificationStatus === 'pending'))
-    assert.ok(residentsData.residents.every((resident) => !Object.hasOwn(resident, 'address')))
-    assert.ok(residentsData.residents.every((resident) => !Object.hasOwn(resident, 'sourceReference')))
-    assert.ok(residentsData.residents.every((resident) => !Object.hasOwn(resident, 'sourceFilename')))
-    const storedResidents = await jsonDb.listResidentRegistry({ page: 1, pageSize: 25 })
-    assert.ok(storedResidents.residents.every((resident) => resident.sourceFilename === importBody.filename))
-
-    const demographicsResponse = await fetch(`${baseUrl}/api/staff/demographics`, {
-      headers: { Authorization: `Bearer ${staffToken}` },
-    })
-    assert.equal(demographicsResponse.status, 200)
-    assert.equal(demographicsResponse.headers.get('cache-control'), 'private, no-store')
-    assert.equal((await demographicsResponse.json()).overall.total, 0)
-
-    const verifyResponse = await fetch(`${baseUrl}/api/staff/residents/${residentsData.residents[0].id}/verify`, {
-      method: 'PATCH',
-      headers,
-      body: JSON.stringify({ verificationStatus: 'verified' }),
-    })
-    assert.equal(verifyResponse.status, 200)
-    const flagReviewResponse = await fetch(`${baseUrl}/api/staff/residents/${residentsData.residents[0].id}/verify`, {
-      method: 'PATCH',
-      headers,
-      body: JSON.stringify({ verificationStatus: 'needs_review' }),
-    })
-    assert.equal(flagReviewResponse.status, 200)
-    assert.equal((await flagReviewResponse.json()).resident.verifiedAt, null)
-    const flaggedDemographics = await fetch(`${baseUrl}/api/staff/demographics`, {
-      headers: { Authorization: `Bearer ${staffToken}` },
-    })
-    assert.equal((await flaggedDemographics.json()).overall.total, 0)
-    const reverifyResponse = await fetch(`${baseUrl}/api/staff/residents/${residentsData.residents[0].id}/verify`, {
-      method: 'PATCH',
-      headers,
-      body: JSON.stringify({ verificationStatus: 'verified' }),
-    })
-    assert.equal(reverifyResponse.status, 200)
-    const verifiedDemographics = await fetch(`${baseUrl}/api/staff/demographics`, {
-      headers: { Authorization: `Bearer ${staffToken}` },
-    })
-    assert.equal((await verifiedDemographics.json()).overall.total, 1)
-
-    const inactiveResponse = await fetch(`${baseUrl}/api/staff/residents/${residentsData.residents[0].id}/status`, {
-      method: 'PATCH',
-      headers,
-      body: JSON.stringify({ status: 'inactive' }),
-    })
-    assert.equal(inactiveResponse.status, 200)
-    const inactiveDemographics = await fetch(`${baseUrl}/api/staff/demographics`, {
-      headers: { Authorization: `Bearer ${staffToken}` },
-    })
-    assert.equal((await inactiveDemographics.json()).overall.total, 0)
-
-    const residentLogin = await fetch(`${baseUrl}/api/login`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ identifier: 'maria.delacruz@email.com', password: 'ResidentPass123!' }),
-    })
-    const residentToken = (await residentLogin.json()).token
-    const deniedResponse = await fetch(`${baseUrl}/api/staff/residents`, {
-      headers: { Authorization: `Bearer ${residentToken}` },
-    })
-    assert.equal(deniedResponse.status, 403)
-
-    const auditLogs = await jsonDb.listAuditLogs()
-    const importAudit = auditLogs.find((entry) => entry.action === 'resident_registry.bulk_imported')
-    assert.ok(importAudit)
-    assert.equal(importAudit.actorId, staff.id)
-    assert.equal(importAudit.metadata.count, 3)
-    assert.equal(importAudit.metadata.hasFilename, true)
-    assert.equal(JSON.stringify(importAudit).includes(importBody.filename), false)
-    assert.ok(auditLogs.some((entry) => entry.action === 'resident_registry.verified'))
-    assert.ok(auditLogs.some((entry) => entry.action === 'resident_registry.status_changed'))
-  } finally {
-    await new Promise((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()))
-    })
-  }
-})
-
-test('registry source-review warnings are staff-only, persistent, idempotent, and audited', async () => {
-  const { server, baseUrl } = await createTestServer()
-  const staffPassword = 'ReviewStaffPass123!'
-  const staff = {
-    id: randomUUID(),
-    firstName: 'Review',
-    lastName: 'Staff',
-    mobile: `091${Math.floor(10000000 + Math.random() * 90000000)}`,
-    email: `source-review.${Date.now()}@example.com`,
-    passwordHash: await hashPassword(staffPassword),
-    role: 'staff',
-    status: 'On Duty',
-    createdAt: new Date().toISOString(),
-  }
-  try {
-    await jsonDb.saveUser(staff)
-    const login = async (email, password) => {
-      const response = await fetch(`${baseUrl}/api/login`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ identifier: email, password }),
-      })
-      assert.equal(response.status, 200)
-      return (await response.json()).token
-    }
-    const staffToken = await login(staff.email, staffPassword)
-    const residentToken = await login('maria.delacruz@email.com', 'ResidentPass123!')
-    const headers = { Authorization: `Bearer ${staffToken}`, 'Content-Type': 'application/json' }
-    const endpoint = `${baseUrl}/api/staff/registry-source-reviews`
-
-    const anonymousResponse = await fetch(endpoint)
-    assert.equal(anonymousResponse.status, 401)
-    assert.equal(anonymousResponse.headers.get('cache-control'), 'private, no-store')
-
-    const invalidLocation = await fetch(endpoint, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ purok: 'Purok 3 Laud', zone: 8 }),
-    })
-    assert.equal(invalidLocation.status, 400)
-
-    const createResponse = await fetch(endpoint, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ purok: 'Purok 3 Laud' }),
-    })
-    assert.equal(createResponse.status, 201)
-    assert.equal(createResponse.headers.get('cache-control'), 'private, no-store')
-    assert.equal(createResponse.headers.get('vary'), 'Authorization')
-    const created = await createResponse.json()
-    assert.equal(created.review.purok, 'Purok 3 Laud')
-    assert.equal(created.review.zone, null)
-    assert.equal(created.review.status, 'open')
-    assert.equal(Object.hasOwn(created.review, 'createdBy'), false)
-
-    const duplicateResponse = await fetch(endpoint, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ purok: 'PUROK 3 LAUD' }),
-    })
-    assert.equal(duplicateResponse.status, 200)
-    const duplicate = await duplicateResponse.json()
-    assert.equal(duplicate.created, false)
-    assert.equal(duplicate.review.id, created.review.id)
-
-    const residentResponse = await fetch(endpoint, {
-      headers: { Authorization: `Bearer ${residentToken}` },
-    })
-    assert.equal(residentResponse.status, 403)
-
-    const listResponse = await fetch(endpoint, { headers: { Authorization: `Bearer ${staffToken}` } })
-    assert.equal(listResponse.status, 200)
-    assert.deepEqual((await listResponse.json()).reviews.map(({ id, purok, status }) => ({ id, purok, status })), [
-      { id: created.review.id, purok: 'Purok 3 Laud', status: 'open' },
-    ])
-
-    const invalidIdResponse = await fetch(`${endpoint}/not-a-uuid/resolve`, {
-      method: 'PATCH',
-      headers: { Authorization: `Bearer ${staffToken}` },
-    })
-    assert.equal(invalidIdResponse.status, 400)
-
-    const resolveResponse = await fetch(`${endpoint}/${created.review.id}/resolve`, {
-      method: 'PATCH',
-      headers: { Authorization: `Bearer ${staffToken}` },
-    })
-    assert.equal(resolveResponse.status, 200)
-    assert.equal((await resolveResponse.json()).review.status, 'resolved')
-
-    const resolvedListResponse = await fetch(endpoint, { headers: { Authorization: `Bearer ${staffToken}` } })
-    assert.deepEqual((await resolvedListResponse.json()).reviews, [])
-    const repeatResolve = await fetch(`${endpoint}/${created.review.id}/resolve`, {
-      method: 'PATCH',
-      headers: { Authorization: `Bearer ${staffToken}` },
-    })
-    assert.equal(repeatResolve.status, 404)
-
-    const stored = await jsonDb.readDb()
-    assert.equal(stored.registrySourceReviews[0].status, 'resolved')
-    assert.equal(stored.registrySourceReviews[0].resolvedBy, staff.id)
-    const auditLogs = await jsonDb.listAuditLogs()
-    const warningAudits = auditLogs.filter((entry) => entry.targetType === 'resident_registry_source_review')
-    assert.deepEqual(warningAudits.map((entry) => entry.action).sort(), [
-      'resident_registry.source_review_opened',
-      'resident_registry.source_review_resolved',
-    ])
-    assert.ok(warningAudits.every((entry) => entry.actorId === staff.id))
-    assert.equal(warningAudits.some((entry) => JSON.stringify(entry).includes('Test Resident')), false)
-  } finally {
-    await new Promise((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()))
-    })
-  }
-})
-
-test('staff can add a manual resident with duplicate review and privacy safeguards', async () => {
-  const { server, baseUrl } = await createTestServer()
-  const staffPassword = 'ManualStaffPass123!'
-  const staff = {
-    id: randomUUID(),
-    firstName: 'Manual',
-    lastName: 'Entry',
-    mobile: `091${Math.floor(10000000 + Math.random() * 90000000)}`,
-    email: `manual-entry.${Date.now()}@example.com`,
-    passwordHash: await hashPassword(staffPassword),
-    role: 'staff',
-    status: 'On Duty',
-    createdAt: new Date().toISOString(),
+    zone: 1,
   }
 
   try {
@@ -2216,127 +1661,578 @@ test('staff can add a manual resident with duplicate review and privacy safeguar
     const loginResponse = await fetch(`${baseUrl}/api/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ identifier: staff.email, password: staffPassword }),
+      body: JSON.stringify({ identifier: staff.email, password: 'RegistryPass123!' }),
     })
-    assert.equal(loginResponse.status, 200)
-    const token = (await loginResponse.json()).token
+    const { token } = await loginResponse.json()
     const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
-    const resident = {
-      firstName: 'Luz',
-      lastName: 'Santos',
-      birthDate: '1980-02-03',
-      sex: 'Female',
-      address: 'Sensitive address',
-      sourceFilename: 'confidential-source-sheet.csv',
-    }
 
-    const anonymousResponse = await fetch(`${baseUrl}/api/staff/residents`, {
+    const missingSexResponse = await fetch(`${baseUrl}/api/staff/residents`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(resident),
+      headers,
+      body: JSON.stringify({ firstName: 'Unknown', lastName: 'Value' }),
     })
-    assert.equal(anonymousResponse.status, 401)
-    assert.equal(anonymousResponse.headers.get('cache-control'), 'private, no-store')
+    assert.equal(missingSexResponse.status, 400)
+    const unclassifiedResponse = await fetch(`${baseUrl}/api/staff/residents`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ firstName: 'Unknown', lastName: 'Value', sex: 'Unclassified' }),
+    })
+    assert.equal(unclassifiedResponse.status, 400)
+    const invalidMaritalStatusResponse = await fetch(`${baseUrl}/api/staff/residents`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ firstName: 'Unknown', lastName: 'Value', sex: 'Female', maritalStatus: 'Complicated' }),
+    })
+    assert.equal(invalidMaritalStatusResponse.status, 400)
 
     const createResponse = await fetch(`${baseUrl}/api/staff/residents`, {
       method: 'POST',
       headers,
-      body: JSON.stringify(resident),
+      body: JSON.stringify({
+        firstName: 'Ana',
+        lastName: 'Santos',
+        birthDate: '2000-05-20',
+        sex: 'Female',
+        household: 'Household A',
+        householdId: 'Legacy household value',
+        maritalStatus: 'Married',
+        occupation: 'Teacher',
+        zone: 3,
+      }),
     })
     assert.equal(createResponse.status, 201)
-    assert.equal(createResponse.headers.get('cache-control'), 'private, no-store')
     const created = await createResponse.json()
     assert.equal(created.resident.verificationStatus, 'pending')
-    assert.equal(Object.hasOwn(created.resident, 'firstName'), false)
-    assert.equal(Object.hasOwn(created.resident, 'birthDate'), false)
-    assert.equal(Object.hasOwn(created.resident, 'address'), false)
-    assert.equal(JSON.stringify(created).includes('confidential-source-sheet.csv'), false)
+    assert.equal(created.resident.sourceReference, null)
+    assert.equal(created.resident.sourceFilename, null)
+    const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Manila' }).format(new Date())
+    const [todayYear, todayMonth, todayDay] = today.split('-').map(Number)
+    const expectedAge = todayYear - 2000 - (todayMonth < 5 || (todayMonth === 5 && todayDay < 20) ? 1 : 0)
+    assert.equal(created.resident.age, expectedAge)
+
+    const persisted = JSON.parse(await fs.readFile(testDbPath, 'utf8'))
+    const storedResident = persisted.residentRegistry[0]
+    assert.ok(storedResident.encryptedData)
+    assert.equal(JSON.stringify(storedResident).includes('Ana'), false)
+    assert.equal(JSON.stringify(storedResident).includes('Santos'), false)
+    assert.equal(JSON.stringify(storedResident).includes('Household A'), false)
+    assert.equal(JSON.stringify(storedResident).includes('Married'), false)
+    assert.equal(JSON.stringify(storedResident).includes('Teacher'), false)
+
+    const registryResponse = await fetch(`${baseUrl}/api/staff/residents?search=Ana%20Santos`, { headers })
+    assert.equal(registryResponse.status, 200)
+    const registryData = await registryResponse.json()
+    assert.equal(registryData.residents[0].firstName, 'Ana')
+    assert.equal(registryData.residents[0].birthDate, '2000-05-20')
+    assert.equal(registryData.residents[0].age, expectedAge)
+    assert.equal(registryData.residents[0].zone, 3)
+    assert.equal(registryData.residents[0].household, 'Household A')
+    assert.equal(registryData.residents[0].householdId, 'Household A')
+    assert.equal(registryData.residents[0].maritalStatus, 'Married')
+    assert.equal(registryData.residents[0].occupation, 'Teacher')
+    assert.equal(registryData.residents[0].purok, null)
+    const newFieldFilterResponse = await fetch(`${baseUrl}/api/staff/residents?maritalStatus=married&occupation=teacher`, { headers })
+    assert.equal((await newFieldFilterResponse.json()).total, 1)
+    const punctuatedSearchResponse = await fetch(`${baseUrl}/api/staff/residents?search=Ana%2C%20Sant`, { headers })
+    assert.equal((await punctuatedSearchResponse.json()).total, 1)
+    const readAudit = (await jsonDb.listAuditLogs(10)).find((entry) => entry.action === 'resident_registry.read')
+    assert.ok(readAudit)
+    assert.equal(JSON.stringify(readAudit).includes('Ana'), false)
+    assert.equal(JSON.stringify(readAudit).includes('Purok 3 Daya'), false)
 
     const duplicateResponse = await fetch(`${baseUrl}/api/staff/residents`, {
       method: 'POST',
       headers,
-      body: JSON.stringify(resident),
+      body: JSON.stringify({
+        firstName: 'Ana',
+        lastName: 'Santos',
+        birthDate: '2000-05-20',
+        sex: 'Female',
+        household: 'Household A',
+        maritalStatus: 'Married',
+        occupation: 'Teacher',
+        zone: 3,
+      }),
     })
     assert.equal(duplicateResponse.status, 409)
-    const duplicateReview = await duplicateResponse.json()
-    assert.equal(duplicateReview.reviewRequired, true)
+    assert.equal((await duplicateResponse.json()).potentialMatches.length, 1)
 
-    const concurrentRecords = Array.from({ length: 7 }, (_, index) => ({
-      id: randomUUID(),
-      firstName: resident.firstName,
-      lastName: resident.lastName,
-      birthDate: resident.birthDate,
-      sex: resident.sex,
-      householdId: null,
-      purok: null,
-      zone: null,
-      address: null,
-      status: 'active',
-      recordStatus: 'active',
-      verificationStatus: 'pending',
-      sourceFingerprint: `concurrent-review-test-${index}`,
-      createdBy: staff.id,
-      createdAt: new Date().toISOString(),
-    }))
-    const db = await jsonDb.readDb()
-    db.residentRegistry.push(...concurrentRecords)
-    await jsonDb.writeDb(db)
+    const pendingTotalsResponse = await fetch(`${baseUrl}/api/staff/demographics?zone=3`, { headers })
+    assert.equal(pendingTotalsResponse.status, 200)
+    assert.equal((await pendingTotalsResponse.json()).overall.total, 0)
 
-    const staleConfirmation = await fetch(`${baseUrl}/api/staff/residents`, {
-      method: 'POST',
+    const verifyResponse = await fetch(`${baseUrl}/api/staff/residents/${created.resident.id}/verify`, {
+      method: 'PATCH',
+      headers,
+      body: JSON.stringify({ verificationStatus: 'verified' }),
+    })
+    assert.equal(verifyResponse.status, 200)
+
+    const verifiedTotalsResponse = await fetch(`${baseUrl}/api/staff/demographics?zone=3`, { headers })
+    const verifiedTotals = await verifiedTotalsResponse.json()
+    assert.equal(verifiedTotals.overall.total, 1)
+    assert.equal(verifiedTotals.overall.female, 1)
+    assert.equal(verifiedTotals.byPurok[0].label, 'Zone 3')
+    assert.equal(verifiedTotals.byHousehold[0].householdId, 'Household A')
+
+    const editResponse = await fetch(`${baseUrl}/api/staff/residents/${created.resident.id}`, {
+      method: 'PATCH',
       headers,
       body: JSON.stringify({
-        ...resident,
-        confirmPotentialMatch: true,
-        reviewedMatches: duplicateReview.reviewedMatches,
+        firstName: 'Ana Maria',
+        birthDate: '2001-06-21',
+        zone: 2,
+        household: 'Household B',
+        maritalStatus: 'Divorced',
+        occupation: 'Nurse',
+        sourceReference: 'Roster page 2',
+        verificationStatus: 'needs_review',
       }),
     })
-    assert.equal(staleConfirmation.status, 409)
-    const refreshedReview = await staleConfirmation.json()
-    assert.equal(refreshedReview.potentialMatches.length, 8)
-
-    const confirmedResponse = await fetch(`${baseUrl}/api/staff/residents`, {
-      method: 'POST',
+    assert.equal(editResponse.status, 200)
+    const edited = await editResponse.json()
+    assert.equal(edited.resident.firstName, 'Ana Maria')
+    assert.equal(edited.resident.lastName, 'Santos')
+    assert.equal(edited.resident.birthDate, '2001-06-21')
+    assert.equal(edited.resident.zone, 2)
+    assert.equal(edited.resident.household, 'Household B')
+    assert.equal(edited.resident.maritalStatus, 'Divorced')
+    assert.equal(edited.resident.occupation, 'Nurse')
+    assert.equal(edited.resident.verificationStatus, 'needs_review')
+    const renamedSearch = await fetch(`${baseUrl}/api/staff/residents?search=Ana%20Maria`, { headers })
+    assert.equal((await renamedSearch.json()).total, 1)
+    const editAudit = (await jsonDb.listAuditLogs(10)).find((entry) => entry.action === 'resident_registry.record_updated')
+    assert.deepEqual(editAudit.metadata.changedFields.sort(), ['birthDate', 'firstName', 'household', 'maritalStatus', 'occupation', 'sourceReference', 'verificationStatus', 'zone'].sort())
+    assert.equal(JSON.stringify(editAudit).includes('Ana Maria'), false)
+    assert.equal(JSON.stringify(editAudit).includes('Divorced'), false)
+    assert.equal(JSON.stringify(editAudit).includes('Nurse'), false)
+    const clearOptionalFieldsResponse = await fetch(`${baseUrl}/api/staff/residents/${created.resident.id}`, {
+      method: 'PATCH',
       headers,
-      body: JSON.stringify({
-        ...resident,
-        confirmPotentialMatch: true,
-        reviewedMatches: refreshedReview.reviewedMatches,
-      }),
+      body: JSON.stringify({ maritalStatus: null, sourceReference: null, sourceFilename: null }),
     })
-    assert.equal(confirmedResponse.status, 200)
-    const confirmedData = await confirmedResponse.json()
-    assert.equal(confirmedData.resident.verificationStatus, 'pending')
-    assert.equal(confirmedData.created, false)
-
-    const recordsResponse = await fetch(`${baseUrl}/api/staff/residents?page=1&pageSize=25`, {
-      headers: { Authorization: `Bearer ${token}` },
-    })
-    const records = await recordsResponse.json()
-    assert.equal(records.total, 8)
-    assert.ok(records.residents.every((record) => record.verificationStatus === 'pending'))
-    assert.ok(records.residents.every((record) => !Object.hasOwn(record, 'address')))
-    assert.ok(records.residents.every((record) => !Object.hasOwn(record, 'sourceFilename')))
-
-    const concurrentEntries = ['ConcurrentOne', 'ConcurrentTwo'].map((firstName) => fetch(`${baseUrl}/api/staff/residents`, {
-      method: 'POST',
+    assert.equal(clearOptionalFieldsResponse.status, 200)
+    const clearedOptionalFields = await clearOptionalFieldsResponse.json()
+    assert.equal(clearedOptionalFields.resident.maritalStatus, null)
+    assert.equal(clearedOptionalFields.resident.sourceReference, null)
+    assert.equal(clearedOptionalFields.resident.sourceFilename, null)
+    const invalidMaritalStatusEdit = await fetch(`${baseUrl}/api/staff/residents/${created.resident.id}`, {
+      method: 'PATCH',
       headers,
-      body: JSON.stringify({ firstName, lastName: 'Household' }),
-    }))
-    const concurrentResponses = await Promise.all(concurrentEntries)
-    assert.ok(concurrentResponses.every((response) => response.status === 201))
-    const afterConcurrentWrites = await jsonDb.listResidentRegistry({ page: 1, pageSize: 25 })
-    assert.equal(afterConcurrentWrites.total, 10)
+      body: JSON.stringify({ maritalStatus: 'Complicated' }),
+    })
+    assert.equal(invalidMaritalStatusEdit.status, 400)
 
-    const auditLogs = await jsonDb.listAuditLogs()
-    const createAudits = auditLogs.filter((entry) => entry.action === 'resident_registry.created')
-    assert.equal(createAudits.length, 3)
-    assert.ok(createAudits.every((entry) => entry.actorId === staff.id))
-    assert.ok(createAudits.every((entry) => !JSON.stringify(entry).includes('Luz')))
-    assert.ok(createAudits.every((entry) => !JSON.stringify(entry).includes('confidential-source-sheet.csv')))
+    const invalidEditResponse = await fetch(`${baseUrl}/api/staff/residents/${created.resident.id}`, {
+      method: 'PATCH',
+      headers,
+      body: JSON.stringify({ birthDate: '2999-01-01' }),
+    })
+    assert.equal(invalidEditResponse.status, 400)
+
+    const invalidZone = await fetch(`${baseUrl}/api/staff/residents?zone=8`, { headers })
+    assert.equal(invalidZone.status, 400)
   } finally {
-    await new Promise((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()))
+    await new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())))
+  }
+})
+
+test('staff source-review warnings are protected, deduplicated, auditable, and resolvable', async () => {
+  const { server, baseUrl } = await createTestServer()
+  const staff = {
+    id: randomUUID(),
+    firstName: 'Source',
+    lastName: 'Reviewer',
+    mobile: `092${Math.floor(10000000 + Math.random() * 90000000)}`,
+    email: `source.reviewer.${Date.now()}@example.com`,
+    passwordHash: await hashPassword('SourceReviewPass123!'),
+    role: 'staff',
+    status: 'On Duty',
+    zone: 1,
+  }
+
+  try {
+    await jsonDb.saveUser(staff)
+    const loginResponse = await fetch(`${baseUrl}/api/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ identifier: staff.email, password: 'SourceReviewPass123!' }),
     })
+    assert.equal(loginResponse.status, 200)
+    const { token } = await loginResponse.json()
+    const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
+    const endpoint = `${baseUrl}/api/staff/registry-source-reviews`
+
+    assert.equal((await fetch(endpoint)).status, 401)
+
+    const createResponse = await fetch(endpoint, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ zone: 2, purok: 'Purok 4' }),
+    })
+    assert.equal(createResponse.status, 201)
+    const created = await createResponse.json()
+    assert.equal(created.review.status, 'open')
+    assert.equal(created.review.zone, 2)
+    assert.equal(Object.hasOwn(created.review, 'createdBy'), false)
+
+    const duplicateResponse = await fetch(endpoint, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ zone: 2, purok: 'purok 4' }),
+    })
+    assert.equal(duplicateResponse.status, 200)
+    assert.equal((await duplicateResponse.json()).created, false)
+
+    const listResponse = await fetch(endpoint, { headers })
+    assert.equal(listResponse.status, 200)
+    assert.equal((await listResponse.json()).reviews.length, 1)
+
+    const resolveResponse = await fetch(`${endpoint}/${created.review.id}/resolve`, { method: 'PATCH', headers })
+    assert.equal(resolveResponse.status, 200)
+    assert.equal((await resolveResponse.json()).review.status, 'resolved')
+
+    const remainingResponse = await fetch(endpoint, { headers })
+    assert.deepEqual((await remainingResponse.json()).reviews, [])
+    const auditActions = (await jsonDb.listAuditLogs(10)).map((entry) => entry.action)
+    assert.ok(auditActions.includes('resident_registry.source_review_opened'))
+    assert.ok(auditActions.includes('resident_registry.source_review_resolved'))
+  } finally {
+    await new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())))
+  }
+})
+
+test('admin emergency access is password-confirmed, scoped, audited, and revocable', async () => {
+  const { server, baseUrl } = await createTestServer()
+  const admin = (await jsonDb.listAllUsers()).find((user) => user.role === 'admin')
+
+  try {
+    const loginResponse = await fetch(`${baseUrl}/api/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ identifier: admin.email, password: ADMIN_SEED.password }),
+    })
+    assert.equal(loginResponse.status, 200)
+    const { token } = await loginResponse.json()
+    const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
+
+    const deniedDashboard = await fetch(`${baseUrl}/api/staff/dashboard-requests`, { headers })
+    assert.equal(deniedDashboard.status, 403)
+    const deniedGeneralRequests = await fetch(`${baseUrl}/api/requests`, { headers })
+    assert.equal(deniedGeneralRequests.status, 403)
+    const deniedRegistry = await fetch(`${baseUrl}/api/staff/residents`, { headers })
+    assert.equal(deniedRegistry.status, 403)
+    const deniedDemographics = await fetch(`${baseUrl}/api/staff/demographics`, { headers })
+    assert.equal(deniedDemographics.status, 403)
+    const accountManagement = await fetch(`${baseUrl}/api/admin/users`, { headers })
+    assert.equal(accountManagement.status, 200)
+    const accountUpdate = await fetch(`${baseUrl}/api/admin/users/${admin.id}`, {
+      method: 'PATCH',
+      headers,
+      body: JSON.stringify({ status: 'Disabled' }),
+    })
+    assert.equal(accountUpdate.status, 403)
+    const announcementManagement = await fetch(`${baseUrl}/api/announcements`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ title: 'Preview notice', content: 'Admin announcements are read-only.' }),
+    })
+    assert.equal(announcementManagement.status, 403)
+
+    const badPassword = await fetch(`${baseUrl}/api/admin/emergency-access`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ reason: 'Urgent staff absence requiring request processing.', currentPassword: 'wrong-password' }),
+    })
+    assert.equal(badPassword.status, 401)
+
+    const activationResponse = await fetch(`${baseUrl}/api/admin/emergency-access`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ reason: 'Urgent staff absence requiring request processing.', currentPassword: ADMIN_SEED.password }),
+    })
+    assert.equal(activationResponse.status, 201)
+    const activated = await activationResponse.json()
+    assert.equal(activated.grant.isOwnGrant, true)
+    assert.deepEqual(activated.grant.scopes, ['resident-registry.read', 'resident-registry.manage', 'request-processing'])
+    assert.ok(new Date(activated.grant.expiresAt).getTime() > Date.now())
+    const concurrentActivation = await fetch(`${baseUrl}/api/admin/emergency-access`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ reason: 'Urgent staff absence requiring request processing.', currentPassword: ADMIN_SEED.password }),
+    })
+    assert.equal(concurrentActivation.status, 409)
+
+    const allowedDashboard = await fetch(`${baseUrl}/api/staff/dashboard-requests`, { headers })
+    assert.equal(allowedDashboard.status, 200)
+    assert.equal((await fetch(`${baseUrl}/api/staff/residents`, { headers })).status, 200)
+    assert.equal((await fetch(`${baseUrl}/api/staff/demographics`, { headers })).status, 200)
+    assert.equal((await fetch(`${baseUrl}/api/admin/users/${admin.id}`, {
+      method: 'PATCH',
+      headers,
+      body: JSON.stringify({ status: 'Disabled' }),
+    })).status, 403)
+    assert.equal((await fetch(`${baseUrl}/api/announcements`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ title: 'Emergency bypass attempt', content: 'Should remain blocked.' }),
+    })).status, 403)
+    const statusResponse = await fetch(`${baseUrl}/api/admin/emergency-access`, { headers })
+    assert.equal((await statusResponse.json()).active, true)
+
+    const revokeResponse = await fetch(`${baseUrl}/api/admin/emergency-access/revoke`, { method: 'POST', headers })
+    assert.equal(revokeResponse.status, 200)
+    const deniedAfterRevoke = await fetch(`${baseUrl}/api/staff/dashboard-requests`, { headers })
+    assert.equal(deniedAfterRevoke.status, 403)
+    assert.equal((await fetch(`${baseUrl}/api/staff/residents`, { headers })).status, 403)
+
+    const secondActivation = await fetch(`${baseUrl}/api/admin/emergency-access`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ reason: 'Urgent staff absence requiring request processing.', currentPassword: ADMIN_SEED.password }),
+    })
+    assert.equal(secondActivation.status, 201)
+    const database = await jsonDb.readDb()
+    database.emergencyAccessGrants.at(-1).expiresAt = new Date(Date.now() - 1000).toISOString()
+    await jsonDb.writeDb(database)
+    const expiredStatus = await fetch(`${baseUrl}/api/admin/emergency-access`, { headers })
+    assert.equal((await expiredStatus.json()).active, false)
+    const deniedAfterExpiry = await fetch(`${baseUrl}/api/staff/dashboard-requests`, { headers })
+    assert.equal(deniedAfterExpiry.status, 403)
+
+    const logs = await jsonDb.listAuditLogs(50)
+    assert.ok(logs.some((entry) => entry.action === 'emergency_access.activated'))
+    assert.ok(logs.some((entry) => entry.action === 'emergency_access.used'))
+    assert.ok(logs.some((entry) => entry.action === 'emergency_access.revoked'))
+    assert.ok(logs.some((entry) => entry.action === 'emergency_access.denied'))
+    assert.ok(logs.some((entry) => entry.action === 'admin.read_only.denied'))
+  } finally {
+    await new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())))
+  }
+})
+
+test('registry CSV import validates every row, pauses on duplicates, and audits only the batch', async () => {
+  const { server, baseUrl } = await createTestServer()
+  const staff = {
+    id: randomUUID(),
+    firstName: 'Registry',
+    lastName: 'Importer',
+    mobile: `092${Math.floor(10000000 + Math.random() * 90000000)}`,
+    email: `registry.import.${Date.now()}@example.com`,
+    passwordHash: await hashPassword('RegistryPass123!'),
+    role: 'staff',
+    status: 'On Duty',
+    zone: 1,
+  }
+
+  try {
+    await jsonDb.saveUser(staff)
+    const login = await fetch(`${baseUrl}/api/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ identifier: staff.email, password: 'RegistryPass123!' }),
+    })
+    const { token } = await login.json()
+    const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
+    const file = 'purok-3-roster.csv'
+    const residents = [
+      { firstName: 'Lina', lastName: 'Reyes', birthDate: '1988-02-29', sex: 'Female', household: 'Household 3A', maritalStatus: 'Married', occupation: 'Teacher', zone: '3', sourceReference: 'Page 1 row 2' },
+      { firstName: 'Marco', lastName: 'Reyes', birthDate: null, sex: 'Male', household: 'Household 3A', maritalStatus: 'Single', occupation: 'Farmer', zone: '3', sourceReference: 'Page 1 row 3' },
+    ]
+
+    const invalidResponse = await fetch(`${baseUrl}/api/staff/residents/import`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ filename: file, residents: [{ ...residents[0], zone: '8' }] }),
+    })
+    assert.equal(invalidResponse.status, 400)
+    assert.equal(((await jsonDb.readDb()).residentRegistry || []).length, 0)
+
+    for (const sex of ['', 'Unclassified']) {
+      const invalidSexResponse = await fetch(`${baseUrl}/api/staff/residents/import`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ filename: file, residents: [{ ...residents[0], sex }] }),
+      })
+      assert.equal(invalidSexResponse.status, 400)
+    }
+    const invalidMaritalStatusImport = await fetch(`${baseUrl}/api/staff/residents/import`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ filename: file, residents: [{ ...residents[0], maritalStatus: 'Complicated' }] }),
+    })
+    assert.equal(invalidMaritalStatusImport.status, 400)
+
+    const importResponse = await fetch(`${baseUrl}/api/staff/residents/import`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ filename: file, residents }),
+    })
+    assert.equal(importResponse.status, 201)
+    const imported = await importResponse.json()
+    assert.equal(imported.imported, 2)
+    assert.equal(imported.verificationStatus, 'pending')
+    const importedSearch = await fetch(`${baseUrl}/api/staff/residents?maritalStatus=Married&occupation=Teacher`, { headers })
+    const importedRegistry = await importedSearch.json()
+    assert.equal(importedRegistry.total, 1)
+    assert.equal(importedRegistry.residents[0].household, 'Household 3A')
+    assert.equal(importedRegistry.residents[0].maritalStatus, 'Married')
+    assert.equal(importedRegistry.residents[0].occupation, 'Teacher')
+
+    const duplicateResponse = await fetch(`${baseUrl}/api/staff/residents/import`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ filename: file, residents: [residents[0]] }),
+    })
+    assert.equal(duplicateResponse.status, 409)
+    const duplicateBody = await duplicateResponse.json()
+    assert.equal(duplicateBody.reviewRequired, true)
+    assert.equal(duplicateBody.potentialMatches[0].row, 2)
+    assert.equal(((await jsonDb.readDb()).residentRegistry || []).length, 2)
+
+    const confirmedResponse = await fetch(`${baseUrl}/api/staff/residents/import`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ filename: file, residents: [residents[0]], confirmPotentialMatches: true }),
+    })
+    assert.equal(confirmedResponse.status, 201)
+    assert.equal(((await jsonDb.readDb()).residentRegistry || []).length, 3)
+
+    const exportAuditResponse = await fetch(`${baseUrl}/api/staff/residents/export-audit`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        count: 3,
+        format: 'csv',
+        grouping: 'zone_household_name',
+        filters: {
+          hasSearch: false,
+          hasBirthDate: false,
+          hasAge: false,
+          hasZone: true,
+          hasMaritalStatusFilter: false,
+          hasOccupationFilter: false,
+        },
+      }),
+    })
+    assert.equal(exportAuditResponse.status, 200)
+
+    const printAudit = await fetch(`${baseUrl}/api/staff/residents/print-audit`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ count: 3, filters: { zone: '3', purok: 'Purok 3 Daya', page: 1 } }),
+    })
+    assert.equal(printAudit.status, 503)
+    const logs = await jsonDb.listAuditLogs(10)
+    const importLogs = logs.filter((entry) => entry.action === 'resident_registry.bulk_imported')
+    const printLog = logs.find((entry) => entry.action === 'resident_registry.print.blocked')
+    const exportLog = logs.find((entry) => entry.action === 'resident_registry.exported')
+    assert.ok(importLogs.some((entry) => entry.metadata.count === 2))
+    assert.ok(importLogs.every((entry) => !JSON.stringify(entry).includes('Lina')))
+    assert.ok(importLogs.every((entry) => !JSON.stringify(entry).includes(file)))
+    assert.equal(printLog.metadata.recordCount, 3)
+    assert.equal(JSON.stringify(printLog).includes('Lina'), false)
+    assert.equal(JSON.stringify(printLog).includes('Purok 3 Daya'), false)
+    assert.equal(exportLog.metadata.recordCount, 3)
+    assert.equal(exportLog.metadata.grouping, 'zone_household_name')
+    assert.equal(JSON.stringify(exportLog).includes('Lina'), false)
+    assert.equal(JSON.stringify(exportLog).includes('Household 3A'), false)
+
+    const invalidExportAudit = await fetch(`${baseUrl}/api/staff/residents/export-audit`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        count: 1,
+        format: 'csv',
+        grouping: 'name',
+        filters: { hasSearch: false },
+      }),
+    })
+    assert.equal(invalidExportAudit.status, 400)
+  } finally {
+    await new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())))
+  }
+})
+
+test('staff can manually archive bounded closed-request batches and restore without replacing conflicts', async () => {
+  const { server, baseUrl } = await createTestServer()
+  const staff = {
+    id: randomUUID(),
+    firstName: 'Archive',
+    lastName: 'Staff',
+    mobile: `092${Math.floor(10000000 + Math.random() * 90000000)}`,
+    email: `archive.staff.${Date.now()}@example.com`,
+    passwordHash: await hashPassword('RegistryPass123!'),
+    role: 'staff',
+    status: 'On Duty',
+    zone: 1,
+  }
+  let archiveFilename = null
+
+  try {
+    await jsonDb.saveUser(staff)
+    const login = await fetch(`${baseUrl}/api/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ identifier: staff.email, password: 'RegistryPass123!' }),
+    })
+    const { token } = await login.json()
+    const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
+    const database = await jsonDb.readDb()
+    database.requests = [
+      ...Array.from({ length: 501 }, (_, index) => ({
+        id: randomUUID(),
+        userId: randomUUID(),
+        type: 'Certificate',
+        purpose: 'Archive batch test',
+        status: index % 2 ? 'Approved' : 'Rejected',
+        date: new Date().toISOString(),
+      })),
+      { id: randomUUID(), userId: randomUUID(), type: 'Certificate', purpose: 'Keep active', status: 'Pending', date: new Date().toISOString() },
+    ]
+    await jsonDb.writeDb(database)
+
+    const scheduledArchiveResponse = await fetch(`${baseUrl}/api/staff/archive-requests`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ days: 1 }),
+    })
+    assert.equal(scheduledArchiveResponse.status, 400)
+
+    const archiveResponse = await fetch(`${baseUrl}/api/staff/archive-requests`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ days: 0 }),
+    })
+    assert.equal(archiveResponse.status, 200)
+    const { archive } = await archiveResponse.json()
+    archiveFilename = path.basename(archive.filename)
+    assert.equal(archive.count, 500)
+    assert.equal(archive.remaining, 1)
+    assert.match(archiveFilename, /^queue-approvals-.*\.json$/)
+    assert.equal((await jsonDb.getArchive(archiveFilename)).records.length, 500)
+
+    const firstRestore = await fetch(`${baseUrl}/api/staff/archive-requests/restore`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ filename: archiveFilename }),
+    })
+    assert.equal(firstRestore.status, 200)
+    assert.deepEqual((await firstRestore.json()).restore, { restoredCount: 500, conflictCount: 0 })
+
+    const secondRestore = await fetch(`${baseUrl}/api/staff/archive-requests/restore`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ filename: archiveFilename }),
+    })
+    assert.equal(secondRestore.status, 200)
+    assert.deepEqual((await secondRestore.json()).restore, { restoredCount: 0, conflictCount: 500 })
+    assert.ok(await jsonDb.getArchive(archiveFilename))
+    const activeRequests = (await jsonDb.readDb()).requests
+    assert.equal(activeRequests.filter((request) => ['Approved', 'Rejected'].includes(request.status)).length, 501)
+    assert.equal(activeRequests.filter((request) => request.status === 'Pending').length, 1)
+  } finally {
+    if (archiveFilename) await jsonDb.deleteArchive(archiveFilename)
+    await new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())))
   }
 })

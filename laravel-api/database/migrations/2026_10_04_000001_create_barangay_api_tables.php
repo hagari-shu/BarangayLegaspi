@@ -50,6 +50,7 @@ return new class extends Migration
                 $table->string('delivery_method', 30)->default('online');
                 $table->text('delivery_note')->nullable();
                 $table->json('follow_ups')->default('[]');
+                $table->json('status_history')->default('[]');
                 $table->timestampTz('created_at')->useCurrent();
                 $table->timestampTz('updated_at')->nullable();
                 $table->foreign('user_id')->references('id')->on('users')->cascadeOnDelete();
@@ -58,6 +59,7 @@ return new class extends Migration
         $this->addColumn('requests', 'delivery_method', fn (Blueprint $table) => $table->string('delivery_method', 30)->default('online'));
         $this->addColumn('requests', 'delivery_note', fn (Blueprint $table) => $table->text('delivery_note')->nullable());
         $this->addColumn('requests', 'follow_ups', fn (Blueprint $table) => $table->json('follow_ups')->default('[]'));
+        $this->addColumn('requests', 'status_history', fn (Blueprint $table) => $table->json('status_history')->default('[]'));
         $this->addColumn('requests', 'updated_at', fn (Blueprint $table) => $table->timestampTz('updated_at')->nullable());
 
         if (!Schema::hasTable('announcements')) {

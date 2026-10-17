@@ -31,32 +31,16 @@ jobs:
         run: |
           set -euo pipefail
           body="$(curl --fail --silent --show-error --retry 2 --retry-delay 5 --max-time 25 \
-            https://barangaylegaspi.onrender.com/api/health)"
-          printf '%s' "$body" | node -e '
-            let health;
-            try { health = JSON.parse(require("fs").readFileSync(0, "utf8")); }
-            catch { console.error("Health endpoint did not return valid JSON."); process.exit(1); }
-            if (health.ok !== true || health.storage !== "postgres") {
-              console.error("API health check failed or PostgreSQL is unavailable:", health);
-              process.exit(1);
-            }
-            console.log(`Active Node API healthy; storage=${health.storage}`);
-          '
-
-      - name: Check staged Laravel API health
-        run: |
-          set -euo pipefail
-          body="$(curl --fail --silent --show-error --retry 2 --retry-delay 5 --max-time 25 \
             https://brgy-legaspi-laravel.onrender.com/api/health)"
           printf '%s' "$body" | node -e '
             let health;
             try { health = JSON.parse(require("fs").readFileSync(0, "utf8")); }
-            catch { console.error("Laravel health endpoint did not return valid JSON."); process.exit(1); }
+            catch { console.error("Health endpoint did not return valid JSON."); process.exit(1); }
             if (health.ok !== true || health.storage !== "pgsql") {
-              console.error("Staged Laravel API health check failed or PostgreSQL is unavailable:", health);
+              console.error("API health check failed or PostgreSQL is unavailable:", health);
               process.exit(1);
             }
-            console.log(`Staged Laravel API healthy; storage=${health.storage}`);
+            console.log(`API healthy; storage=${health.storage}`);
           '
 
       - name: Check public API reads
@@ -65,10 +49,9 @@ jobs:
           check_collection() {
             local endpoint="$1"
             local key="$2"
-            local api_base="$3"
             local body
             body="$(curl --fail --silent --show-error --retry 2 --retry-delay 5 --max-time 25 \
-              "${api_base}/${endpoint}")"
+              "https://brgy-legaspi-laravel.onrender.com/api/${endpoint}")"
             printf '%s' "$body" | node -e '
               const key = process.argv[1];
               let data;
@@ -94,11 +77,9 @@ jobs:
               console.log(`${key} endpoint healthy; ${data[key].length} records`);
             ' "$key"
           }
-          check_collection services services https://barangaylegaspi.onrender.com/api
-          check_collection announcements announcements https://barangaylegaspi.onrender.com/api
-          check_collection events events https://barangaylegaspi.onrender.com/api
-          check_collection announcements announcements https://brgy-legaspi-laravel.onrender.com/api
-          check_collection events events https://brgy-legaspi-laravel.onrender.com/api
+          check_collection services services
+          check_collection announcements announcements
+          check_collection events events
 
       - name: Verify Laravel public content matches the active Node API
         run: |

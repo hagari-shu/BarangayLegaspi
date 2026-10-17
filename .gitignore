@@ -14,6 +14,7 @@ dist-ssr
 .env
 .env.*
 !.env.example
+!.env.hostinger.example
 
 # Editor directories and files
 .vscode/*
@@ -32,3 +33,4 @@ server/data/db-*.json
 server/data/archives/
 
 .vercel
+/public/ocr/

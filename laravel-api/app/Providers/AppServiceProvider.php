@@ -19,6 +19,10 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
+        if (app()->environment('production') && (string) config('app.key') === '') {
+            throw new \RuntimeException('APP_KEY must be configured for production data encryption.');
+        }
+
         $mfaKey = (string) config('app.mfa_encryption_key');
         if (app()->environment('production') && $mfaKey !== '') {
             if (strlen($mfaKey) < 32) {

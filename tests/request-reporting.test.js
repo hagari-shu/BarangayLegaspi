@@ -1,33 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createRequestReportCsv, filterStaffReportRequests, getStaffRequestReport, isValidReportDate } from '../server/request-reporting.js'
-import { getReportDateRange } from '../src/report-date-range.js'
-import { isStaffReportResponse } from '../src/report-contract.js'
-
-test('staff report response contract accepts API output and rejects malformed payloads', () => {
-  const report = getStaffRequestReport(requests, { from: '2026-10-09', to: '2026-10-11' })
-  assert.equal(isStaffReportResponse(report), true)
-  assert.equal(isStaffReportResponse({}), false)
-  assert.equal(isStaffReportResponse({ ...report, summary: undefined }), false)
-  assert.equal(isStaffReportResponse({ ...report, activity: {} }), false)
-  assert.equal(isStaffReportResponse({
-    ...report,
-    statusDistribution: [{ name: 'Pending', count: -1 }],
-  }), false)
-})
-
-test('staff report date presets use Manila calendar days and handle month boundaries', () => {
-  const now = new Date('2026-10-14T00:30:00.000Z')
-
-  assert.deepEqual(getReportDateRange('today', now), { from: '2026-10-14', to: '2026-10-14' })
-  assert.deepEqual(getReportDateRange('last7', now), { from: '2026-10-08', to: '2026-10-14' })
-  assert.deepEqual(getReportDateRange('last30', now), { from: '2026-09-15', to: '2026-10-14' })
-  assert.deepEqual(getReportDateRange('thisMonth', now), { from: '2026-10-01', to: '2026-10-14' })
-  assert.deepEqual(getReportDateRange('previousMonth', now), { from: '2026-09-01', to: '2026-09-30' })
-  assert.deepEqual(getReportDateRange('all', now), { from: '', to: '' })
-  assert.deepEqual(getReportDateRange('custom', now), { from: '', to: '' })
-  assert.throws(() => getReportDateRange('unsupported', now), RangeError)
-})
 
 const requests = [
   {

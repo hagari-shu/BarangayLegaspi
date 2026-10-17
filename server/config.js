@@ -8,10 +8,15 @@ dotenv.config()
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
-const dataDir = path.join(__dirname, 'data')
 const isTestRun = process.env.NODE_ENV === 'test'
   || process.execArgv.some((arg) => arg.includes('--test'))
   || process.argv.some((arg) => arg.includes('--test') || /\.test\.[cm]?[jt]s$/i.test(arg))
+if (process.env.BRGY_TEST_DATA_DIR && !isTestRun) {
+  throw new Error('BRGY_TEST_DATA_DIR can only be used by a test process.')
+}
+const dataDir = process.env.BRGY_TEST_DATA_DIR
+  ? path.resolve(process.env.BRGY_TEST_DATA_DIR)
+  : path.join(__dirname, 'data')
 const dbPath = path.join(dataDir, isTestRun ? `db-${process.pid}.json` : 'db.json')
 
 if (!fs.existsSync(dataDir)) {
@@ -28,6 +33,7 @@ if (!fs.existsSync(dbPath)) {
 
 export const DB_PATH = dbPath
 export const IS_PRODUCTION = process.env.NODE_ENV === 'production'
+export const IS_TEST_RUN = isTestRun
 const defaultCorsOrigins = ['http://localhost:5173', 'http://localhost:5174', 'http://127.0.0.1:5173', 'http://127.0.0.1:5174']
 const configuredCorsOrigins = (process.env.CORS_ORIGINS || '').split(',').map((origin) => origin.trim()).filter(Boolean)
 export const CORS_ORIGINS = [...new Set([
@@ -66,6 +72,9 @@ export const ADMIN_SEED = {
 export const JWT_SECRET = resolvedJwtSecret
 export const MFA_ENCRYPTION_KEY = process.env.MFA_ENCRYPTION_KEY || ''
 export const MFA_ENCRYPTION_KEY_PREVIOUS = process.env.MFA_ENCRYPTION_KEY_PREVIOUS || ''
+export const RESIDENT_DATA_ENCRYPTION_KEY = process.env.RESIDENT_DATA_ENCRYPTION_KEY
+  || (isTestRun ? 'unit-test-resident-registry-encryption-key' : '')
+export const RESIDENT_DATA_ENCRYPTION_KEY_PREVIOUS = process.env.RESIDENT_DATA_ENCRYPTION_KEY_PREVIOUS || ''
 const previousMfaEncryptionKeys = MFA_ENCRYPTION_KEY_PREVIOUS
   .split(',')
   .map((key) => key.trim())
@@ -86,4 +95,31 @@ if (IS_PRODUCTION && MFA_ENCRYPTION_KEY && previousMfaEncryptionKeys.includes(MF
 }
 if (IS_PRODUCTION && new Set(previousMfaEncryptionKeys).size !== previousMfaEncryptionKeys.length) {
   throw new Error('MFA_ENCRYPTION_KEY_PREVIOUS must not contain duplicate entries.')
+}
+
+const previousResidentDataEncryptionKeys = RESIDENT_DATA_ENCRYPTION_KEY_PREVIOUS
+  .split(',')
+  .map((key) => key.trim())
+  .filter(Boolean)
+
+if (IS_PRODUCTION && RESIDENT_DATA_ENCRYPTION_KEY.length < 32) {
+  throw new Error('RESIDENT_DATA_ENCRYPTION_KEY must be configured with at least 32 characters in production.')
+}
+if (IS_PRODUCTION && previousResidentDataEncryptionKeys.some((key) => key.length < 32)) {
+  throw new Error('Every RESIDENT_DATA_ENCRYPTION_KEY_PREVIOUS entry must contain at least 32 characters.')
+}
+if (IS_PRODUCTION && RESIDENT_DATA_ENCRYPTION_KEY === JWT_SECRET) {
+  throw new Error('RESIDENT_DATA_ENCRYPTION_KEY must be different from JWT_SECRET.')
+}
+if (IS_PRODUCTION && MFA_ENCRYPTION_KEY && RESIDENT_DATA_ENCRYPTION_KEY === MFA_ENCRYPTION_KEY) {
+  throw new Error('RESIDENT_DATA_ENCRYPTION_KEY must be different from MFA_ENCRYPTION_KEY.')
+}
+if (IS_PRODUCTION && previousResidentDataEncryptionKeys.includes(RESIDENT_DATA_ENCRYPTION_KEY)) {
+  throw new Error('RESIDENT_DATA_ENCRYPTION_KEY_PREVIOUS must be different from RESIDENT_DATA_ENCRYPTION_KEY.')
+}
+if (IS_PRODUCTION && previousResidentDataEncryptionKeys.some((key) => [JWT_SECRET, MFA_ENCRYPTION_KEY].includes(key))) {
+  throw new Error('Resident registry encryption keys must not reuse JWT or MFA encryption keys.')
+}
+if (IS_PRODUCTION && new Set(previousResidentDataEncryptionKeys).size !== previousResidentDataEncryptionKeys.length) {
+  throw new Error('RESIDENT_DATA_ENCRYPTION_KEY_PREVIOUS must not contain duplicate entries.')
 }
