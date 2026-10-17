@@ -50,6 +50,8 @@ jobs:
 
       - name: Install Laravel dependencies
         working-directory: laravel-api
+        env:
+          APP_ENV: testing
         run: composer install --no-interaction --prefer-dist --no-progress
 
       - name: Run Laravel feature suite on PostgreSQL
