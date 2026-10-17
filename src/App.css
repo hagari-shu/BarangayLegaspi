@@ -601,6 +601,72 @@ textarea:focus {
   margin: 0 auto;
 }
 
+.staff-invitation-page {
+  display: flex;
+  min-height: 100vh;
+  align-items: center;
+  justify-content: center;
+  padding: 24px 16px;
+  background: var(--page-bg, #f4f7f5);
+}
+
+.staff-invitation-card {
+  width: min(100%, 520px);
+  padding: 28px;
+  border: 1px solid rgba(20, 42, 35, 0.14);
+  border-radius: 18px;
+  background: #fff;
+  box-shadow: 0 12px 32px rgba(20, 42, 35, 0.1);
+}
+
+.staff-invitation-card h1 {
+  margin: 0 0 8px;
+  color: var(--green-800);
+}
+
+.staff-invitation-card > p {
+  line-height: 1.55;
+}
+
+.staff-invitation-card form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-top: 20px;
+}
+
+.staff-invitation-card label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--text-900);
+  font-weight: 650;
+}
+
+.staff-invitation-card input {
+  min-height: 44px;
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font: inherit;
+}
+
+.staff-invitation-card input:focus-visible {
+  outline: 3px solid rgba(14, 93, 77, 0.2);
+  border-color: var(--green-700);
+}
+
+.staff-invitation-error {
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #fff1f0;
+  color: #9c3a32;
+}
+
+.staff-invitation-card [role="status"] .primary-btn {
+  margin-top: 10px;
+}
+
 .register-box {
   width: min(100%, 680px);
   background: rgba(255, 255, 255, 0.12);

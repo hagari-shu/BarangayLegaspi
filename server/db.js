@@ -5,10 +5,17 @@ import { DB_PATH } from './config.js'
 
 const dbDir = path.dirname(DB_PATH)
 let registryMutationQueue = Promise.resolve()
+let provisioningMutationQueue = Promise.resolve()
 
 const serializeRegistryMutation = (operation) => {
   const result = registryMutationQueue.then(operation, operation)
   registryMutationQueue = result.then(() => undefined, () => undefined)
+  return result
+}
+
+const serializeProvisioningMutation = (operation) => {
+  const result = provisioningMutationQueue.then(operation, operation)
+  provisioningMutationQueue = result.then(() => undefined, () => undefined)
   return result
 }
 
@@ -85,6 +92,33 @@ export async function saveUser(user) {
   db.users.push(user)
   await writeDb(db)
   return user
+}
+
+export async function registerResident(user, auditEntry) {
+  return serializeProvisioningMutation(async () => {
+    const db = await readDb()
+    const email = String(user.email || '').toLowerCase()
+    if (db.users.some((existing) => (
+      String(existing.email || '').toLowerCase() === email
+      || String(existing.mobile || '') === user.mobile
+    ))) {
+      return { status: 'account_exists' }
+    }
+
+    const hasPendingInvitation = (db.staffInvitations || []).some((invitation) => (
+      String(invitation.email || '').toLowerCase() === email
+      && !invitation.acceptedAt
+      && !invitation.revokedAt
+      && Date.parse(invitation.expiresAt) > Date.parse(user.createdAt)
+    ))
+    if (hasPendingInvitation) return { status: 'invitation_pending' }
+
+    db.users.push(user)
+    db.auditLogs = Array.isArray(db.auditLogs) ? db.auditLogs : []
+    db.auditLogs.push(auditEntry)
+    await writeDb(db)
+    return { status: 'created' }
+  })
 }
 
 export async function saveRequest(request) {
@@ -440,6 +474,104 @@ export async function addAuditLog(entry) {
   db.auditLogs.push(entry)
   await writeDb(db)
   return entry
+}
+
+export async function issueStaffInvitation(invitation, auditEntry) {
+  return serializeProvisioningMutation(async () => {
+    const db = await readDb()
+    if (db.users.some((user) => String(user.email || '').toLowerCase() === invitation.email)) {
+      return { status: 'account_exists' }
+    }
+
+    db.staffInvitations = Array.isArray(db.staffInvitations) ? db.staffInvitations : []
+    for (const existing of db.staffInvitations) {
+      if (
+        String(existing.email || '').toLowerCase() === invitation.email
+        && !existing.acceptedAt
+        && !existing.revokedAt
+      ) {
+        existing.revokedAt = invitation.issuedAt
+      }
+    }
+    db.staffInvitations.push({ ...invitation, position: invitation.position || 'Staff' })
+    db.auditLogs = Array.isArray(db.auditLogs) ? db.auditLogs : []
+    db.auditLogs.push(auditEntry)
+    await writeDb(db)
+    return { status: 'created' }
+  })
+}
+
+export async function getStaffInvitationByTokenHash(tokenHash) {
+  const db = await readDb()
+  return (db.staffInvitations || []).find((invitation) => invitation.tokenHash === tokenHash) || null
+}
+
+export async function acceptStaffInvitation({ tokenHash, user, acceptedAt, auditEntry }) {
+  return serializeProvisioningMutation(async () => {
+    const db = await readDb()
+    const invitation = (db.staffInvitations || []).find((entry) => entry.tokenHash === tokenHash)
+    if (
+      !invitation
+      || invitation.acceptedAt
+      || invitation.revokedAt
+      || Date.parse(invitation.expiresAt) <= Date.parse(acceptedAt)
+    ) {
+      return { status: 'invalid_invitation' }
+    }
+    if (db.users.some((existing) => (
+      String(existing.email || '').toLowerCase() === invitation.email
+      || String(existing.mobile || '') === user.mobile
+    ))) {
+      return { status: 'account_exists' }
+    }
+
+    db.users.push({
+      id: user.id,
+      firstName: user.firstName,
+      lastName: user.lastName,
+      mobile: user.mobile,
+      email: invitation.email,
+      passwordHash: user.passwordHash,
+      role: 'staff',
+      householdId: user.householdId,
+      familyMembers: 1,
+      householdMembers: [],
+      status: 'On Duty',
+      address: 'Barangay Hall, Legaspi',
+      zone: 0,
+      position: invitation.position || 'Staff',
+      availability: 'Available',
+      createdAt: acceptedAt,
+    })
+    invitation.acceptedAt = acceptedAt
+    db.auditLogs = Array.isArray(db.auditLogs) ? db.auditLogs : []
+    db.auditLogs.push(auditEntry)
+    await writeDb(db)
+    return { status: 'created', userId: user.id }
+  })
+}
+
+export async function promoteExistingUserToAdmin({ email, mobile, auditEntry }) {
+  return serializeProvisioningMutation(async () => {
+    const db = await readDb()
+    const matches = db.users.filter((user) => (
+      String(user.email || '').toLowerCase() === email.toLowerCase()
+      && String(user.mobile || '') === mobile
+    ))
+    if (matches.length !== 1) return { status: 'not_found' }
+
+    const user = matches[0]
+    if (user.role === 'admin') return { status: 'already_admin', userId: user.id }
+    if (user.role !== 'resident') return { status: 'role_conflict' }
+    if (user.status !== 'Active Resident') return { status: 'account_unverified' }
+
+    const previousRole = user.role
+    user.role = 'admin'
+    db.auditLogs = Array.isArray(db.auditLogs) ? db.auditLogs : []
+    db.auditLogs.push(auditEntry(user.id, previousRole))
+    await writeDb(db)
+    return { status: 'promoted', userId: user.id }
+  })
 }
 
 export async function listAuditLogs(limit = 100) {

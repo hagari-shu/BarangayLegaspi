@@ -8,6 +8,7 @@ import { reportClientError } from './client-error-reporting'
 import { getReportDateRange } from './report-date-range'
 import { isStaffReportResponse } from './report-contract'
 import StaffRegistryPanel from './StaffRegistryPanel'
+import StaffInvitationPage from './StaffInvitationPage'
 import translations from './translations'
 import './App.css'
 
@@ -418,13 +419,7 @@ function UserDetailModal({ user, onClose, onUserUpdated, onArchive, allowEdit = 
               ) : fullName}</dd></div>
               {role !== 'resident' && <div><dt>Email</dt><dd>{allowEdit ? <input value={editableUser.email || ''} onChange={(event) => handleFieldChange('email', event.target.value)} /> : (editableUser.email || 'N/A')}</dd></div>}
               {role !== 'staff' && <div><dt>Mobile</dt><dd>{allowEdit ? <input value={editableUser.mobile || ''} onChange={(event) => handleFieldChange('mobile', event.target.value)} /> : (editableUser.mobile || 'N/A')}</dd></div>}
-              <div><dt>Role</dt><dd>{allowEdit ? (
-                <select value={editableUser.role ?? role} onChange={(event) => handleFieldChange('role', event.target.value)}>
-                  <option value="resident">Resident</option>
-                  <option value="staff">Staff</option>
-                  <option value="admin">Admin</option>
-                </select>
-              ) : (role.charAt(0).toUpperCase() + role.slice(1))}</dd></div>
+              <div><dt>Role</dt><dd>{role.charAt(0).toUpperCase() + role.slice(1)}</dd></div>
               {role !== 'staff' && <div><dt>Status</dt><dd>{allowEdit ? <input value={editableUser.status || ''} onChange={(event) => handleFieldChange('status', event.target.value)} /> : (editableUser.status || 'N/A')}</dd></div>}
               <div><dt>Zone</dt><dd>{allowEdit ? (
                 <select value={editableUser.zone ?? ''} onChange={(event) => handleFieldChange('zone', event.target.value === '' ? null : Number(event.target.value))}>
@@ -2490,7 +2485,7 @@ function SettingsPage({ profile, onLogout, language, setLanguage }) {
   )
 }
 
-function StaffPage({ staffMembers = [], announcements = [], currentUser, userRole = 'staff', onProcessRequest, onLogout, onAddStaffMember, onStaffMemberUpdated, onAddAnnouncement, onDeleteAnnouncement, onRetractAnnouncement, onDeleteStaffMember, language, setLanguage }) {
+function StaffPage({ staffMembers = [], announcements = [], currentUser, userRole = 'staff', onProcessRequest, onLogout, onStaffMemberUpdated, onAddAnnouncement, onDeleteAnnouncement, onRetractAnnouncement, onDeleteStaffMember, language, setLanguage }) {
   const t = translations[language] || translations.en
   const [activeTab, setActiveTab] = useState('queue')
   const [openRequestPanel, setOpenRequestPanel] = useState('queue')
@@ -2534,15 +2529,6 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
   const [requestStatusDrafts, setRequestStatusDrafts] = useState({})
   const [requestStatusNotes, setRequestStatusNotes] = useState({})
   const [selectedUser, setSelectedUser] = useState(null)
-  const [staffForm, setStaffForm] = useState({
-    firstName: '',
-    lastName: '',
-    position: 'Staff',
-    availability: 'Available',
-    email: '',
-    mobile: '',
-    password: '',
-  })
   const connectedSocialAccounts = defaultSocialAccounts.map((account) => ({
     ...account,
     connected: Boolean(socialIntegrationStatus?.[account.key]),
@@ -2577,7 +2563,6 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
     date: new Date().toLocaleDateString(),
     socialChannels: [],
   })
-  const [showStaffForm, setShowStaffForm] = useState(false)
   const [showAnnouncementForm, setShowAnnouncementForm] = useState(false)
   const [archiveFiles, setArchiveFiles] = useState([])
   const [archiveError, setArchiveError] = useState('')
@@ -2862,51 +2847,6 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
       throw new Error(error.message || t.staffArchiveFailed)
     } finally {
       setArchiving(false)
-    }
-  }
-
-  const handleStaffSubmit = async (event) => {
-    event.preventDefault()
-    const firstName = sanitizeText(staffForm.firstName)
-    const lastName = sanitizeText(staffForm.lastName)
-    const position = sanitizeText(staffForm.position) || 'Staff'
-    const email = sanitizeText(staffForm.email)
-    const mobile = sanitizeText(staffForm.mobile)
-    const password = sanitizeText(staffForm.password)
-
-    if (!firstName || !lastName || !email || !mobile || !password) {
-      alert('Please complete all staff member fields before saving.')
-      return
-    }
-    if (!isValidPassword(password)) {
-      alert(`Staff password must have ${passwordRequirements}.`)
-      return
-    }
-
-    try {
-      await onAddStaffMember?.({
-        firstName,
-        lastName,
-        position,
-        availability: staffForm.availability || 'Available',
-        email,
-        mobile,
-        password,
-        status: 'On Duty',
-      })
-
-      setStaffForm({
-        firstName: '',
-        lastName: '',
-        position: 'Staff',
-        availability: 'Available',
-        email: '',
-        mobile: '',
-        password: '',
-      })
-      setShowStaffForm(false)
-    } catch (error) {
-      alert(error.message || 'Unable to add staff member.')
     }
   }
 
@@ -3647,56 +3587,8 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
                   <div className="panel-header">
                     <h2>{t.staffDirectory}</h2>
                     <span className="soft-label">{staffMembers.length} {t.staffMembersAvailable}</span>
-                    {userRole === 'admin' && <button type="button" className="primary-btn small" onClick={() => setShowStaffForm(true)}>{t.addStaffMember}</button>}
                   </div>
-
-                  {showStaffForm && (
-                    <WorkflowModal title={t.addStaffMember} onClose={() => setShowStaffForm(false)} wide>
-                    <form className="editor-panel workflow-modal-form" onSubmit={handleStaffSubmit}>
-                    <div className="editor-grid">
-                      <div className="input-block">
-                        <label>{t.firstName}</label>
-                        <input type="text" value={staffForm.firstName} onChange={(event) => setStaffForm((prev) => ({ ...prev, firstName: event.target.value }))} placeholder={t.firstName} />
-                      </div>
-                      <div className="input-block">
-                        <label>{t.lastName}</label>
-                        <input type="text" value={staffForm.lastName} onChange={(event) => setStaffForm((prev) => ({ ...prev, lastName: event.target.value }))} placeholder={t.lastName} />
-                      </div>
-                      <div className="input-block">
-                        <label>{t.positionLabel}</label>
-                        <select value={staffForm.position} onChange={(event) => setStaffForm((prev) => ({ ...prev, position: event.target.value }))}>
-                          <option value="Staff">{t.staffRole}</option>
-                          <option value="Secretary">{t.secretaryRole}</option>
-                          <option value="Barangay Captain">{t.barangayCaptainRole}</option>
-                          <option value="Treasurer">{t.treasurerRole}</option>
-                          <option value="Utility Worker">{t.utilityWorkerRole}</option>
-                        </select>
-                      </div>
-                      <div className="input-block">
-                        <label>{t.availabilityLabel}</label>
-                        <select value={staffForm.availability} onChange={(event) => setStaffForm((prev) => ({ ...prev, availability: event.target.value }))}>
-                          <option value="Available">{t.availableLabel}</option>
-                          <option value="Busy">{t.busyStatus}</option>
-                          <option value="On Duty">{t.onDutyStatus}</option>
-                        </select>
-                      </div>
-                      <div className="input-block">
-                        <label>{t.email}</label>
-                        <input type="email" value={staffForm.email} onChange={(event) => setStaffForm((prev) => ({ ...prev, email: event.target.value }))} placeholder="name@barangay.gov.ph" />
-                      </div>
-                      <div className="input-block">
-                        <label htmlFor="staff-member-mobile">{t.mobileNumberLabel}</label>
-                        <input id="staff-member-mobile" type="tel" inputMode="tel" value={staffForm.mobile} onChange={(event) => setStaffForm((prev) => ({ ...prev, mobile: event.target.value }))} placeholder="09XXXXXXXXX" />
-                      </div>
-                      <PasswordField id="staff-initial-password" label={t.initialPassword} value={staffForm.password} onChange={(event) => setStaffForm((prev) => ({ ...prev, password: event.target.value }))} placeholder={t.staffPasswordPlaceholder} helpText={`${passwordRequirements}.`} />
-                    </div>
-                    <div className="editor-actions">
-                      <button type="button" className="secondary-btn small" onClick={() => setShowStaffForm(false)}>{t.cancel}</button>
-                      <button type="submit" className="primary-btn small">{t.addStaffMember}</button>
-                    </div>
-                    </form>
-                    </WorkflowModal>
-                  )}
+                  {userRole === 'admin' && <p className="field-note">{t.operatorOnlyAccounts}</p>}
 
                   <div className="staff-grid">
                     {staffMembers.map((member) => (
@@ -3940,19 +3832,6 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
   const [apiHealth, setApiHealth] = useState({ status: 'checking', storage: null, checkedAt: null })
   const [searchQuery, setSearchQuery] = useState('')
   const [accessSearch, setAccessSearch] = useState('')
-  const [adminForm, setAdminForm] = useState({ firstName: '', lastName: '', email: '', mobile: '', password: '' })
-  const [showAdminForm, setShowAdminForm] = useState(false)
-  const [staffForm, setStaffForm] = useState({
-    firstName: '',
-    lastName: '',
-    position: 'Staff',
-    availability: 'Available',
-    email: '',
-    mobile: '',
-    password: '',
-  })
-  const [showStaffForm, setShowStaffForm] = useState(false)
-  const [creatingStaff, setCreatingStaff] = useState(false)
   const [staffPasswordResetTarget, setStaffPasswordResetTarget] = useState(null)
   const [staffPasswordResetForm, setStaffPasswordResetForm] = useState({ password: '', confirmPassword: '' })
   const [resettingStaffPassword, setResettingStaffPassword] = useState(false)
@@ -4070,68 +3949,6 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
       setSelectedUser((current) => current?.id === userId ? data.user : current)
     } catch (error) {
       alert(error.message || 'Unable to update user.')
-    }
-  }
-
-  const handleCreateAdmin = async (event) => {
-    event.preventDefault()
-    if (!isValidPassword(adminForm.password)) {
-      alert(`Administrator password must have ${passwordRequirements}.`)
-      return
-    }
-    try {
-      const response = await fetch(`${API_BASE}/admin/users`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(adminForm),
-      })
-      const data = await response.json().catch(() => ({}))
-      if (!response.ok) throw new Error(data.message || 'Unable to create administrator.')
-      setManagedUsers((current) => [data.user, ...current])
-      setAdminForm({ firstName: '', lastName: '', email: '', mobile: '', password: '' })
-      setShowAdminForm(false)
-      alert('Administrator account created. Share the initial password securely and ask them to change it after signing in.')
-    } catch (error) {
-      alert(error.message || 'Unable to create administrator.')
-    }
-  }
-
-  const handleCreateStaff = async (event) => {
-    event.preventDefault()
-    if (!isValidPassword(staffForm.password)) {
-      alert(`${t.staffInitialPassword} must have ${passwordRequirements}.`)
-      return
-    }
-
-    setCreatingStaff(true)
-    try {
-      const response = await fetch(`${API_BASE}/staff/members`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ...staffForm,
-          status: 'On Duty',
-        }),
-      })
-      const data = await response.json().catch(() => ({}))
-      if (!response.ok) throw new Error(data.message || t.staffCreateFailed)
-
-      setManagedUsers((current) => [data.staffMember, ...current])
-      setStaffForm({
-        firstName: '',
-        lastName: '',
-        position: 'Staff',
-        availability: 'Available',
-        email: '',
-        mobile: '',
-        password: '',
-      })
-      setShowStaffForm(false)
-      alert(t.staffCreatedNotice)
-    } catch (error) {
-      alert(error.message || t.staffCreateFailed)
-    } finally {
-      setCreatingStaff(false)
     }
   }
 
@@ -4796,86 +4613,8 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
                   <div className="panel-header">
                     <h2>User Access Management</h2>
                     <span className="soft-label">{managedUsers.length} total users</span>
-                    <div className="editor-actions">
-                      <button type="button" className="secondary-btn small" onClick={() => setShowStaffForm(true)}>{t.addStaffMember}</button>
-                      <button type="button" className="primary-btn small" onClick={() => setShowAdminForm(true)}>Create Administrator</button>
-                    </div>
                   </div>
-
-                  {showStaffForm && (
-                    <WorkflowModal title={t.addStaffMember} onClose={() => setShowStaffForm(false)} wide>
-                      <form className="editor-panel workflow-modal-form" onSubmit={handleCreateStaff}>
-                        <div className="panel-header left-align">
-                          <h3>{t.createStaffAccount}</h3>
-                          <span className="soft-label">{t.staffRole}</span>
-                        </div>
-                        <div className="editor-grid">
-                          <div className="input-block">
-                            <label htmlFor="admin-staff-first-name">{t.firstName}</label>
-                            <input id="admin-staff-first-name" value={staffForm.firstName} onChange={(event) => setStaffForm((current) => ({ ...current, firstName: event.target.value }))} required />
-                          </div>
-                          <div className="input-block">
-                            <label htmlFor="admin-staff-last-name">{t.lastName}</label>
-                            <input id="admin-staff-last-name" value={staffForm.lastName} onChange={(event) => setStaffForm((current) => ({ ...current, lastName: event.target.value }))} required />
-                          </div>
-                          <div className="input-block">
-                            <label htmlFor="admin-staff-position">{t.positionLabel}</label>
-                            <select id="admin-staff-position" value={staffForm.position} onChange={(event) => setStaffForm((current) => ({ ...current, position: event.target.value }))}>
-                              <option value="Staff">{t.staffRole}</option>
-                              <option value="Secretary">{t.secretaryRole}</option>
-                              <option value="Barangay Captain">{t.barangayCaptainRole}</option>
-                              <option value="Treasurer">{t.treasurerRole}</option>
-                              <option value="Utility Worker">{t.utilityWorkerRole}</option>
-                            </select>
-                          </div>
-                          <div className="input-block">
-                            <label htmlFor="admin-staff-availability">{t.availabilityLabel}</label>
-                            <select id="admin-staff-availability" value={staffForm.availability} onChange={(event) => setStaffForm((current) => ({ ...current, availability: event.target.value }))}>
-                              <option value="Available">{t.availableLabel}</option>
-                              <option value="Busy">{t.busyStatus}</option>
-                              <option value="On Duty">{t.onDutyStatus}</option>
-                            </select>
-                          </div>
-                          <div className="input-block">
-                            <label htmlFor="admin-staff-email">{t.email}</label>
-                            <input id="admin-staff-email" type="email" value={staffForm.email} onChange={(event) => setStaffForm((current) => ({ ...current, email: event.target.value }))} required />
-                          </div>
-                          <div className="input-block">
-                            <label htmlFor="admin-staff-mobile">{t.mobileNumberLabel}</label>
-                            <input id="admin-staff-mobile" type="tel" inputMode="tel" value={staffForm.mobile} onChange={(event) => setStaffForm((current) => ({ ...current, mobile: event.target.value }))} placeholder="09XXXXXXXXX" required />
-                          </div>
-                          <PasswordField id="admin-staff-initial-password" label={t.staffInitialPassword} value={staffForm.password} onChange={(event) => setStaffForm((current) => ({ ...current, password: event.target.value }))} placeholder={t.staffPasswordPlaceholder} helpText={`${passwordRequirements}.`} />
-                        </div>
-                        <div className="editor-actions">
-                          <button type="button" className="secondary-btn small" onClick={() => setShowStaffForm(false)} disabled={creatingStaff}>{t.cancel}</button>
-                          <button type="submit" className="primary-btn small" disabled={creatingStaff}>{creatingStaff ? t.working : t.createStaffAccount}</button>
-                        </div>
-                      </form>
-                    </WorkflowModal>
-                  )}
-
-                  {showAdminForm && (
-                    <WorkflowModal title="Create Administrator" onClose={() => setShowAdminForm(false)} wide>
-                      <form className="editor-panel admin-create-panel workflow-modal-form" onSubmit={handleCreateAdmin}>
-                        <div className="panel-header left-align">
-                          <h3>Create Administrator</h3>
-                          <span className="soft-label">{t.adminOnly}</span>
-                        </div>
-                        <div className="editor-grid">
-                          <input aria-label="Administrator first name" placeholder="First name" value={adminForm.firstName} onChange={(event) => setAdminForm((current) => ({ ...current, firstName: event.target.value }))} required />
-                          <input aria-label="Administrator last name" placeholder="Last name" value={adminForm.lastName} onChange={(event) => setAdminForm((current) => ({ ...current, lastName: event.target.value }))} required />
-                          <input aria-label="Administrator email" type="email" placeholder="Email" value={adminForm.email} onChange={(event) => setAdminForm((current) => ({ ...current, email: event.target.value }))} required />
-                          <input aria-label="Administrator mobile" placeholder="09XXXXXXXXX" value={adminForm.mobile} onChange={(event) => setAdminForm((current) => ({ ...current, mobile: event.target.value }))} required />
-                          <PasswordField id="admin-initial-password" label="Administrator initial password" value={adminForm.password} onChange={(event) => setAdminForm((current) => ({ ...current, password: event.target.value }))} placeholder="Initial password" helpText={null} />
-                        </div>
-                        <small>{passwordRequirements}.</small>
-                        <div className="editor-actions">
-                          <button type="button" className="secondary-btn small" onClick={() => setShowAdminForm(false)}>{t.cancel}</button>
-                          <button type="submit" className="primary-btn small">Create Administrator</button>
-                        </div>
-                      </form>
-                    </WorkflowModal>
-                  )}
+                  <p className="field-note">{t.operatorOnlyAccounts}</p>
 
                   {staffPasswordResetTarget && (
                     <WorkflowModal
@@ -5868,41 +5607,6 @@ function App() {
     }
   }
 
-  const handleAddStaffMember = async (member) => {
-    try {
-      const response = await fetch(`${API_BASE}/staff/members`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          firstName: member.firstName,
-          lastName: member.lastName,
-          position: member.position,
-          availability: member.availability,
-          email: member.email,
-          mobile: member.mobile,
-          password: member.password,
-          status: member.status || 'On Duty',
-        }),
-      })
-
-      const data = await response.json()
-      if (!response.ok) {
-        throw new Error(data.message || 'Unable to add staff member.')
-      }
-
-      const nextMember = data.staffMember || data.member || {
-        ...member,
-        id: `staff-${Date.now()}`,
-      }
-      setStaffMembers((prev) => {
-        const existing = prev.some((item) => item.id === nextMember.id)
-        return existing ? prev.map((item) => (item.id === nextMember.id ? nextMember : item)) : [nextMember, ...prev]
-      })
-    } catch (error) {
-      throw new Error(error.message || 'Unable to add staff member.')
-    }
-  }
-
   const handleStaffMemberUpdated = (updated) => {
     setUsers((current) => current.map((user) => user.id === updated.id ? { ...user, ...updated } : user))
     setStaffMembers((current) => current.flatMap((member) => {
@@ -6013,13 +5717,14 @@ function App() {
       <Routes>
         <Route path="/" element={isAuthenticated ? <Navigate to={userRole === 'staff' ? '/staff' : userRole === 'admin' ? '/admin' : '/dashboard'} replace /> : <LoginPage onLogin={handleLogin} language={language} setLanguage={switchLanguage} />} />
         <Route path="/register" element={isAuthenticated ? <Navigate to={userRole === 'staff' ? '/staff' : userRole === 'admin' ? '/admin' : '/dashboard'} replace /> : <RegisterPage language={language} setLanguage={switchLanguage} />} />
+        <Route path="/staff-invite" element={<StaffInvitationPage language={language} />} />
         <Route path="/dashboard" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['resident']} userRole={userRole}><DashboardPage profile={profile} requests={requests} services={services} announcements={announcementsData} events={events} payments={payments} onLogout={handleLogout} onProfileUpdated={setProfile} language={language} setLanguage={switchLanguage} /></ProtectedRoute>} />
         <Route path="/requests" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['resident']} userRole={userRole}><RequestsPage requests={requests} onSubmit={handleRequestSubmit} onRequestUpdated={handleRequestUpdated} onLogout={handleLogout} language={language} setLanguage={switchLanguage} userId={session?.user?.id} /></ProtectedRoute>} />
         <Route path="/profile" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['resident']} userRole={userRole}><ProfilePage profile={profile} onLogout={handleLogout} language={language} setLanguage={switchLanguage} /></ProtectedRoute>} />
         <Route path="/payments" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['resident']} userRole={userRole}><PaymentsPage payments={payments} onLogout={handleLogout} language={language} setLanguage={switchLanguage} /></ProtectedRoute>} />
         <Route path="/events" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['resident']} userRole={userRole}><EventsPage events={events} onLogout={handleLogout} language={language} setLanguage={switchLanguage} /></ProtectedRoute>} />
         <Route path="/settings" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['resident', 'staff', 'admin']} userRole={userRole}><SettingsPage profile={profile} onLogout={handleLogout} language={language} setLanguage={switchLanguage} /></ProtectedRoute>} />
-        <Route path="/staff" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['staff', 'admin']} userRole={userRole}><StaffPage staffMembers={staffMembers} announcements={announcementsData} currentUser={session?.user} userRole={userRole} onProcessRequest={handleRequestStatus} onLogout={handleLogout} onAddStaffMember={handleAddStaffMember} onStaffMemberUpdated={handleStaffMemberUpdated} onAddAnnouncement={handleAddAnnouncement} onDeleteAnnouncement={handleDeleteAnnouncement} onRetractAnnouncement={handleRetractAnnouncement} onDeleteStaffMember={handleDeleteStaffMember} language={language} setLanguage={switchLanguage} /></ProtectedRoute>} />
+        <Route path="/staff" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['staff', 'admin']} userRole={userRole}><StaffPage staffMembers={staffMembers} announcements={announcementsData} currentUser={session?.user} userRole={userRole} onProcessRequest={handleRequestStatus} onLogout={handleLogout} onStaffMemberUpdated={handleStaffMemberUpdated} onAddAnnouncement={handleAddAnnouncement} onDeleteAnnouncement={handleDeleteAnnouncement} onRetractAnnouncement={handleRetractAnnouncement} onDeleteStaffMember={handleDeleteStaffMember} language={language} setLanguage={switchLanguage} /></ProtectedRoute>} />
         <Route path="/admin" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['admin']} userRole={userRole}><AdminPage users={users} residents={residents} requests={requests} reports={reports} currentUser={session?.user} onLogout={handleLogout} language={language} setLanguage={switchLanguage} /></ProtectedRoute>} />
         <Route path="*" element={<Navigate to={userRole === 'staff' ? '/staff' : userRole === 'admin' ? '/admin' : '/dashboard'} replace />} />
       </Routes>
