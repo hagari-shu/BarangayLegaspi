@@ -3,7 +3,18 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import dotenv from 'dotenv'
 
-dotenv.config()
+export const IS_QA_RUN = String(process.env.QA_MODE || '').toLowerCase() === 'true'
+
+if (IS_QA_RUN) {
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('Local QA mode cannot run with NODE_ENV=production.')
+  }
+  if (process.env.DATABASE_URL) {
+    throw new Error('Local QA mode cannot run with DATABASE_URL configured.')
+  }
+} else {
+  dotenv.config()
+}
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -13,7 +24,7 @@ const isTestRun = process.env.NODE_ENV === 'test'
   || process.execArgv.some((arg) => arg.includes('--test'))
   || process.argv.some((arg) => arg.includes('--test') || /\.test\.[cm]?[jt]s$/i.test(arg))
 export const IS_TEST_RUN = isTestRun
-const dbPath = path.join(dataDir, isTestRun ? `db-${process.pid}.json` : 'db.json')
+const dbPath = path.join(dataDir, isTestRun ? `db-${process.pid}.json` : IS_QA_RUN ? 'db-qa.json' : 'db.json')
 
 if (!fs.existsSync(dataDir)) {
   fs.mkdirSync(dataDir, { recursive: true })
@@ -29,6 +40,10 @@ if (!fs.existsSync(dbPath)) {
 
 export const DB_PATH = dbPath
 export const IS_PRODUCTION = process.env.NODE_ENV === 'production'
+if (IS_QA_RUN && IS_PRODUCTION) {
+  throw new Error('Local QA mode cannot run in production.')
+}
+
 const defaultCorsOrigins = ['http://localhost:5173', 'http://localhost:5174', 'http://127.0.0.1:5173', 'http://127.0.0.1:5174']
 const configuredCorsOrigins = (process.env.CORS_ORIGINS || '').split(',').map((origin) => origin.trim()).filter(Boolean)
 export const CORS_ORIGINS = [...new Set([

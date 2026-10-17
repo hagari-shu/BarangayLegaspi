@@ -112,6 +112,22 @@ Administrators can maintain a resident's household ID, address, family count, an
 
 Install Node.js dependencies from the repository root with `npm install`, then run `npm run dev`. The Vite frontend runs on port 5173 and the local Express API runs on port 3001, using the local JSON store unless `DATABASE_URL` is configured. Do not point local development or tests at the production database. Run `npm test` and `npm run build` before submitting changes.
 
+### Local QA
+
+Run `npm run qa` to start an isolated QA portal at `http://127.0.0.1:5174` and its API at `http://127.0.0.1:3002`. Both bind to the local machine only. The API refuses to start if `DATABASE_URL` is set, skips loading `.env`, disables external notification, social, and object-storage integrations, and stores QA records in the ignored `server/data/db-qa.json` file rather than the regular development data or PostgreSQL.
+
+For up to 100 additional synthetic resident accounts, generate the fixture from the separate private [QA demo repository](https://github.com/hagari-shu/barangay-legaspi-qa-demo), then run `npm run qa -- --demo-data "C:\path\to\demo-residents.json"`. The seeder only accepts test-domain emails and placeholder QA phone numbers, and writes unique passwords to the ignored `server/data/qa-demo-credentials.csv`. Treat that CSV as a temporary credential handoff: deliver it privately, never commit it or send it in public issues/chat, and delete it after transfer. The public repository must never be configured to use these local accounts.
+
+Use these synthetic local-only accounts:
+
+| Role | Email | Password |
+| --- | --- | --- |
+| Admin | `qa.admin@example.test` | `QaAdminPass123!` |
+| Staff | `qa.staff@example.test` | `QaStaffPass123!` |
+| Resident | `qa.resident@example.test` | `QaResidentPass123!` |
+
+These credentials and the QA data are for this local sandbox only; never deploy them or use them on the live site. QA data remains between runs. To let another person test this local-only setup, they must run it on their own machine; do not expose it through a public tunnel or use the production API.
+
 The Node API request workflow stores the resident's online/physical copy choice, status history, and staff notes. Staff can request missing information; a resident follow-up returns that request to review. The resident request page and staff queue show the same status timeline. Browser reminders are scoped to the signed-in resident and can alert while the app is open; they are not push notifications when the browser is closed. Announcement channel selections are planning metadata only until official social accounts are connected; the app does not claim to publish posts automatically.
 
 The Express API uses JSON storage only when `DATABASE_URL` is absent in local development. When PostgreSQL is configured, database errors fail the affected operation; records are not silently written to a parallel JSON file. Production Express startup requires `DATABASE_URL`. Local JSON data is not synchronized with PostgreSQL and must not be treated as a database backup. The JSON adapter strips legacy plaintext `password` fields when reading and writing user records; only password hashes are retained.

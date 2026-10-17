@@ -26,7 +26,7 @@ import {
   verifyMetaWebhookSignature,
 } from './meta-social.js'
 import { registerResidentRegistryRoutes } from './resident-registry.js'
-import { ADMIN_SEED, CORS_ORIGINS, IS_PRODUCTION, IS_TEST_RUN, PORT, SHOULD_SKIP_SEED } from './config.js'
+import { ADMIN_SEED, CORS_ORIGINS, IS_PRODUCTION, IS_QA_RUN, IS_TEST_RUN, PORT, SHOULD_SKIP_SEED } from './config.js'
 import {
   createStaffInvitationAcceptanceAudit,
   hashStaffInvitationToken,
@@ -135,20 +135,38 @@ export async function seedDemoResident() {
   }
 
   const defaultResidentSeed = {
-    firstName: 'Maria',
-    lastName: 'Dela Cruz',
-    mobile: '09123456789',
-    email: 'maria.delacruz@email.com',
-    password: 'ResidentPass123!',
+    firstName: IS_QA_RUN ? 'QA' : 'Maria',
+    lastName: IS_QA_RUN ? 'Resident' : 'Dela Cruz',
+    mobile: IS_QA_RUN ? '09000000002' : '09123456789',
+    email: IS_QA_RUN ? 'qa.resident@example.test' : 'maria.delacruz@email.com',
+    password: IS_QA_RUN ? 'QaResidentPass123!' : 'ResidentPass123!',
     role: 'resident',
-    householdId: '2024-RESIDENT',
-    familyMembers: 4,
+    householdId: IS_QA_RUN ? 'QA-RESIDENT' : '2024-RESIDENT',
+    familyMembers: IS_QA_RUN ? 1 : 4,
     status: 'Active Resident',
-    address: 'Barangay Legaspi, Tayug, Pangasinan',
+    address: IS_QA_RUN ? 'QA Sandbox' : 'Barangay Legaspi, Tayug, Pangasinan',
     zone: 1,
   }
 
-  const requiredSeeds = [ADMIN_SEED, defaultResidentSeed]
+  const qaStaffSeed = IS_QA_RUN
+    ? {
+        firstName: 'QA',
+        lastName: 'Staff',
+        mobile: '09000000003',
+        email: 'qa.staff@example.test',
+        password: 'QaStaffPass123!',
+        role: 'staff',
+        householdId: 'QA-STAFF',
+        familyMembers: 1,
+        status: 'On Duty',
+        address: 'QA Sandbox',
+        zone: 1,
+        position: 'QA Tester',
+        availability: 'Available',
+      }
+    : null
+
+  const requiredSeeds = [ADMIN_SEED, defaultResidentSeed, ...(qaStaffSeed ? [qaStaffSeed] : [])]
 
   if (SHOULD_SKIP_SEED || (IS_PRODUCTION && !ADMIN_SEED.password)) {
     return
@@ -2752,9 +2770,12 @@ export async function startServer() {
   }
 
   const app = createApp()
-  const server = app.listen(PORT, () => {
+  const onListening = () => {
     console.log(`Barangay API running on http://localhost:${PORT}`)
-  })
+  }
+  const server = IS_QA_RUN
+    ? app.listen(PORT, '127.0.0.1', onListening)
+    : app.listen(PORT, onListening)
 
   return server
 }

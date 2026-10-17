@@ -9,10 +9,11 @@
     "dev:api": "cd laravel-api && php artisan serve --host=0.0.0.0 --port=8000",
     "dev:legacy-server": "node --watch server.js",
     "start:legacy": "node server.js",
+    "qa": "node scripts/qa.js",
     "build": "vite build",
     "lint": "oxlint",
     "preview": "vite preview",
-    "test": "node --test tests/api.test.js tests/mau-and-mfa.test.js tests/mfa-key-rotation.test.js tests/meta-social.test.js tests/operator-account-provisioning.test.js tests/payments.test.js tests/postgres-seeding.test.js tests/registry-csv.test.js tests/reminders.test.js tests/request-reporting.test.js tests/translations.test.js",
+    "test": "node --test tests/api.test.js tests/mau-and-mfa.test.js tests/mfa-key-rotation.test.js tests/meta-social.test.js tests/operator-account-provisioning.test.js tests/payments.test.js tests/postgres-seeding.test.js tests/qa-mode.test.js tests/registry-csv.test.js tests/reminders.test.js tests/request-reporting.test.js tests/translations.test.js",
     "accounts:invite-staff": "node scripts/operator-accounts.js invite-staff",
     "accounts:promote-admin": "node scripts/operator-accounts.js promote-admin",
     "mfa:rotate-key": "node scripts/rotate-mfa-encryption.js"
