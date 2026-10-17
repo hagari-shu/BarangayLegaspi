@@ -94,19 +94,19 @@ The **Resident registry** is a staff-only roster separate from resident login ac
 
 #### Search and filter
 
-The registry landing view shows Zone 1–7 only, with each zone's active, verified resident count. Select a zone to open its pop-up; the resident list displays only birthdate and calculated age, not resident names. Use **Edit record** to change a record. The editor keeps stored names hidden unless a staff member enters a replacement name, and supports updating other registry fields. Age is calculated from the birthdate and cannot be edited separately. Changes are validated, encrypted according to the configured storage adapter, and audited by field name without copying resident values to the audit log. The zones are views of the same secure registry, not separate copies. The registry and demographic counts are distinct from the number of resident login accounts.
+The registry landing view shows Zone 1–7 only, with each zone's active, verified resident count. Select a zone to open its pop-up; the resident list shows names, birthdates, and calculated ages. Select a resident's name to reveal their description, including Marital status and Occupation. Those two fields are omitted from search tables, import previews, and spreadsheet exports. Search by full name to open a unique exact match's description automatically; for partial or ambiguous matches, select a name to view the description. Use **Edit record** to change a record. The editor keeps stored names hidden unless a staff member enters a replacement name, and supports updating other registry fields. Age is calculated from the birthdate and cannot be edited separately. Changes are validated, encrypted according to the configured storage adapter, and audited by field name without copying resident values to the audit log. The zones are views of the same secure registry, not separate copies. The registry and demographic counts are distinct from the number of resident login accounts.
 
 #### Download an Excel-ready roster
 
 1. Apply the desired search and filters, then select **Download Excel-ready CSV**. Confirm the download only if you are authorized to handle the matching resident records.
-2. The export includes all records matching the current filters (not only the visible page), up to 10,000 records. It is sorted by Zone, Household, last name, then first name; each resident is one row with clear columns for their registry fields.
+2. The export includes all records matching the current filters (not only the visible page), up to 10,000 records. It is sorted by Zone, Household, last name, then first name; each resident is one row with clear columns for their registry fields. Marital status and Occupation are not included.
 3. Open the `.csv` file in Excel and use its header filters or save a working copy in an approved location. The export is audited by count, grouping, and filter-presence flags; resident values are not copied into the audit log. Keep the file in approved storage and do not share it outside authorized work.
 4. Add filters and export again if the matching set exceeds 10,000 records. Do not remove records from the source roster just to fit an export.
 
 #### Add one record manually
 
 1. Select **Add a resident for verification**.
-2. Enter the resident's first and last name and choose **Male** or **Female** only when supported by the authorized source. Add birth date, Household, zone, Marital status, Occupation, and source reference only when supported by an authorized source and necessary for the registry. Household is a plain organizational value, not a household identifier.
+2. Enter the resident's first and last name and choose **Male** or **Female** only when supported by the authorized source. Birth date, Household, zone, Marital status, Occupation, source record reference, and source filename can be left blank when unknown or unavailable. Marital status, when recorded, must be **Single**, **Married**, **Widowed**, **Live-in**, **Divorced**, **Annulled**, or **Separate**. Household is a plain organizational value, not a household identifier.
 3. Save the record. It is added as **Pending verification**, not as a confirmed census record.
 4. If possible matching records appear, compare them carefully with the official source before proceeding. Do not create a duplicate just to bypass the warning.
 5. Keep the record pending until it has been checked against the approved source. If the source is unclear or counts do not reconcile, stop and refer the discrepancy to the responsible records officer.

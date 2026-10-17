@@ -24,8 +24,6 @@ export function createResidentRegistryCsv(residents) {
     'Birthdate',
     'Age',
     'Sex',
-    'Marital status',
-    'Occupation',
     'Record status',
     'Verification',
   ]
@@ -50,8 +48,6 @@ export function createResidentRegistryCsv(residents) {
     resident.birthDate,
     resident.age,
     resident.sex,
-    resident.maritalStatus,
-    resident.occupation,
     resident.status,
     resident.verificationStatus,
   ])

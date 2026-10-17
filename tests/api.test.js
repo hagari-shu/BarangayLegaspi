@@ -1678,6 +1678,12 @@ test('staff resident registry keeps pending records out of verified totals and r
       body: JSON.stringify({ firstName: 'Unknown', lastName: 'Value', sex: 'Unclassified' }),
     })
     assert.equal(unclassifiedResponse.status, 400)
+    const invalidMaritalStatusResponse = await fetch(`${baseUrl}/api/staff/residents`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ firstName: 'Unknown', lastName: 'Value', sex: 'Female', maritalStatus: 'Complicated' }),
+    })
+    assert.equal(invalidMaritalStatusResponse.status, 400)
 
     const createResponse = await fetch(`${baseUrl}/api/staff/residents`, {
       method: 'POST',
@@ -1692,12 +1698,13 @@ test('staff resident registry keeps pending records out of verified totals and r
         maritalStatus: 'Married',
         occupation: 'Teacher',
         zone: 3,
-        sourceReference: 'Roster page 1',
       }),
     })
     assert.equal(createResponse.status, 201)
     const created = await createResponse.json()
     assert.equal(created.resident.verificationStatus, 'pending')
+    assert.equal(created.resident.sourceReference, null)
+    assert.equal(created.resident.sourceFilename, null)
     const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Manila' }).format(new Date())
     const [todayYear, todayMonth, todayDay] = today.split('-').map(Number)
     const expectedAge = todayYear - 2000 - (todayMonth < 5 || (todayMonth === 5 && todayDay < 20) ? 1 : 0)
@@ -1799,6 +1806,22 @@ test('staff resident registry keeps pending records out of verified totals and r
     assert.equal(JSON.stringify(editAudit).includes('Ana Maria'), false)
     assert.equal(JSON.stringify(editAudit).includes('Divorced'), false)
     assert.equal(JSON.stringify(editAudit).includes('Nurse'), false)
+    const clearOptionalFieldsResponse = await fetch(`${baseUrl}/api/staff/residents/${created.resident.id}`, {
+      method: 'PATCH',
+      headers,
+      body: JSON.stringify({ maritalStatus: null, sourceReference: null, sourceFilename: null }),
+    })
+    assert.equal(clearOptionalFieldsResponse.status, 200)
+    const clearedOptionalFields = await clearOptionalFieldsResponse.json()
+    assert.equal(clearedOptionalFields.resident.maritalStatus, null)
+    assert.equal(clearedOptionalFields.resident.sourceReference, null)
+    assert.equal(clearedOptionalFields.resident.sourceFilename, null)
+    const invalidMaritalStatusEdit = await fetch(`${baseUrl}/api/staff/residents/${created.resident.id}`, {
+      method: 'PATCH',
+      headers,
+      body: JSON.stringify({ maritalStatus: 'Complicated' }),
+    })
+    assert.equal(invalidMaritalStatusEdit.status, 400)
 
     const invalidEditResponse = await fetch(`${baseUrl}/api/staff/residents/${created.resident.id}`, {
       method: 'PATCH',
@@ -2033,6 +2056,12 @@ test('registry CSV import validates every row, pauses on duplicates, and audits 
       })
       assert.equal(invalidSexResponse.status, 400)
     }
+    const invalidMaritalStatusImport = await fetch(`${baseUrl}/api/staff/residents/import`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ filename: file, residents: [{ ...residents[0], maritalStatus: 'Complicated' }] }),
+    })
+    assert.equal(invalidMaritalStatusImport.status, 400)
 
     const importResponse = await fetch(`${baseUrl}/api/staff/residents/import`, {
       method: 'POST',

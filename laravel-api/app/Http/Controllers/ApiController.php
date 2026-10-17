@@ -22,6 +22,7 @@ use Throwable;
 class ApiController extends Controller
 {
     private const PASSWORD_REQUIREMENTS = 'at least 8 characters, one uppercase letter, one lowercase letter, one number, and one special character';
+    private const REGISTRY_MARITAL_STATUSES = ['Single', 'Married', 'Widowed', 'Live-in', 'Divorced', 'Annulled', 'Separate'];
     private const CAPTAIN_PHOTO_KEY = 'official/captain-portrait';
     private const CAPTAIN_PHOTO_PENDING_PREFIX = 'official/captain-portrait/pending/';
     private const CAPTAIN_PHOTO_MAX_BYTES = 5242880;
@@ -1241,6 +1242,9 @@ class ApiController extends Controller
         if (!in_array($sex, ['Male', 'Female'], true)) {
             return response()->json(['message' => 'Choose Male or Female for sex.'], 400);
         }
+        if ($maritalStatus !== '' && !in_array($maritalStatus, self::REGISTRY_MARITAL_STATUSES, true)) {
+            return response()->json(['message' => 'Choose a valid marital status.'], 400);
+        }
         if ($zone !== null && $zone !== '' && (!filter_var($zone, FILTER_VALIDATE_INT) || (int) $zone < 1 || (int) $zone > 7)) {
             return response()->json(['message' => 'Choose a valid zone from 1 to 7.'], 400);
         }
@@ -1382,6 +1386,9 @@ class ApiController extends Controller
             }
             if (!in_array($sex, ['Male', 'Female'], true)) {
                 $validationErrors[] = ['row' => $row, 'field' => 'sex', 'message' => 'Use Male or Female.'];
+            }
+            if ($fields['maritalStatus'] !== '' && !in_array($fields['maritalStatus'], self::REGISTRY_MARITAL_STATUSES, true)) {
+                $validationErrors[] = ['row' => $row, 'field' => 'maritalStatus', 'message' => 'Use Single, Married, Widowed, Live-in, Divorced, Annulled, or Separate.'];
             }
             if ($zoneText !== '' && ($zone === false || $zone < 1 || $zone > 7)) {
                 $validationErrors[] = ['row' => $row, 'field' => 'zone', 'message' => 'Zone must be a whole number from 1 to 7.'];
@@ -1576,11 +1583,16 @@ class ApiController extends Controller
             'sourceReference' => 255,
             'sourceFilename' => 255,
         ];
+        $nullableStringFields = ['maritalStatus', 'sourceReference', 'sourceFilename'];
         foreach ($stringLimits as $field => $maxLength) {
             if (!array_key_exists($field, $body)) {
                 continue;
             }
             if ($field === 'householdId' && array_key_exists('household', $body)) {
+                continue;
+            }
+            if (in_array($field, $nullableStringFields, true) && $body[$field] === null) {
+                $privateUpdates[$field] = null;
                 continue;
             }
             if (!is_string($body[$field])) {
@@ -1591,6 +1603,11 @@ class ApiController extends Controller
                 return response()->json(['message' => "Enter a valid {$field} (up to {$maxLength} characters)."], 400);
             }
             $privateUpdates[$field === 'household' ? 'householdId' : $field] = $value !== '' ? $value : null;
+        }
+        if (array_key_exists('maritalStatus', $privateUpdates)
+            && $privateUpdates['maritalStatus'] !== null
+            && !in_array($privateUpdates['maritalStatus'], self::REGISTRY_MARITAL_STATUSES, true)) {
+            return response()->json(['message' => 'Choose a valid marital status.'], 400);
         }
 
         if (array_key_exists('birthDate', $body)) {

@@ -24,6 +24,7 @@ const usePostgres = !IS_TEST_RUN && Boolean(process.env.DATABASE_URL)
 let store = usePostgres ? pgDb : jsonDb
 
 const sanitizeText = (value = '') => String(value).replace(/[<>]/g, '').trim()
+const REGISTRY_MARITAL_STATUSES = ['Single', 'Married', 'Widowed', 'Live-in', 'Divorced', 'Annulled', 'Separate']
 const sanitizeUserRecord = (user = {}) => {
   if (!user || typeof user !== 'object') return {}
   const { password, passwordHash, password_hash, mfaSecret, mfa_secret, mfaLastStep, mfa_last_step, ...safeUser } = user
@@ -1557,6 +1558,9 @@ export function createApp() {
     if (!['Male', 'Female'].includes(sex)) {
       return res.status(400).json({ message: 'Choose Male or Female for sex.' })
     }
+    if (maritalStatus && !REGISTRY_MARITAL_STATUSES.includes(maritalStatus)) {
+      return res.status(400).json({ message: 'Choose a valid marital status.' })
+    }
     if (zone !== null && (!Number.isInteger(zone) || zone < 1 || zone > 7)) {
       return res.status(400).json({ message: 'Choose a valid zone from 1 to 7.' })
     }
@@ -1684,6 +1688,9 @@ export function createApp() {
       }
       if (!['Male', 'Female'].includes(sex)) {
         validationErrors.push({ row: index + 2, field: 'sex', message: 'Use Male or Female.' })
+      }
+      if (maritalStatus && !REGISTRY_MARITAL_STATUSES.includes(maritalStatus)) {
+        validationErrors.push({ row: index + 2, field: 'maritalStatus', message: 'Use Single, Married, Widowed, Live-in, Divorced, Annulled, or Separate.' })
       }
       if (zoneText && (!Number.isInteger(zone) || zone < 1 || zone > 7)) {
         validationErrors.push({ row: index + 2, field: 'zone', message: 'Zone must be a whole number from 1 to 7.' })
@@ -1894,14 +1901,24 @@ export function createApp() {
       sourceReference: 255,
       sourceFilename: 255,
     }
+    const nullableStringFields = new Set(['maritalStatus', 'sourceReference', 'sourceFilename'])
     for (const [field, maxLength] of Object.entries(stringFields)) {
       if (!Object.prototype.hasOwnProperty.call(body, field)) continue
+      if (body[field] === null && nullableStringFields.has(field)) {
+        updates[field] = null
+        continue
+      }
       if (typeof body[field] !== 'string') return res.status(400).json({ message: `Enter a valid ${field} value.` })
       const value = sanitizeText(body[field])
       if (value.length > maxLength || (['firstName', 'lastName'].includes(field) && !value)) {
         return res.status(400).json({ message: `Enter a valid ${field} (up to ${maxLength} characters).` })
       }
       updates[field] = value || null
+    }
+    if (Object.prototype.hasOwnProperty.call(updates, 'maritalStatus')
+      && updates.maritalStatus !== null
+      && !REGISTRY_MARITAL_STATUSES.includes(updates.maritalStatus)) {
+      return res.status(400).json({ message: 'Choose a valid marital status.' })
     }
     if (Object.prototype.hasOwnProperty.call(updates, 'household')) {
       updates.householdId = updates.household

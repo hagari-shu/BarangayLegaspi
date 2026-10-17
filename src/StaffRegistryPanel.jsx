@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { parseRegistryCsv, registryCsvTemplate } from './registry-csv'
 import { createResidentRegistryCsv } from './resident-registry-export'
 import './StaffRegistryPanel.css'
 
 const API_BASE = (import.meta.env.VITE_API_BASE || (import.meta.env.DEV ? 'http://localhost:3001/api' : '')).replace(/\/$/, '')
 const isScaleDemo = import.meta.env.VITE_REGISTRY_SCALE_DEMO === 'true'
+const maritalStatusOptions = ['Single', 'Married', 'Widowed', 'Live-in', 'Divorced', 'Annulled', 'Separate']
 
 const text = {
   en: {
@@ -54,6 +55,7 @@ const text = {
     updateSuccess: 'Resident record updated.',
     noZoneRecords: 'No resident records were found for this zone.',
     maritalStatus: 'Marital status',
+    optional: 'Not provided',
     occupation: 'Occupation',
     household: 'Household',
     residents: 'Matching records',
@@ -92,8 +94,8 @@ const text = {
     maleOption: 'Male',
     femaleOption: 'Female',
     sexNeedsCorrection: 'Sex needs correction from source',
-    sourceRef: 'Source record reference',
-    sourceFile: 'Source filename',
+    sourceRef: 'Source record reference (optional)',
+    sourceFile: 'Source filename (optional)',
     save: 'Save as pending verification',
     confirmAdd: 'Continue after reviewing possible matches',
     cancelAdd: 'Cancel and review',
@@ -178,6 +180,7 @@ const text = {
     updateSuccess: 'Na-update ang tala ng residente.',
     noZoneRecords: 'Walang nakitang tala ng residente para sa zone na ito.',
     maritalStatus: 'Katayuan sa pag-aasawa',
+    optional: 'Hindi ibinigay',
     occupation: 'Trabaho',
     household: 'Sambahayan',
     residents: 'Mga katugmang tala',
@@ -216,8 +219,8 @@ const text = {
     maleOption: 'Lalaki',
     femaleOption: 'Babae',
     sexNeedsCorrection: 'Kailangang itama ang kasarian mula sa source',
-    sourceRef: 'Sanggunian ng pinagmulang tala',
-    sourceFile: 'Pangalan ng source file',
+    sourceRef: 'Sanggunian ng pinagmulang tala (opsyonal)',
+    sourceFile: 'Pangalan ng source file (opsyonal)',
     save: 'I-save bilang naghihintay ng beripikasyon',
     confirmAdd: 'Ituloy matapos suriin ang mga posibleng tugma',
     cancelAdd: 'Kanselahin at suriin',
@@ -265,16 +268,33 @@ function formatDate(value, language) {
     : new Intl.DateTimeFormat(language === 'fil' ? 'fil-PH' : 'en-PH', { dateStyle: 'medium', timeZone: 'Asia/Manila' }).format(parsed)
 }
 
+function ResidentDetails({ resident, labels, language }) {
+  return (
+    <section className="registry-resident-quick-view" aria-label={labels.residentDetails}>
+      <h4>{[resident.firstName, resident.lastName].filter(Boolean).join(' ') || labels.name}</h4>
+      <dl>
+        <div><dt>{labels.birthDateDetail}</dt><dd>{formatDate(resident.birthDate, language) || labels.noDob}</dd></div>
+        <div><dt>{labels.ageDetail}</dt><dd>{resident.age === null || resident.age === undefined ? labels.noDob : resident.age}</dd></div>
+        <div><dt>{labels.zone}</dt><dd>{resident.zone ? `${labels.zone} ${resident.zone}` : labels.unassigned}</dd></div>
+        <div><dt>{labels.household}</dt><dd>{resident.household || resident.householdId || labels.unassigned}</dd></div>
+        <div><dt>{labels.sex}</dt><dd>{resident.sex || labels.noDob}</dd></div>
+        <div><dt>{labels.maritalStatus}</dt><dd>{resident.maritalStatus || labels.noDob}</dd></div>
+        <div><dt>{labels.occupation}</dt><dd>{resident.occupation || labels.noDob}</dd></div>
+        <div><dt>{labels.status}</dt><dd>{resident.verificationStatus === 'verified' ? labels.verified : resident.verificationStatus === 'needs_review' ? labels.needsReview : labels.pending}</dd></div>
+      </dl>
+    </section>
+  )
+}
+
 export default function StaffRegistryPanel({ language = 'en' }) {
   const labels = text[language] || text.en
   const [search, setSearch] = useState('')
   const [birthDate, setBirthDate] = useState('')
   const [age, setAge] = useState('')
   const [zone, setZone] = useState('')
-  const [maritalStatus, setMaritalStatus] = useState('')
-  const [occupation, setOccupation] = useState('')
-  const [debounced, setDebounced] = useState({ search: '', birthDate: '', age: '', zone: '', maritalStatus: '', occupation: '' })
+  const [debounced, setDebounced] = useState({ search: '', birthDate: '', age: '', zone: '' })
   const [records, setRecords] = useState([])
+  const [residentDetailsId, setResidentDetailsId] = useState(null)
   const [demographics, setDemographics] = useState(null)
   const [sourceReviews, setSourceReviews] = useState([])
   const [sourceReviewPurok, setSourceReviewPurok] = useState('')
@@ -330,11 +350,9 @@ export default function StaffRegistryPanel({ language = 'en' }) {
     || birthDate !== debounced.birthDate
     || age !== debounced.age
     || zone !== debounced.zone
-    || maritalStatus.trim() !== debounced.maritalStatus
-    || occupation.trim() !== debounced.occupation
-  const hasActiveFilters = Boolean(search.trim() || birthDate || age || zone || maritalStatus.trim() || occupation.trim())
+  const hasActiveFilters = Boolean(search.trim() || birthDate || age || zone)
   const hasDebouncedFilters = Boolean(
-    debounced.search || debounced.birthDate || debounced.age || debounced.zone || debounced.maritalStatus || debounced.occupation,
+    debounced.search || debounced.birthDate || debounced.age || debounced.zone,
   )
   const matchedZones = useMemo(() => new Set(
     hasActiveFilters && !queryPending
@@ -350,8 +368,6 @@ export default function StaffRegistryPanel({ language = 'en' }) {
         birthDate,
         age,
         zone,
-        maritalStatus: maritalStatus.trim(),
-        occupation: occupation.trim(),
       })
     }, 150)
     searchDebounceRef.current = timer
@@ -359,7 +375,7 @@ export default function StaffRegistryPanel({ language = 'en' }) {
       window.clearTimeout(timer)
       if (searchDebounceRef.current === timer) searchDebounceRef.current = null
     }
-  }, [search, birthDate, age, zone, maritalStatus, occupation])
+  }, [search, birthDate, age, zone])
 
   useEffect(() => {
     if (!selectedZone) return undefined
@@ -379,8 +395,6 @@ export default function StaffRegistryPanel({ language = 'en' }) {
       birthDate: debounced.birthDate,
       age: debounced.age,
       zone: debounced.zone,
-      maritalStatus: debounced.maritalStatus,
-      occupation: debounced.occupation,
       page: String(page),
       pageSize: String(pageSize),
     })
@@ -388,6 +402,7 @@ export default function StaffRegistryPanel({ language = 'en' }) {
       if (!hasDebouncedFilters || queryPending) {
         setRecords([])
         setTotal(0)
+        setResidentDetailsId(null)
         setLoading(hasDebouncedFilters && queryPending)
         setError('')
         return
@@ -399,8 +414,14 @@ export default function StaffRegistryPanel({ language = 'en' }) {
         const residentData = await residentResponse.json().catch(() => ({}))
         if (!residentResponse.ok) throw new Error(residentData.message || labels.loadError)
         if (active) {
-          setRecords(Array.isArray(residentData.residents) ? residentData.residents : [])
+          const resultResidents = Array.isArray(residentData.residents) ? residentData.residents : []
+          setRecords(resultResidents)
           setTotal(Number(residentData.total) || 0)
+          const normalizeName = (value) => value.trim().toLocaleLowerCase().replace(/\s+/g, ' ')
+          const exactFullName = resultResidents.length === 1
+            && Number(residentData.total) === 1
+            && normalizeName(`${resultResidents[0].firstName || ''} ${resultResidents[0].lastName || ''}`) === normalizeName(debounced.search)
+          setResidentDetailsId(exactFullName ? resultResidents[0].id : null)
         }
       } catch (loadError) {
         if (loadError.name !== 'AbortError' && active) {
@@ -712,8 +733,6 @@ export default function StaffRegistryPanel({ language = 'en' }) {
         birthDate: debounced.birthDate,
         age: debounced.age,
         zone: debounced.zone,
-        maritalStatus: debounced.maritalStatus,
-        occupation: debounced.occupation,
       }
       const residents = []
       let expectedTotal = null
@@ -749,8 +768,8 @@ export default function StaffRegistryPanel({ language = 'en' }) {
             hasBirthDate: Boolean(filters.birthDate),
             hasAge: Boolean(filters.age),
             hasZone: Boolean(filters.zone),
-            hasMaritalStatusFilter: Boolean(filters.maritalStatus),
-            hasOccupationFilter: Boolean(filters.occupation),
+            hasMaritalStatusFilter: false,
+            hasOccupationFilter: false,
           },
         }),
       })
@@ -816,30 +835,22 @@ export default function StaffRegistryPanel({ language = 'en' }) {
           birthDate,
           age,
           zone,
-          maritalStatus: maritalStatus.trim(),
-          occupation: occupation.trim(),
         })
       }}>
         <label>{labels.search}
-          <input value={search} maxLength={120} onChange={(event) => setSearch(event.target.value)} placeholder={labels.searchHint} />
+          <input value={search} maxLength={120} onChange={(event) => { setSearch(event.target.value); setResidentDetailsId(null) }} placeholder={labels.searchHint} />
         </label>
         <label>{labels.birthDate}
-          <input type="date" value={birthDate} onChange={(event) => setBirthDate(event.target.value)} />
+          <input type="date" value={birthDate} onChange={(event) => { setBirthDate(event.target.value); setResidentDetailsId(null) }} />
         </label>
         <label>{labels.age}
-          <input type="number" min="0" max="130" value={age} onChange={(event) => setAge(event.target.value)} />
+          <input type="number" min="0" max="130" value={age} onChange={(event) => { setAge(event.target.value); setResidentDetailsId(null) }} />
         </label>
         <label>{labels.zone}
-          <select value={zone} onChange={(event) => setZone(event.target.value)}>
+          <select value={zone} onChange={(event) => { setZone(event.target.value); setResidentDetailsId(null) }}>
             <option value="">{labels.allZones}</option>
             {[1, 2, 3, 4, 5, 6, 7].map((number) => <option key={number} value={number}>{number}</option>)}
           </select>
-        </label>
-        <label>{labels.maritalStatus}
-          <input value={maritalStatus} maxLength={100} onChange={(event) => setMaritalStatus(event.target.value)} />
-        </label>
-        <label>{labels.occupation}
-          <input value={occupation} maxLength={255} onChange={(event) => setOccupation(event.target.value)} />
         </label>
         <div className="registry-row-actions registry-filter-actions">
           <button type="submit" className="primary-btn small">{labels.searchButton}</button>
@@ -852,10 +863,9 @@ export default function StaffRegistryPanel({ language = 'en' }) {
             setBirthDate('')
             setAge('')
             setZone('')
-            setMaritalStatus('')
-            setOccupation('')
             setPage(1)
-            setDebounced({ search: '', birthDate: '', age: '', zone: '', maritalStatus: '', occupation: '' })
+            setDebounced({ search: '', birthDate: '', age: '', zone: '' })
+            setResidentDetailsId(null)
           }}>{labels.clearSearch}</button>
         </div>
       </form>
@@ -907,14 +917,12 @@ export default function StaffRegistryPanel({ language = 'en' }) {
               <h4>{labels.previewRows}</h4>
               <div className="registry-table-wrap">
                 <table className="registry-table registry-residents-table">
-                  <thead><tr><th scope="col">{labels.name}</th><th scope="col">{labels.birthAndAge}</th><th scope="col">{labels.location}</th><th scope="col">{labels.maritalStatus}</th><th scope="col">{labels.occupation}</th><th scope="col">{labels.household}</th></tr></thead>
+                  <thead><tr><th scope="col">{labels.name}</th><th scope="col">{labels.birthAndAge}</th><th scope="col">{labels.location}</th><th scope="col">{labels.household}</th></tr></thead>
                   <tbody>{importRows.slice(0, 10).map((resident, index) => (
                     <tr key={`${index}-${resident.firstName}-${resident.lastName}`}>
                       <td>{resident.firstName} {resident.lastName}</td>
                       <td>{resident.birthDate || labels.noDob}</td>
                       <td>{resident.zone ? `${labels.zone} ${resident.zone}` : labels.unassigned}</td>
-                      <td>{resident.maritalStatus || labels.noDob}</td>
-                      <td>{resident.occupation || labels.noDob}</td>
                       <td>{resident.household || resident.householdId || labels.unassigned}</td>
                     </tr>
                   ))}</tbody>
@@ -945,7 +953,7 @@ export default function StaffRegistryPanel({ language = 'en' }) {
           <label>{labels.sex}<select value={form.sex} onChange={(event) => setForm((current) => ({ ...current, sex: event.target.value }))} required><option value="">{labels.selectSex}</option><option value="Male">{labels.maleOption}</option><option value="Female">{labels.femaleOption}</option></select></label>
           <label>{labels.household}<input value={form.household} maxLength={100} onChange={(event) => setForm((current) => ({ ...current, household: event.target.value }))} /></label>
           <label>{labels.zone}<select value={form.zone} onChange={(event) => setForm((current) => ({ ...current, zone: event.target.value }))}><option value="">{labels.unassigned}</option>{[1, 2, 3, 4, 5, 6, 7].map((number) => <option key={number} value={number}>{number}</option>)}</select></label>
-          <label>{labels.maritalStatus}<input value={form.maritalStatus} maxLength={100} onChange={(event) => setForm((current) => ({ ...current, maritalStatus: event.target.value }))} /></label>
+          <label>{labels.maritalStatus}<select value={form.maritalStatus} onChange={(event) => setForm((current) => ({ ...current, maritalStatus: event.target.value }))}><option value="">{labels.optional}</option>{maritalStatusOptions.map((status) => <option key={status} value={status}>{status}</option>)}</select></label>
           <label>{labels.occupation}<input value={form.occupation} maxLength={255} onChange={(event) => setForm((current) => ({ ...current, occupation: event.target.value }))} /></label>
           <label>{labels.sourceRef}<input value={form.sourceReference} maxLength={255} onChange={(event) => setForm((current) => ({ ...current, sourceReference: event.target.value }))} /></label>
           <label>{labels.sourceFile}<input value={form.sourceFilename} maxLength={255} onChange={(event) => setForm((current) => ({ ...current, sourceFilename: event.target.value }))} /></label>
@@ -981,6 +989,7 @@ export default function StaffRegistryPanel({ language = 'en' }) {
               onClick={() => {
                 setZone(value)
                 setSelectedZone(value)
+                setResidentDetailsId(null)
                 setPage(1)
                 setEditResident(null)
               }}
@@ -1003,17 +1012,22 @@ export default function StaffRegistryPanel({ language = 'en' }) {
               <p>{total} {labels.residents}</p>
               <div className="registry-table-wrap">
                 <table className="registry-table registry-search-results-table">
-                  <thead><tr><th scope="col">{labels.name}</th><th scope="col">{labels.birthAndAge}</th><th scope="col">{labels.maritalStatus}</th><th scope="col">{labels.occupation}</th><th scope="col">{labels.household}</th><th scope="col">{labels.location}</th></tr></thead>
-                  <tbody>{records.map((resident) => (
-                    <tr key={resident.id}>
-                      <td>{[resident.firstName, resident.lastName].filter(Boolean).join(' ') || labels.name}</td>
-                      <td>{formatDate(resident.birthDate, language) || labels.noDob} · {resident.age === null || resident.age === undefined ? labels.noDob : resident.age}</td>
-                      <td>{resident.maritalStatus || labels.noDob}</td>
-                      <td>{resident.occupation || labels.noDob}</td>
-                      <td>{resident.household || resident.householdId || labels.unassigned}</td>
-                      <td>{resident.zone ? `${labels.zone} ${resident.zone}` : labels.unassigned}</td>
-                    </tr>
-                  ))}</tbody>
+                  <thead><tr><th scope="col">{labels.name}</th><th scope="col">{labels.birthAndAge}</th><th scope="col">{labels.household}</th><th scope="col">{labels.location}</th></tr></thead>
+                  <tbody>{records.map((resident) => {
+                    const residentName = [resident.firstName, resident.lastName].filter(Boolean).join(' ') || labels.name
+                    const detailsOpen = residentDetailsId === resident.id
+                    return (
+                      <Fragment key={resident.id}>
+                        <tr>
+                          <td><button type="button" className="registry-resident-link" aria-expanded={detailsOpen} onClick={() => setResidentDetailsId(detailsOpen ? null : resident.id)}>{residentName}</button></td>
+                          <td>{formatDate(resident.birthDate, language) || labels.noDob} · {resident.age === null || resident.age === undefined ? labels.noDob : resident.age}</td>
+                          <td>{resident.household || resident.householdId || labels.unassigned}</td>
+                          <td>{resident.zone ? `${labels.zone} ${resident.zone}` : labels.unassigned}</td>
+                        </tr>
+                        {detailsOpen && <tr key={`${resident.id}-details`}><td colSpan={4}><ResidentDetails resident={resident} labels={labels} language={language} /></td></tr>}
+                      </Fragment>
+                    )
+                  })}</tbody>
                 </table>
               </div>
               <div className="registry-pagination">
@@ -1065,7 +1079,7 @@ export default function StaffRegistryPanel({ language = 'en' }) {
               <label>{labels.sex}<select value={editForm.sex} onChange={(event) => setEditForm((current) => ({ ...current, sex: event.target.value }))}><option value="">{labels.selectSex}</option><option value="Male">{labels.maleOption}</option><option value="Female">{labels.femaleOption}</option></select></label>
               <label>{labels.household}<input value={editForm.household} maxLength={100} onChange={(event) => setEditForm((current) => ({ ...current, household: event.target.value }))} /></label>
               <label>{labels.zone}<select value={editForm.zone} onChange={(event) => setEditForm((current) => ({ ...current, zone: event.target.value }))}><option value="">{labels.unassigned}</option>{[1, 2, 3, 4, 5, 6, 7].map((number) => <option key={number} value={number}>{number}</option>)}</select></label>
-              <label>{labels.maritalStatus}<input value={editForm.maritalStatus} maxLength={100} onChange={(event) => setEditForm((current) => ({ ...current, maritalStatus: event.target.value }))} /></label>
+              <label>{labels.maritalStatus}<select value={editForm.maritalStatus} onChange={(event) => setEditForm((current) => ({ ...current, maritalStatus: event.target.value }))}><option value="">{labels.optional}</option>{maritalStatusOptions.map((status) => <option key={status} value={status}>{status}</option>)}</select></label>
               <label>{labels.occupation}<input value={editForm.occupation} maxLength={255} onChange={(event) => setEditForm((current) => ({ ...current, occupation: event.target.value }))} /></label>
               <label>{labels.sourceRef}<input value={editForm.sourceReference} maxLength={255} onChange={(event) => setEditForm((current) => ({ ...current, sourceReference: event.target.value }))} /></label>
               <label>{labels.sourceFile}<input value={editForm.sourceFilename} maxLength={255} onChange={(event) => setEditForm((current) => ({ ...current, sourceFilename: event.target.value }))} /></label>
@@ -1087,10 +1101,10 @@ export default function StaffRegistryPanel({ language = 'en' }) {
                     return (
                       <article key={resident.id} className="registry-zone-resident">
                         <div>
-                          <strong>{residentName}</strong>
+                          <button type="button" className="registry-resident-link" aria-expanded={residentDetailsId === resident.id} onClick={() => setResidentDetailsId(residentDetailsId === resident.id ? null : resident.id)}>{residentName}</button>
                           <span>{formatDate(resident.birthDate, language) || labels.noDob} · {resident.age === null ? labels.noDob : `${resident.age}`}</span>
-                          <small>{labels.maritalStatus}: {resident.maritalStatus || labels.noDob} · {labels.occupation}: {resident.occupation || labels.noDob} · {labels.household}: {resident.household || resident.householdId || labels.unassigned}</small>
                           {resident.zone && <small>{labels.zone} {resident.zone}</small>}
+                          {residentDetailsId === resident.id && <ResidentDetails resident={resident} labels={labels} language={language} />}
                         </div>
                         <button type="button" className="secondary-btn small" onClick={() => beginResidentEdit(resident)}>{labels.editRecord}</button>
                       </article>
