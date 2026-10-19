@@ -69,29 +69,36 @@ export async function query(text, params = []) {
 
 export async function getOfficialProfiles() {
   const result = await query(
-    'SELECT role, display_name, profile_url, group_url FROM official_profiles ORDER BY CASE role WHEN \'captain\' THEN 1 WHEN \'secretary\' THEN 2 ELSE 3 END',
+    'SELECT role, display_name, profile_url, group_url, community_links FROM official_profiles ORDER BY CASE role WHEN \'captain\' THEN 1 WHEN \'secretary\' THEN 2 ELSE 3 END',
   )
   return result.rows.map((row) => ({
     role: row.role,
     displayName: row.display_name,
     profileUrl: row.profile_url || '',
-    groupUrl: row.group_url || '',
+    groupUrl: row.group_url || row.community_links?.[0] || '',
+    communityLinks: Array.isArray(row.community_links) && row.community_links.length
+      ? row.community_links
+      : row.group_url ? [row.group_url] : [],
   }))
 }
 
 export async function updateOfficialProfile(role, profile, updatedBy) {
   if (!['captain', 'secretary', 'treasurer'].includes(role)) throw new Error('Invalid official profile role.')
+  const communityLinks = Array.isArray(profile.communityLinks)
+    ? profile.communityLinks
+    : profile.groupUrl ? [profile.groupUrl] : []
   const result = await query(
-    `INSERT INTO official_profiles (role, display_name, profile_url, group_url, updated_by, updated_at)
-     VALUES ($1, $2, $3, $4, $5, NOW())
+    `INSERT INTO official_profiles (role, display_name, profile_url, group_url, community_links, updated_by, updated_at)
+     VALUES ($1, $2, $3, $4, $5::jsonb, $6, NOW())
      ON CONFLICT (role) DO UPDATE SET
        display_name = EXCLUDED.display_name,
        profile_url = EXCLUDED.profile_url,
        group_url = EXCLUDED.group_url,
+       community_links = EXCLUDED.community_links,
        updated_by = EXCLUDED.updated_by,
        updated_at = NOW()
-     RETURNING role, display_name, profile_url, group_url`,
-    [role, profile.displayName, profile.profileUrl, profile.groupUrl, updatedBy],
+     RETURNING role, display_name, profile_url, group_url, community_links`,
+    [role, profile.displayName, profile.profileUrl, communityLinks[0] || '', JSON.stringify(communityLinks), updatedBy],
   )
   const row = result.rows[0]
   return {
@@ -99,6 +106,7 @@ export async function updateOfficialProfile(role, profile, updatedBy) {
     displayName: row.display_name,
     profileUrl: row.profile_url || '',
     groupUrl: row.group_url || '',
+    communityLinks: Array.isArray(row.community_links) ? row.community_links : [],
   }
 }
 
@@ -240,10 +248,13 @@ export async function initDatabase() {
       display_name VARCHAR(120) NOT NULL DEFAULT '',
       profile_url TEXT NOT NULL DEFAULT '',
       group_url TEXT NOT NULL DEFAULT '',
+      community_links JSONB NOT NULL DEFAULT '[]'::jsonb,
       updated_by UUID REFERENCES users(id) ON DELETE SET NULL,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
   `)
+  await query(`ALTER TABLE official_profiles ADD COLUMN IF NOT EXISTS community_links JSONB NOT NULL DEFAULT '[]'::jsonb`)
+  await query(`UPDATE official_profiles SET community_links = jsonb_build_array(group_url) WHERE group_url <> '' AND community_links = '[]'::jsonb`)
   await query(
     `INSERT INTO official_profiles (role, display_name)
      VALUES ('captain', ''), ('secretary', ''), ('treasurer', '')

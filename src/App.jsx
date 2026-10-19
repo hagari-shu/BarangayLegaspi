@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import { Routes, Route, Navigate, Link, useNavigate, useLocation } from 'react-router-dom'
 import barangaySeal from './assets/barangay-seal-new.png'
@@ -16,6 +16,7 @@ const sessionKey = 'brgy-legaspi-session'
 const readableTextStorageKey = 'brgy-legaspi-readable-text'
 const getRequestReminderStorageKey = (userId) => `brgy-legaspi-request-reminders:${userId}`
 const API_BASE = (import.meta.env.VITE_API_BASE || (import.meta.env.DEV ? 'http://localhost:3001/api' : '')).replace(/\/$/, '')
+const BrandingContext = createContext({ logoUrl: '', refreshLogo: () => {} })
 const isAdminRole = (role) => role === 'admin' || role === 'super_admin'
 const getDashboardPath = (role) => role === 'super_admin'
   ? '/super-admin'
@@ -27,6 +28,21 @@ const getDashboardPath = (role) => role === 'super_admin'
 
 if (!API_BASE) {
   throw new Error('VITE_API_BASE must be configured to point to the deployed API base URL, such as https://api.example.com/api.')
+}
+
+function SystemLogo({ alt = '', className }) {
+  const { logoUrl } = useContext(BrandingContext)
+  const [failedLogoUrl, setFailedLogoUrl] = useState('')
+  const usingDefault = !logoUrl || failedLogoUrl === logoUrl
+
+  return (
+    <img
+      className={className}
+      src={usingDefault ? barangaySeal : logoUrl}
+      alt={alt}
+      onError={() => { if (logoUrl) setFailedLogoUrl(logoUrl) }}
+    />
+  )
 }
 
 // Simple fetch wrapper to automatically attach Authorization header for API calls when a session token exists
@@ -641,20 +657,23 @@ async function optimizeCaptainPhoto(file) {
   }
 }
 
-function OfficialProfileSettings({ language }) {
+function OfficialProfileSettings({ language, canManageLogo = false }) {
   const t = translations[language] || translations.en
   const initialProfiles = [
-    { role: 'captain', displayName: '', profileUrl: '', groupUrl: '' },
-    { role: 'secretary', displayName: '', profileUrl: '', groupUrl: '' },
-    { role: 'treasurer', displayName: '', profileUrl: '', groupUrl: '' },
+    { role: 'captain', displayName: '', profileUrl: '', groupUrl: '', communityLinks: [] },
+    { role: 'secretary', displayName: '', profileUrl: '', groupUrl: '', communityLinks: [] },
+    { role: 'treasurer', displayName: '', profileUrl: '', groupUrl: '', communityLinks: [] },
   ]
+  const { refreshLogo } = useContext(BrandingContext)
   const [profiles, setProfiles] = useState(initialProfiles)
   const [loading, setLoading] = useState(true)
   const [savingRole, setSavingRole] = useState('')
   const [photoBusyRole, setPhotoBusyRole] = useState('')
+  const [logoBusy, setLogoBusy] = useState(false)
   const [photoVersions, setPhotoVersions] = useState({})
   const [error, setError] = useState('')
   const fileInputs = useRef({})
+  const logoInput = useRef(null)
 
   useEffect(() => {
     let active = true
@@ -665,7 +684,12 @@ function OfficialProfileSettings({ language }) {
           throw new Error(data.message || t.officialProfilesLoadFailed)
         }
         if (active) {
-          setProfiles(data.profiles)
+          setProfiles(data.profiles.map((profile) => ({
+            ...profile,
+            communityLinks: Array.isArray(profile.communityLinks)
+              ? profile.communityLinks
+              : profile.groupUrl ? [profile.groupUrl] : [],
+          })))
           setError('')
         }
       })
@@ -693,7 +717,7 @@ function OfficialProfileSettings({ language }) {
         body: JSON.stringify({
           displayName: profile.displayName,
           profileUrl: profile.profileUrl,
-          groupUrl: profile.groupUrl,
+          communityLinks: profile.communityLinks || [],
         }),
       })
       const data = await response.json().catch(() => ({}))
@@ -779,6 +803,69 @@ function OfficialProfileSettings({ language }) {
     }
   }
 
+  const handleLogoUpload = async (event) => {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (!file) return
+    if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
+      setError(t.systemLogoInvalid)
+      return
+    }
+    if (file.size < 1 || file.size > 5 * 1024 * 1024) {
+      setError(t.systemLogoTooLarge)
+      return
+    }
+
+    setLogoBusy(true)
+    setError('')
+    try {
+      const route = `${API_BASE}/admin/system-logo`
+      const linkResponse = await fetch(`${route}/upload-url`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contentType: file.type }),
+      })
+      const upload = await linkResponse.json().catch(() => ({}))
+      if (!linkResponse.ok) throw new Error(upload.message || t.systemLogoUploadFailed)
+
+      const form = new FormData()
+      for (const [name, value] of Object.entries(upload.fields)) form.append(name, value)
+      form.append('file', file, file.name)
+      const storageResponse = await fetch(upload.url, { method: 'POST', body: form })
+      if (!storageResponse.ok) throw new Error(t.systemLogoUploadFailed)
+
+      const finalizeResponse = await fetch(route, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: upload.key }),
+      })
+      const result = await finalizeResponse.json().catch(() => ({}))
+      if (!finalizeResponse.ok) throw new Error(result.message || t.systemLogoUploadFailed)
+      refreshLogo()
+    } catch (uploadError) {
+      console.error('upload system logo failed', uploadError)
+      setError(uploadError.message || t.systemLogoUploadFailed)
+    } finally {
+      setLogoBusy(false)
+    }
+  }
+
+  const handleLogoRemove = async () => {
+    setLogoBusy(true)
+    setError('')
+    try {
+      const response = await fetch(`${API_BASE}/admin/system-logo`, { method: 'DELETE' })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(data.message || t.systemLogoUploadFailed)
+      refreshLogo()
+    } catch (removeError) {
+      console.error('remove system logo failed', removeError)
+      setError(removeError.message || t.systemLogoUploadFailed)
+    } finally {
+      setLogoBusy(false)
+    }
+  }
+
   const labels = {
     captain: t.barangayCaptainRole,
     secretary: t.secretaryRole,
@@ -817,17 +904,44 @@ function OfficialProfileSettings({ language }) {
                   : item))}
               />
             </label>
-            <label>
-              {t.officialGroupLinkLabel}
-              <input
-                type="url"
-                placeholder="https://"
-                value={profile.groupUrl || ''}
-                onChange={(event) => setProfiles((current) => current.map((item) => item.role === profile.role
-                  ? { ...item, groupUrl: event.target.value }
+            <fieldset className="official-community-links">
+              <legend>{t.officialGroupLinkLabel}</legend>
+              {(profile.communityLinks || []).map((url, index) => (
+                <div className="official-community-link-row" key={`${profile.role}-community-${index}`}>
+                  <label>
+                    {t.communityLinkNumber.replace('{number}', String(index + 1))}
+                    <input
+                      type="url"
+                      placeholder="https://"
+                      value={url}
+                      onChange={(event) => setProfiles((current) => current.map((item) => item.role === profile.role
+                        ? { ...item, communityLinks: item.communityLinks.map((link, linkIndex) => linkIndex === index ? event.target.value : link) }
+                        : item))}
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    className="secondary-btn small"
+                    aria-label={t.removeCommunityLink.replace('{number}', String(index + 1))}
+                    onClick={() => setProfiles((current) => current.map((item) => item.role === profile.role
+                      ? { ...item, communityLinks: item.communityLinks.filter((_, linkIndex) => linkIndex !== index) }
+                      : item))}
+                  >
+                    {t.remove}
+                  </button>
+                </div>
+              ))}
+              <button
+                type="button"
+                className="secondary-btn small"
+                disabled={(profile.communityLinks || []).length >= 8}
+                onClick={() => setProfiles((current) => current.map((item) => item.role === profile.role
+                  ? { ...item, communityLinks: [...(item.communityLinks || []), ''] }
                   : item))}
-              />
-            </label>
+              >
+                {t.addAnotherCommunityLink}
+              </button>
+            </fieldset>
             <div className="official-profile-photo-row">
               <img
                 key={photoVersions[profile.role] || 'initial'}
@@ -866,6 +980,31 @@ function OfficialProfileSettings({ language }) {
           </form>
         ))}
       </div>
+      {canManageLogo && (
+        <section className="system-logo-settings" aria-labelledby="system-logo-title">
+          <div>
+            <h3 id="system-logo-title">{t.systemLogoTitle}</h3>
+            <p className="field-note">{t.systemLogoHint}</p>
+          </div>
+          <SystemLogo className="system-logo-preview" alt={t.systemLogoTitle} />
+          <input
+            ref={logoInput}
+            type="file"
+            accept="image/jpeg,image/png,image/webp"
+            aria-label={t.systemLogoTitle}
+            disabled={logoBusy}
+            onChange={handleLogoUpload}
+          />
+          <div className="system-logo-actions">
+            <button className="secondary-btn small" type="button" disabled={logoBusy} onClick={() => logoInput.current?.click()}>
+              {logoBusy ? t.captainPhotoUploading : t.systemLogoChoose}
+            </button>
+            <button className="secondary-btn small" type="button" disabled={logoBusy} onClick={handleLogoRemove}>
+              {t.systemLogoRemove}
+            </button>
+          </div>
+        </section>
+      )}
       {error && <p className="captain-photo-error" role="alert">{error}</p>}
     </article>
   )
@@ -980,9 +1119,9 @@ function LoginPage({ onLogin, language, setLanguage }) {
   const navigate = useNavigate()
   const t = translations[language] || translations.en
   const [officialProfiles, setOfficialProfiles] = useState([
-    { role: 'captain', displayName: '', profileUrl: '', groupUrl: '' },
-    { role: 'secretary', displayName: '', profileUrl: '', groupUrl: '' },
-    { role: 'treasurer', displayName: '', profileUrl: '', groupUrl: '' },
+    { role: 'captain', displayName: '', profileUrl: '', groupUrl: '', communityLinks: [] },
+    { role: 'secretary', displayName: '', profileUrl: '', groupUrl: '', communityLinks: [] },
+    { role: 'treasurer', displayName: '', profileUrl: '', groupUrl: '', communityLinks: [] },
   ])
   const [form, setForm] = useState({
     identifier: '',
@@ -1163,7 +1302,7 @@ function LoginPage({ onLogin, language, setLanguage }) {
       <header className="topbar landing-topbar" aria-label="Top bar">
         <div className="landing-header-inner">
           <a className="landing-brand" href="/" aria-label={`${t.barangayLegaspi} - ${t.residentPortal}`}>
-            <img src={barangaySeal} alt="" />
+            <SystemLogo />
             <span>
               <strong>{t.barangayLegaspi}</strong>
               <span>{t.residentPortal}</span>
@@ -1194,7 +1333,7 @@ function LoginPage({ onLogin, language, setLanguage }) {
         <div className="portal-entry">
           <div className="brand-block" aria-label="Barangay brand">
             <div className="brand-logo-frame">
-              <img className="seal-logo" src={barangaySeal} alt="Barangay Legaspi official seal" />
+              <SystemLogo className="seal-logo" alt="Barangay Legaspi official seal" />
             </div>
             <div className="brand-copy">
               <span className="brand-kicker">{t.officialResident}</span>
@@ -1224,7 +1363,11 @@ function LoginPage({ onLogin, language, setLanguage }) {
                 <span className="captain-location">{t.captainLocation}</span>
                 <div className="official-profile-links">
                   {captainProfile?.profileUrl && <a href={captainProfile.profileUrl} target="_blank" rel="noopener noreferrer">{t.officialProfileLinkLabel}</a>}
-                  {captainProfile?.groupUrl && <a href={captainProfile.groupUrl} target="_blank" rel="noopener noreferrer">{t.officialGroupLinkLabel}</a>}
+                  {(captainProfile?.communityLinks?.length ? captainProfile.communityLinks : captainProfile?.groupUrl ? [captainProfile.groupUrl] : []).map((url, index) => (
+                    url && <a key={`${url}-${index}`} href={url} target="_blank" rel="noopener noreferrer">
+                      {t.officialGroupLinkLabel}{captainProfile.communityLinks?.length > 1 ? ` ${index + 1}` : ''}
+                    </a>
+                  ))}
                 </div>
               </div>
             </section>
@@ -1243,7 +1386,11 @@ function LoginPage({ onLogin, language, setLanguage }) {
                       {profile.displayName && <strong>{profile.displayName}</strong>}
                       <div className="official-profile-links">
                         {profile.profileUrl && <a href={profile.profileUrl} target="_blank" rel="noopener noreferrer">{t.officialProfileLinkLabel}</a>}
-                        {profile.groupUrl && <a href={profile.groupUrl} target="_blank" rel="noopener noreferrer">{t.officialGroupLinkLabel}</a>}
+                        {(profile.communityLinks?.length ? profile.communityLinks : profile.groupUrl ? [profile.groupUrl] : []).map((url, index) => (
+                          url && <a key={`${url}-${index}`} href={url} target="_blank" rel="noopener noreferrer">
+                            {t.officialGroupLinkLabel}{profile.communityLinks?.length > 1 ? ` ${index + 1}` : ''}
+                          </a>
+                        ))}
                       </div>
                     </div>
                   </article>
@@ -1546,7 +1693,7 @@ function RegisterPage({ language, setLanguage }) {
       <main className="register-screen">
         <div className="register-box">
           <div className="register-header">
-            <img className="seal-logo small" src={barangaySeal} alt="Barangay Legaspi official seal" />
+            <SystemLogo className="seal-logo small" alt="Barangay Legaspi official seal" />
             <div>
               <h1>{t.createResidentTitle}</h1>
               <p>{t.createResidentSubtitle}</p>
@@ -1831,7 +1978,7 @@ function DashboardPage({ profile, requests, services, announcements, events, pay
     <div className="dashboard-shell">
       <header className="dashboard-topbar resident-topbar">
         <div className="brand-wrap">
-          <img className="seal-logo tiny" src={barangaySeal} alt="Barangay Legaspi official seal" />
+          <SystemLogo className="seal-logo tiny" alt="Barangay Legaspi official seal" />
           <div>
             <div className="brand-name">Barangay Legaspi</div>
             <small>Resident Portal</small>
@@ -2351,7 +2498,7 @@ function RequestsPage({ requests, onSubmit, onRequestUpdated, onLogout, language
     <div className="dashboard-shell">
       <header className="dashboard-topbar">
         <div className="brand-wrap">
-          <img className="seal-logo tiny" src={barangaySeal} alt="Barangay Legaspi official seal" />
+          <SystemLogo className="seal-logo tiny" alt="Barangay Legaspi official seal" />
           <div>
             <div className="brand-name">Barangay Legaspi</div>
             <small>Resident Portal</small>
@@ -2508,7 +2655,7 @@ function ProfilePage({ profile, onLogout, language, setLanguage }) {
     <div className="dashboard-shell">
       <header className="dashboard-topbar resident-topbar">
         <div className="brand-wrap">
-          <img className="seal-logo tiny" src={barangaySeal} alt="Barangay Legaspi official seal" />
+          <SystemLogo className="seal-logo tiny" alt="Barangay Legaspi official seal" />
           <div>
             <div className="brand-name">Barangay Legaspi</div>
             <small>Resident Portal</small>
@@ -2566,7 +2713,7 @@ function PaymentsPage({ payments, onLogout, language, setLanguage }) {
     <div className="dashboard-shell">
       <header className="dashboard-topbar">
         <div className="brand-wrap">
-          <img className="seal-logo tiny" src={barangaySeal} alt="Barangay Legaspi official seal" />
+          <SystemLogo className="seal-logo tiny" alt="Barangay Legaspi official seal" />
           <div>
             <div className="brand-name">Barangay Legaspi</div>
             <small>Resident Portal</small>
@@ -2623,7 +2770,7 @@ function EventsPage({ events, onLogout, language, setLanguage }) {
     <div className="dashboard-shell">
       <header className="dashboard-topbar">
         <div className="brand-wrap">
-          <img className="seal-logo tiny" src={barangaySeal} alt="Barangay Legaspi official seal" />
+          <SystemLogo className="seal-logo tiny" alt="Barangay Legaspi official seal" />
           <div>
             <div className="brand-name">Barangay Legaspi</div>
             <small>Resident Portal</small>
@@ -2802,7 +2949,7 @@ function SettingsPage({ profile, onLogout, onPasswordChanged, language, setLangu
     <div className="dashboard-shell">
       <header className="dashboard-topbar">
         <div className="brand-wrap">
-          <img className="seal-logo tiny" src={barangaySeal} alt="Barangay Legaspi official seal" />
+          <SystemLogo className="seal-logo tiny" alt="Barangay Legaspi official seal" />
           <div>
             <div className="brand-name">Barangay Legaspi</div>
             <small>{settingsProfile.role === 'super_admin' ? t.superAdminPortal : settingsProfile.role === 'admin' ? t.adminPortal : settingsProfile.role === 'staff' ? t.staffPortal : t.residentPortal}</small>
@@ -3335,7 +3482,7 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
     <div className="dashboard-shell">
       <header className="dashboard-topbar staff-topbar">
         <div className="brand-wrap">
-          <img className="seal-logo tiny" src={barangaySeal} alt="Barangay Legaspi official seal" />
+          <SystemLogo className="seal-logo tiny" alt="Barangay Legaspi official seal" />
           <div>
             <div className="brand-name">Barangay Legaspi</div>
             <small>{t.staffPortal}</small>
@@ -3669,6 +3816,8 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
                         <button type="button" className="secondary-btn small" onClick={() => window.print()} disabled={!reportData || Boolean(reportError) || Boolean(reportValidationError)}>{t.reportPrint}</button>
                       </div>
                     </div>
+                    <details className="report-filter-details">
+                    <summary>{t.reportFilterOptions}</summary>
                     <div className="report-filters">
                       <label>{t.reportPeriod}
                         <select value={reportPeriod} onChange={(event) => handleReportPeriodChange(event.target.value)}>
@@ -3705,6 +3854,7 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
                       </label>
                     </div>
                     <p className="report-filter-basis">{t.reportFilterBasis}</p>
+                    </details>
                     {reportValidationError && <p className="report-error" role="alert">{reportValidationError}</p>}
                     {reportError && <div className="report-error" role="alert">
                       <span>{reportError}</span>
@@ -3716,6 +3866,7 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
                   {reportLoading && <p className="request-dashboard-loading" role="status">{t.reportLoading}</p>}
                   {!reportLoading && !reportError && !reportValidationError && reportData && (
                     <>
+                      <p className="report-summary-hint">{t.reportSummaryHint}</p>
                       <div className="stats-grid report-summary-grid" aria-label={t.serviceReports}>
                         <article className="stat-card report-summary-card accent">
                           <span className="label">{t.reportReceived}</span>
@@ -3732,13 +3883,11 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
                           <span className="stat-number">{Number(reportData.summary.inProcessing).toLocaleString()}</span>
                           <span className="staff-metric-description">{t.inProcessingDescription}</span>
                         </button>
-                        <article className="stat-card report-summary-card unavailable">
-                          <span className="label">{t.reportOverdue}</span>
-                          <span className="stat-number">{t.reportNotTracked}</span>
-                          <span className="staff-metric-description">{t.deadlinesNotTracked}</span>
-                        </article>
                       </div>
 
+                      <details className="report-details">
+                        <summary>{t.reportMoreDetails}</summary>
+                        <div className="report-details-content">
                       {reportData.summary.missingSubmissionDates > 0 && (
                         <p className="report-data-notice" role="status">
                           {t.reportMissingDates.replace('{count}', String(reportData.summary.missingSubmissionDates))}
@@ -3852,6 +4001,8 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
                         <span>{t.reportGeneratedAt}: {new Intl.DateTimeFormat(language === 'fil' ? 'fil-PH' : 'en-PH', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Asia/Manila' }).format(new Date(reportData.generatedAt))}</span>
                         <span>{t.reportDecisionBasis}</span>
                       </footer>
+                        </div>
+                      </details>
                     </>
                   )}
                 </section>
@@ -4059,7 +4210,7 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
                       {staffMembers.length === 0 && <p className="empty-state">{t.noStaffAccounts}</p>}
                     </div>
                   </article>
-                  <OfficialProfileSettings language={language} />
+                  <OfficialProfileSettings language={language} canManageLogo={isAdminRole(userRole)} />
                 </>
               )}
             </div>
@@ -4668,7 +4819,7 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
     <div className="dashboard-shell">
       <header className="dashboard-topbar admin-topbar">
         <div className="brand-wrap">
-          <img className="seal-logo tiny" src={barangaySeal} alt="Barangay Legaspi official seal" />
+          <SystemLogo className="seal-logo tiny" alt="Barangay Legaspi official seal" />
           <div>
             <div className="brand-name">Barangay Legaspi</div>
             <small>{currentUser?.role === 'super_admin' ? t.superAdminPortal : t.adminPortal}</small>
@@ -4780,7 +4931,7 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
           <div className="dashboard-body">
             <div className="main-column">
               {activeTab === 'overview' && currentUser?.role === 'super_admin' && <SuperAdminMonitoringPanel language={language} />}
-              {activeTab === 'overview' && <OfficialProfileSettings language={language} />}
+              {activeTab === 'overview' && <OfficialProfileSettings language={language} canManageLogo={isAdminRole(currentUser?.role)} />}
               {activeTab === 'overview' && (
                 <article className="panel-card compact-panel">
                   <div className="panel-header">
@@ -5713,7 +5864,7 @@ function MauAssistant({ language, userRole, isAuthenticated, pathname, mobileDas
         aria-controls="mau-assistant-dialog"
       >
         <span className="mau-launcher-badge" aria-hidden="true">
-          <img src={barangaySeal} alt="" />
+          <SystemLogo />
         </span>
         <span>Mau</span>
       </button>
@@ -5728,7 +5879,7 @@ function MauAssistant({ language, userRole, isAuthenticated, pathname, mobileDas
         >
           <div className="mau-header">
             <div className="mau-avatar" aria-hidden="true">
-              <img src={barangaySeal} alt="" />
+              <SystemLogo />
             </div>
             <div>
               <strong id="mau-dialog-title">Mau</strong>
@@ -5817,12 +5968,47 @@ function App() {
   const [events, setEvents] = useState([])
   const [payments, setPayments] = useState([])
   const [reports, setReports] = useState([])
+  const [logoVersion, setLogoVersion] = useState(0)
+  const [logoUrl, setLogoUrl] = useState('')
   const [session, setSession] = useState(() => readStoredSession())
   const [reminderAlerts, setReminderAlerts] = useState([])
 
   const isAuthenticated = Boolean(session?.isActive)
   const userRole = session?.user?.role || session?.role || 'resident'
   const t = translations[language] || translations.en
+
+  useEffect(() => {
+    let active = true
+    fetch(`${API_BASE}/system-logo`)
+      .then(async (response) => {
+        if (response.status === 404) return ''
+        const data = await response.json().catch(() => ({}))
+        if (!response.ok || typeof data.url !== 'string') {
+          throw new Error(data.message || 'Unable to load the system logo.')
+        }
+        return data.url
+      })
+      .then((url) => {
+        if (active) setLogoUrl(url)
+      })
+      .catch((error) => {
+        console.error('load system logo failed', error)
+        if (active) setLogoUrl('')
+      })
+    return () => { active = false }
+  }, [logoVersion])
+
+  useEffect(() => {
+    const favicon = document.querySelector('link[rel="icon"]')
+    if (!favicon) return
+    if (logoUrl) {
+      favicon.href = logoUrl
+      favicon.removeAttribute('type')
+    } else {
+      favicon.href = '/favicon.svg'
+      favicon.type = 'image/svg+xml'
+    }
+  }, [logoUrl])
 
   useEffect(() => {
     try {
@@ -6162,7 +6348,7 @@ function App() {
   }
 
   return (
-    <>
+    <BrandingContext.Provider value={{ logoUrl, refreshLogo: () => setLogoVersion((version) => version + 1) }}>
       {reminderAlerts.length > 0 && (
         <div className="request-reminder-alerts" role="status" aria-live="polite">
           {reminderAlerts.map((alert) => (
@@ -6194,7 +6380,7 @@ function App() {
         <Route path="*" element={<Navigate to={getDashboardPath(userRole)} replace />} />
       </Routes>
       <MauAssistant language={language} userRole={userRole} isAuthenticated={isAuthenticated} pathname={location.pathname} mobileDashboard={userRole === 'resident' && location.pathname === '/dashboard'} />
-    </>
+    </BrandingContext.Provider>
   )
 }
 

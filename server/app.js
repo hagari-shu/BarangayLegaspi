@@ -13,16 +13,22 @@ import {
   CAPTAIN_PHOTO_KEY,
   OFFICIAL_PHOTO_KEYS,
   OFFICIAL_PHOTO_ROLES,
+  SYSTEM_LOGO_KEY,
   createCaptainPhotoUpload,
   createOfficialPhotoUpload,
+  createSystemLogoUpload,
   deleteCaptainPhoto,
   deleteOfficialPhoto,
+  deleteSystemLogo,
   finalizeCaptainPhotoUpload,
   finalizeOfficialPhotoUpload,
+  finalizeSystemLogoUpload,
   getCaptainPhotoUrl,
   getOfficialPhotoUrl,
+  getSystemLogoUrl,
   isCaptainPhotoStorageConfigured,
   isOfficialPhotoStorageConfigured,
+  isSystemLogoStorageConfigured,
 } from './captain-photo-storage.js'
 import {
   deleteFacebookPost,
@@ -612,6 +618,103 @@ export function createApp() {
     }
   })
 
+  app.get('/api/system-logo', async (_req, res) => {
+    res.setHeader('Cache-Control', 'no-store')
+    try {
+      if (!isSystemLogoStorageConfigured()) return res.sendStatus(404)
+      const logoUrl = await getSystemLogoUrl()
+      if (!logoUrl) return res.sendStatus(404)
+      return res.json({ url: logoUrl })
+    } catch (error) {
+      console.error('load system logo failed', error)
+      return res.status(502).json({ message: 'Unable to load the system logo.' })
+    }
+  })
+
+  app.post('/api/admin/system-logo/upload-url', async (req, res) => {
+    const authHeader = req.headers.authorization || ''
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : ''
+    if (!token) return res.status(401).json({ message: 'Authentication required.' })
+    let actor
+    try {
+      actor = await getCurrentActor(token)
+    } catch {
+      return res.status(401).json({ message: 'Invalid or expired token.' })
+    }
+    if (!actor) return res.status(401).json({ message: 'Authentication required.' })
+    if (!isAdminRole(actor.user.role) || ['Suspended', 'Disabled'].includes(actor.user.status)) {
+      return res.status(403).json({ message: 'Admin access required.' })
+    }
+    try {
+      if (!CAPTAIN_PHOTO_CONTENT_TYPES.includes(req.body?.contentType)) {
+        return res.status(400).json({ message: 'Choose a JPEG, PNG, or WebP image.' })
+      }
+      if (!isSystemLogoStorageConfigured()) return res.status(503).json({ message: 'Image storage is not configured.' })
+      return res.json(await createSystemLogoUpload(req.body.contentType))
+    } catch (error) {
+      console.error('create system logo upload failed', error)
+      return res.status(502).json({ message: 'Unable to prepare the image upload.' })
+    }
+  })
+
+  app.post('/api/admin/system-logo', async (req, res) => {
+    const authHeader = req.headers.authorization || ''
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : ''
+    if (!token) return res.status(401).json({ message: 'Authentication required.' })
+    let actor
+    try {
+      actor = await getCurrentActor(token)
+    } catch {
+      return res.status(401).json({ message: 'Invalid or expired token.' })
+    }
+    if (!actor) return res.status(401).json({ message: 'Authentication required.' })
+    if (!isAdminRole(actor.user.role) || ['Suspended', 'Disabled'].includes(actor.user.status)) {
+      return res.status(403).json({ message: 'Admin access required.' })
+    }
+    try {
+      if (!isSystemLogoStorageConfigured()) return res.status(503).json({ message: 'Image storage is not configured.' })
+      if (typeof req.body?.key !== 'string' || !req.body.key.startsWith(`${SYSTEM_LOGO_KEY}/pending/`)) {
+        return res.status(400).json({ message: 'Invalid image upload.' })
+      }
+      await finalizeSystemLogoUpload(req.body.key)
+      await writeAudit(actor.user, 'system-logo.updated', 'image', SYSTEM_LOGO_KEY)
+      return res.json({ ok: true })
+    } catch (error) {
+      if (error.message?.startsWith('Invalid system logo upload')
+        || error.message?.startsWith('Upload must be')
+        || error.message?.startsWith('Uploaded file is not')) {
+        return res.status(400).json({ message: error.message })
+      }
+      console.error('verify system logo upload failed', error)
+      return res.status(502).json({ message: 'Unable to verify the uploaded image.' })
+    }
+  })
+
+  app.delete('/api/admin/system-logo', async (req, res) => {
+    const authHeader = req.headers.authorization || ''
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : ''
+    if (!token) return res.status(401).json({ message: 'Authentication required.' })
+    let actor
+    try {
+      actor = await getCurrentActor(token)
+    } catch {
+      return res.status(401).json({ message: 'Invalid or expired token.' })
+    }
+    if (!actor) return res.status(401).json({ message: 'Authentication required.' })
+    if (!isAdminRole(actor.user.role) || ['Suspended', 'Disabled'].includes(actor.user.status)) {
+      return res.status(403).json({ message: 'Admin access required.' })
+    }
+    try {
+      if (!isSystemLogoStorageConfigured()) return res.status(503).json({ message: 'Image storage is not configured.' })
+      await deleteSystemLogo()
+      await writeAudit(actor.user, 'system-logo.deleted', 'image', SYSTEM_LOGO_KEY)
+      return res.json({ ok: true })
+    } catch (error) {
+      console.error('delete system logo failed', error)
+      return res.status(502).json({ message: 'Unable to remove the system logo.' })
+    }
+  })
+
   app.get('/api/official-profiles', async (_req, res) => {
     res.setHeader('Cache-Control', 'no-store')
     try {
@@ -660,6 +763,9 @@ export function createApp() {
       const displayName = sanitizeText(req.body?.displayName || '')
       const profileUrl = String(req.body?.profileUrl || '').trim()
       const groupUrl = String(req.body?.groupUrl || '').trim()
+      const communityLinks = Array.isArray(req.body?.communityLinks)
+        ? req.body.communityLinks.filter((value) => typeof value === 'string').map((value) => value.trim()).filter(Boolean)
+        : groupUrl ? [groupUrl] : []
       const isValidProfileUrl = (value) => {
         if (!value) return true
         if (value.length > 2048) return false
@@ -670,13 +776,16 @@ export function createApp() {
           return false
         }
       }
-      if (displayName.length > 120 || !isValidProfileUrl(profileUrl) || !isValidProfileUrl(groupUrl)) {
-        return res.status(400).json({ message: 'Enter a name up to 120 characters and valid HTTPS profile and group links.' })
+      if (displayName.length > 120 || (req.body?.communityLinks !== undefined
+        && (!Array.isArray(req.body.communityLinks) || !req.body.communityLinks.every((value) => typeof value === 'string')))
+        || (Array.isArray(req.body?.communityLinks) && req.body.communityLinks.length > 8)
+        || communityLinks.length > 8 || !isValidProfileUrl(profileUrl) || !communityLinks.every(isValidProfileUrl)) {
+        return res.status(400).json({ message: 'Enter a name up to 120 characters and valid HTTPS profile and community links (up to 8 links).' })
       }
 
       const profile = await store.updateOfficialProfile?.(
         req.params.role,
-        { displayName, profileUrl, groupUrl },
+        { displayName, profileUrl, groupUrl: communityLinks[0] || '', communityLinks },
         actor.user.id,
       )
       if (!profile) throw new Error('Official profile storage is unavailable.')

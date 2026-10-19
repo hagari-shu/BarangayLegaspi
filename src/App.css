@@ -5777,6 +5777,73 @@ textarea:focus {
   outline-offset: 2px;
 }
 
+.official-community-links {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 12px;
+  border: 1px solid #cddbd1;
+  border-radius: 10px;
+}
+
+.official-community-links legend {
+  padding: 0 5px;
+  color: var(--text-700);
+  font-weight: 700;
+}
+
+.official-community-link-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 8px;
+}
+
+.system-logo-settings {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 16px;
+  margin-top: 18px;
+  padding: 16px;
+  border: 1px solid rgba(21, 79, 62, 0.14);
+  border-radius: 16px;
+  background: #fff;
+}
+
+.system-logo-settings h3,
+.system-logo-settings p {
+  margin: 0;
+}
+
+.system-logo-settings .field-note {
+  margin-top: 5px;
+}
+
+.system-logo-settings input[type="file"] {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+
+.system-logo-preview {
+  width: 76px;
+  height: 76px;
+  padding: 5px;
+  border: 1px solid #cddbd1;
+  border-radius: 12px;
+  background: #fff;
+  object-fit: contain;
+}
+
+.system-logo-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .official-profile-photo-row {
   display: flex;
   flex-wrap: wrap;
@@ -7269,6 +7336,51 @@ button.staff-metric-card:focus-visible,
   gap: 8px;
 }
 
+.report-filter-details,
+.report-details {
+  border: 1px solid rgba(21, 79, 62, 0.14);
+  border-radius: 12px;
+  background: #fff;
+}
+
+.report-filter-details > summary,
+.report-details > summary {
+  padding: 12px 16px;
+  color: var(--green-900);
+  cursor: pointer;
+  font-size: 1rem;
+  font-weight: 750;
+  line-height: 1.5;
+}
+
+.report-filter-details > summary:focus-visible,
+.report-details > summary:focus-visible {
+  outline: 3px solid var(--green-600);
+  outline-offset: 2px;
+}
+
+.report-filter-details > .report-filters,
+.report-filter-details > .report-filter-basis {
+  margin-inline: 16px;
+}
+
+.report-filter-details > .report-filter-basis {
+  margin-bottom: 14px;
+}
+
+.report-summary-hint {
+  margin: 0;
+  color: var(--text-700);
+  font-size: 1rem;
+  line-height: 1.6;
+}
+
+.report-details-content {
+  display: grid;
+  gap: 16px;
+  padding: 0 16px 16px;
+}
+
 .report-filters {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
@@ -7715,6 +7827,18 @@ button.report-summary-card:focus-visible,
     display: none !important;
   }
 
+  body:has(.staff-reports-page) .report-filter-details {
+    display: none;
+  }
+
+  body:has(.staff-reports-page) .report-details > summary {
+    display: none;
+  }
+
+  body:has(.staff-reports-page) .report-details:not([open]) > :not(summary) {
+    display: block !important;
+  }
+
   body:has(.staff-reports-page) .dashboard-main,
   body:has(.staff-reports-page) .content-panel,
   body:has(.staff-reports-page) .staff-reports-page {
@@ -8145,8 +8269,8 @@ button.report-summary-card:focus-visible,
 }
 
 .staff-dashboard-main .staff-reports-page {
-  --report-body-size: 0.875rem;
-  --report-helper-size: 0.8125rem;
+  --report-body-size: 1rem;
+  --report-helper-size: 0.9375rem;
   gap: 18px;
   font-size: var(--report-body-size);
   line-height: 1.5;
@@ -8198,13 +8322,13 @@ button.report-summary-card:focus-visible,
 
 .staff-dashboard-main .report-summary-card .label {
   display: block;
-  font-size: var(--report-body-size);
+  font-size: 1.0625rem;
   line-height: 1.4;
 }
 
 .staff-dashboard-main .report-summary-card .stat-number {
   display: block;
-  font-size: clamp(1.75rem, 2.2vw, 2rem);
+  font-size: clamp(2rem, 2.5vw, 2.375rem);
   line-height: 1.15;
 }
 
@@ -8315,7 +8439,7 @@ button.report-summary-card:focus-visible,
 
 @media (min-width: 1181px) {
   .staff-dashboard-main .report-summary-grid {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
 
@@ -8326,6 +8450,18 @@ button.report-summary-card:focus-visible,
 }
 
 @media (max-width: 760px) {
+  .system-logo-settings {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .system-logo-settings > div:first-child {
+    grid-column: 1 / -1;
+  }
+
+  .system-logo-actions {
+    grid-column: 1 / -1;
+  }
+
   .staff-topbar {
     padding-inline: 16px;
   }

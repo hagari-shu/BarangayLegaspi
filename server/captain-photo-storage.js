@@ -13,6 +13,7 @@ import { randomUUID } from 'node:crypto'
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024
 const CONTENT_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp'])
 export const CAPTAIN_PHOTO_KEY = 'official/captain-portrait'
+export const SYSTEM_LOGO_KEY = 'branding/system-logo'
 export const OFFICIAL_PHOTO_KEYS = Object.freeze({
   captain: CAPTAIN_PHOTO_KEY,
   secretary: 'official/secretary-portrait',
@@ -34,6 +35,7 @@ const client = bucket && process.env.OBJECT_STORAGE_ACCESS_KEY_ID && process.env
 
 export const isOfficialPhotoStorageConfigured = () => Boolean(client && bucket)
 export const isCaptainPhotoStorageConfigured = isOfficialPhotoStorageConfigured
+export const isSystemLogoStorageConfigured = isOfficialPhotoStorageConfigured
 const isOfficialPhotoRole = (role) => Object.hasOwn(OFFICIAL_PHOTO_KEYS, role)
 
 export async function createOfficialPhotoUpload(role, contentType) {
@@ -134,6 +136,72 @@ export async function deleteOfficialPhoto(role, key = OFFICIAL_PHOTO_KEYS[role])
 
 export async function deleteCaptainPhoto(key) {
   return deleteOfficialPhoto('captain', key)
+}
+
+export async function createSystemLogoUpload(contentType) {
+  if (!isSystemLogoStorageConfigured()) throw new Error('Object storage is not configured.')
+  if (!CONTENT_TYPES.has(contentType)) throw new Error('Unsupported image type.')
+
+  const key = `${SYSTEM_LOGO_KEY}/pending/${randomUUID()}`
+  const upload = await createPresignedPost(client, {
+    Bucket: bucket,
+    Key: key,
+    Expires: 300,
+    Fields: { 'Content-Type': contentType },
+    Conditions: [['content-length-range', 1, MAX_IMAGE_BYTES]],
+  })
+  return { ...upload, key }
+}
+
+export async function finalizeSystemLogoUpload(key) {
+  if (!isSystemLogoStorageConfigured()) throw new Error('Object storage is not configured.')
+  const pendingPrefix = `${SYSTEM_LOGO_KEY}/pending/`
+  const uploadId = typeof key === 'string' && key.startsWith(pendingPrefix)
+    ? key.slice(pendingPrefix.length)
+    : ''
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(uploadId)) {
+    throw new Error('Invalid system logo upload.')
+  }
+
+  const metadata = await client.send(new HeadObjectCommand({ Bucket: bucket, Key: key }))
+  if (!CONTENT_TYPES.has(metadata.ContentType) || !Number.isInteger(metadata.ContentLength)
+    || metadata.ContentLength < 1 || metadata.ContentLength > MAX_IMAGE_BYTES) {
+    await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }))
+    throw new Error('Upload must be a supported image of 5 MB or smaller.')
+  }
+
+  const image = await client.send(new GetObjectCommand({ Bucket: bucket, Key: key, Range: 'bytes=0-11' }))
+  const signature = await image.Body.transformToByteArray()
+  if (!hasImageSignature(Buffer.from(signature), metadata.ContentType)) {
+    await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }))
+    throw new Error('Uploaded file is not a valid supported image.')
+  }
+
+  await client.send(new CopyObjectCommand({
+    Bucket: bucket,
+    Key: SYSTEM_LOGO_KEY,
+    CopySource: `/${bucket}/${key.split('/').map(encodeURIComponent).join('/')}`,
+    ContentType: metadata.ContentType,
+    MetadataDirective: 'REPLACE',
+  }))
+  await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }))
+  return getSystemLogoUrl()
+}
+
+export async function getSystemLogoUrl() {
+  if (!isSystemLogoStorageConfigured()) return null
+  try {
+    await client.send(new HeadObjectCommand({ Bucket: bucket, Key: SYSTEM_LOGO_KEY }))
+  } catch (error) {
+    if (error?.name === 'NotFound' || error?.$metadata?.httpStatusCode === 404) return null
+    throw error
+  }
+  return getSignedUrl(client, new GetObjectCommand({ Bucket: bucket, Key: SYSTEM_LOGO_KEY }), { expiresIn: 900 })
+}
+
+export async function deleteSystemLogo() {
+  if (!isSystemLogoStorageConfigured()) throw new Error('Object storage is not configured.')
+  await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: SYSTEM_LOGO_KEY }))
 }
 
 export const CAPTAIN_PHOTO_MAX_BYTES = MAX_IMAGE_BYTES

@@ -112,9 +112,9 @@ export async function createUser(user) {
 }
 
 const defaultOfficialProfiles = [
-  { role: 'captain', displayName: '', profileUrl: '', groupUrl: '' },
-  { role: 'secretary', displayName: '', profileUrl: '', groupUrl: '' },
-  { role: 'treasurer', displayName: '', profileUrl: '', groupUrl: '' },
+  { role: 'captain', displayName: '', profileUrl: '', groupUrl: '', communityLinks: [] },
+  { role: 'secretary', displayName: '', profileUrl: '', groupUrl: '', communityLinks: [] },
+  { role: 'treasurer', displayName: '', profileUrl: '', groupUrl: '', communityLinks: [] },
 ]
 
 export async function getOfficialProfiles() {
@@ -126,7 +126,10 @@ export async function getOfficialProfiles() {
       role: profile.role,
       displayName: saved.displayName ?? profile.displayName,
       profileUrl: saved.profileUrl || '',
-      groupUrl: saved.groupUrl || '',
+      groupUrl: saved.groupUrl || saved.communityLinks?.[0] || '',
+      communityLinks: Array.isArray(saved.communityLinks) && saved.communityLinks.length
+        ? saved.communityLinks
+        : saved.groupUrl ? [saved.groupUrl] : [],
     }
   })
 }
@@ -135,7 +138,17 @@ export async function updateOfficialProfile(role, profile, updatedBy) {
   const db = await readDb()
   db.officialProfiles = db.officialProfiles || []
   const existing = db.officialProfiles.find((item) => item.role === role)
-  const updated = { role, ...profile, updatedBy, updatedAt: new Date().toISOString() }
+  const communityLinks = Array.isArray(profile.communityLinks)
+    ? profile.communityLinks
+    : profile.groupUrl ? [profile.groupUrl] : []
+  const updated = {
+    role,
+    ...profile,
+    communityLinks,
+    groupUrl: communityLinks[0] || '',
+    updatedBy,
+    updatedAt: new Date().toISOString(),
+  }
   if (existing) Object.assign(existing, updated)
   else db.officialProfiles.push(updated)
   await writeDb(db)

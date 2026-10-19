@@ -1829,6 +1829,7 @@ test('public officer profiles are blank-ready and editable by Staff or Admin ove
     assert.equal(initial.profiles.find((profile) => profile.role === 'captain').displayName, '')
     assert.equal(initial.profiles.find((profile) => profile.role === 'secretary').displayName, '')
     assert.equal(initial.profiles.find((profile) => profile.role === 'treasurer').displayName, '')
+    assert.deepEqual(initial.profiles.find((profile) => profile.role === 'secretary').communityLinks, [])
 
     const login = async (identifier, password) => {
       const response = await fetch(`${baseUrl}/api/login`, {
@@ -1869,8 +1870,55 @@ test('public officer profiles are blank-ready and editable by Staff or Admin ove
     })
     assert.equal(saveResponse.status, 200)
     const saved = await (await fetch(`${baseUrl}/api/official-profiles`)).json()
-    assert.equal(saved.profiles.find((profile) => profile.role === 'secretary').displayName, 'Secretary Name')
-    assert.equal(saved.profiles.find((profile) => profile.role === 'secretary').profileUrl, body.profileUrl)
+    const legacyProfile = saved.profiles.find((profile) => profile.role === 'secretary')
+    assert.equal(legacyProfile.displayName, 'Secretary Name')
+    assert.equal(legacyProfile.profileUrl, body.profileUrl)
+    assert.deepEqual(legacyProfile.communityLinks, [body.groupUrl])
+
+    const staffHeaders = { 'Content-Type': 'application/json', Authorization: 'Bearer'.concat(' ', staffToken) }
+    const adminHeaders = { 'Content-Type': 'application/json', Authorization: 'Bearer'.concat(' ', adminToken) }
+    const communityLinks = ['https://example.com/community-one', 'https://example.com/community-two']
+    const multipleLinksResponse = await fetch(endpoint, {
+      method: 'PUT',
+      headers: staffHeaders,
+      body: JSON.stringify({ displayName: 'Secretary Name', profileUrl: body.profileUrl, communityLinks }),
+    })
+    assert.equal(multipleLinksResponse.status, 200)
+    const profilesAfterMultipleLinks = await (await fetch(`${baseUrl}/api/official-profiles`)).json()
+    const secretary = profilesAfterMultipleLinks.profiles.find((profile) => profile.role === 'secretary')
+    assert.deepEqual(secretary.communityLinks, communityLinks)
+    assert.equal(secretary.groupUrl, communityLinks[0])
+
+    const invalidCommunityLinksResponse = await fetch(endpoint, {
+      method: 'PUT',
+      headers: staffHeaders,
+      body: JSON.stringify({ displayName: 'Secretary Name', communityLinks: ['javascript:alert(1)'] }),
+    })
+    assert.equal(invalidCommunityLinksResponse.status, 400)
+    const excessiveCommunityLinksResponse = await fetch(endpoint, {
+      method: 'PUT',
+      headers: staffHeaders,
+      body: JSON.stringify({ displayName: 'Secretary Name', communityLinks: Array(9).fill('https://example.com/community') }),
+    })
+    assert.equal(excessiveCommunityLinksResponse.status, 400)
+
+    const logoUploadEndpoint = `${baseUrl}/api/admin/system-logo/upload-url`
+    assert.equal((await fetch(logoUploadEndpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ contentType: 'image/png' }),
+    })).status, 401)
+    assert.equal((await fetch(logoUploadEndpoint, {
+      method: 'POST',
+      headers: { ...staffHeaders },
+      body: JSON.stringify({ contentType: 'image/png' }),
+    })).status, 403)
+    const logoUploadResponse = await fetch(logoUploadEndpoint, {
+      method: 'POST',
+      headers: adminHeaders,
+      body: JSON.stringify({ contentType: 'image/png' }),
+    })
+    assert.ok([200, 503].includes(logoUploadResponse.status))
   } finally {
     await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
   }
