@@ -256,6 +256,11 @@ export function createApp() {
     return Boolean(actor && roles.includes(actor.user.role) && !['Suspended', 'Disabled'].includes(actor.user.status))
   }
 
+  const canManageOfficialProfiles = (actor) => Boolean(
+    actor && ['staff', 'admin'].includes(actor.user.role)
+      && !['Suspended', 'Disabled'].includes(actor.user.status),
+  )
+
   const deliverAnnouncementChannels = async (announcement, channels, options = {}) => {
     const delivery = {}
     if (channels.includes('facebook')) {
@@ -525,7 +530,7 @@ export function createApp() {
       return res.status(401).json({ message: 'Invalid or expired token.' })
     }
     if (!actor) return res.status(401).json({ message: 'Authentication required.' })
-    if (actor.user.role !== 'admin') return res.status(403).json({ message: 'Admin access required.' })
+    if (!canManageOfficialProfiles(actor)) return res.status(403).json({ message: 'Staff or Admin access required.' })
 
     try {
       const displayName = sanitizeText(req.body?.displayName || '')
@@ -572,7 +577,7 @@ export function createApp() {
       return res.status(401).json({ message: 'Invalid or expired token.' })
     }
     if (!actor) return res.status(401).json({ message: 'Authentication required.' })
-    if (actor.user.role !== 'admin') return res.status(403).json({ message: 'Admin access required.' })
+    if (!canManageOfficialProfiles(actor)) return res.status(403).json({ message: 'Staff or Admin access required.' })
 
     try {
       if (!CAPTAIN_PHOTO_CONTENT_TYPES.includes(req.body?.contentType)) {
@@ -599,7 +604,7 @@ export function createApp() {
       return res.status(401).json({ message: 'Invalid or expired token.' })
     }
     if (!actor) return res.status(401).json({ message: 'Authentication required.' })
-    if (actor.user.role !== 'admin') return res.status(403).json({ message: 'Admin access required.' })
+    if (!canManageOfficialProfiles(actor)) return res.status(403).json({ message: 'Staff or Admin access required.' })
 
     try {
       if (!isOfficialPhotoStorageConfigured()) return res.status(503).json({ message: 'Image storage is not configured.' })
@@ -634,7 +639,7 @@ export function createApp() {
       return res.status(401).json({ message: 'Invalid or expired token.' })
     }
     if (!actor) return res.status(401).json({ message: 'Authentication required.' })
-    if (actor.user.role !== 'admin') return res.status(403).json({ message: 'Admin access required.' })
+    if (!canManageOfficialProfiles(actor)) return res.status(403).json({ message: 'Staff or Admin access required.' })
 
     try {
       if (!isOfficialPhotoStorageConfigured()) return res.status(503).json({ message: 'Image storage is not configured.' })

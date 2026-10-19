@@ -525,7 +525,7 @@ async function optimizeCaptainPhoto(file) {
   }
 }
 
-function CaptainPhotoSettings({ language }) {
+function OfficialProfileSettings({ language }) {
   const t = translations[language] || translations.en
   const initialProfiles = [
     { role: 'captain', displayName: '', profileUrl: '', groupUrl: '' },
@@ -762,9 +762,12 @@ function StaffTemporaryAccessPage({ onLogin, language, setLanguage }) {
   const [mfaCode, setMfaCode] = useState('')
   const [busy, setBusy] = useState(true)
   const [error, setError] = useState('')
+  const redemptionStarted = useRef(false)
 
   useEffect(() => {
     let active = true
+    if (redemptionStarted.current) return () => { active = false }
+    redemptionStarted.current = true
     const accessToken = window.location.hash.slice(1)
     window.history.replaceState(window.history.state, '', `${window.location.pathname}${window.location.search}`)
 
@@ -3260,6 +3263,14 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
             >
               <span className="nav-icon">👥</span><span>{t.staffDirectory}</span>
             </button>
+            <button
+              type="button"
+              className={`nav-item ${activeTab === 'officials' ? 'active' : ''}`}
+              aria-current={activeTab === 'officials' ? 'page' : undefined}
+              onClick={() => setActiveTab('officials')}
+            >
+              <span className="nav-icon">🏛️</span><span>{t.officialProfilesTitle}</span>
+            </button>
           </nav>
         </aside>
 
@@ -3267,7 +3278,7 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
           <div className="welcome-row">
             <div>
               <p className="eyebrow">{t.operations}</p>
-              <h1>{activeTab === 'queue' ? t.staffDashboardTitle : activeTab === 'reports' ? t.serviceReports : activeTab === 'announcements' ? t.announcements : activeTab === 'staff' ? t.staffDirectory : activeTab === 'residents' ? (language === 'fil' ? 'Talaan ng residente' : 'Resident registry') : t.approvalsManagement}</h1>
+              <h1>{activeTab === 'queue' ? t.staffDashboardTitle : activeTab === 'reports' ? t.serviceReports : activeTab === 'announcements' ? t.announcements : activeTab === 'staff' ? t.staffDirectory : activeTab === 'officials' ? t.officialProfilesTitle : activeTab === 'residents' ? (language === 'fil' ? 'Talaan ng residente' : 'Resident registry') : t.approvalsManagement}</h1>
               {activeTab === 'queue' && <p className="staff-dashboard-subtitle">{t.staffDashboardSubtitle}</p>}
             </div>
             {activeTab === 'queue' ? (
@@ -3278,10 +3289,10 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
                   {dashboardLoading ? t.loadingRequests : t.refreshRequests}
                 </button>
               </div>
-            ) : activeTab !== 'residents' && <span className="counter-pill">{activeTab === 'approvals' ? approvedCount : totalRequests} {activeTab === 'approvals' ? t.processed : t.requests}</span>}
+            ) : !['residents', 'officials'].includes(activeTab) && <span className="counter-pill">{activeTab === 'approvals' ? approvedCount : totalRequests} {activeTab === 'approvals' ? t.processed : t.requests}</span>}
           </div>
 
-          {activeTab !== 'residents' && <div className="stats-grid staff-dashboard-metrics" aria-label={t.staffSummaryLabel}>
+          {!['residents', 'officials'].includes(activeTab) && <div className="stats-grid staff-dashboard-metrics" aria-label={t.staffSummaryLabel}>
             <button className="stat-card staff-metric-card accent" type="button" onClick={() => setQueueFilter('Pending')}>
               <span className="label">{t.pendingReviewMetric}</span>
               <span className="stat-number">{pendingCount}</span>
@@ -3307,6 +3318,7 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
           <div className="dashboard-body">
             <div className="main-column">
               {activeTab === 'residents' && <StaffRegistryPanel language={language} />}
+              {activeTab === 'officials' && <OfficialProfileSettings language={language} />}
               {activeTab === 'queue' && (
                 <>
                 <section className="panel-card needs-attention" aria-labelledby="needs-attention-title">
@@ -4656,7 +4668,7 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
 
           <div className="dashboard-body">
             <div className="main-column">
-              {activeTab === 'overview' && <CaptainPhotoSettings language={language} />}
+              {activeTab === 'overview' && <OfficialProfileSettings language={language} />}
               {activeTab === 'overview' && (
                 <article className="panel-card compact-panel">
                   <div className="panel-header">

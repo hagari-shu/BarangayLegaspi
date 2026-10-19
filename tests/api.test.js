@@ -1622,10 +1622,21 @@ test('temporary access delivery failure revokes the pending grant', async () => 
   }
 })
 
-test('public officer profiles are blank-ready and editable only by Admin over HTTPS', async () => {
+test('public officer profiles are blank-ready and editable by Staff or Admin over HTTPS', async () => {
   const { server, baseUrl } = await createTestServer()
+  const staff = {
+    id: randomUUID(),
+    firstName: 'Officer',
+    lastName: 'Profile Editor',
+    mobile: `092${Math.floor(10000000 + Math.random() * 90000000)}`,
+    email: `officer.editor.${Date.now()}@example.com`,
+    passwordHash: await hashPassword('StaffPass123!'),
+    role: 'staff',
+    status: 'On Duty',
+  }
 
   try {
+    await jsonDb.saveUser(staff)
     const profilesResponse = await fetch(`${baseUrl}/api/official-profiles`)
     assert.equal(profilesResponse.status, 200)
     const initial = await profilesResponse.json()
@@ -1641,9 +1652,10 @@ test('public officer profiles are blank-ready and editable only by Admin over HT
       })
       return (await response.json()).token
     }
-    const [adminToken, residentToken] = await Promise.all([
+    const [adminToken, residentToken, staffToken] = await Promise.all([
       login('admin@barangay.gov.ph', 'AdminPass123'),
       login('maria.delacruz@email.com', 'ResidentPass123!'),
+      login(staff.email, 'StaffPass123!'),
     ])
     const endpoint = `${baseUrl}/api/admin/official-profiles/secretary`
     const body = { displayName: 'Secretary Name', profileUrl: 'https://example.com/profile', groupUrl: 'https://example.com/group' }
@@ -1652,6 +1664,12 @@ test('public officer profiles are blank-ready and editable only by Admin over HT
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${residentToken}` },
       body: JSON.stringify(body),
     })).status, 403)
+    const staffSaveResponse = await fetch(endpoint, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${staffToken}` },
+      body: JSON.stringify(body),
+    })
+    assert.equal(staffSaveResponse.status, 200)
     const invalidLinkResponse = await fetch(endpoint, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${adminToken}` },
