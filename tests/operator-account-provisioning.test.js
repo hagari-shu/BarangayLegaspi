@@ -4,6 +4,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { createApp, seedDemoResident } from '../server/app.js'
 import { hashPassword, signToken } from '../server/auth.js'
+import { deliverAccountInvitationEmail } from '../server/account-invitation-email.js'
 import { DB_PATH } from '../server/config.js'
 import * as jsonDb from '../server/db.js'
 import { hashStaffInvitationToken, issueStaffInvitation } from '../server/staff-invitations.js'
@@ -384,6 +385,29 @@ test('Super Admin invitation delivery requires a Resend API key and valid sender
     () => validateSuperAdminInvitationDeliveryConfig({ apiKey: '', fromEmail: 'admin@example.test' }),
     /Resend API key and verified account invitation sender email must be configured/,
   )
+})
+
+test('initial Admin setup invitations use the existing one-time account email flow', async () => {
+  let request
+  await deliverAccountInvitationEmail({
+    apiKey: 'resend-secret',
+    fromEmail: 'accounts@example.test',
+    email: 'initial.admin@example.test',
+    inviteUrl: 'https://barangay-legaspi.vercel.app/staff-invite#token=private-token',
+    expiresAt: '2026-10-19T12:00:00.000Z',
+    role: 'admin',
+    fetchImpl: async (url, options) => {
+      request = { url: String(url), ...options }
+      return { ok: true, status: 200 }
+    },
+  })
+
+  assert.equal(request.url, 'https://api.resend.com/emails')
+  const email = JSON.parse(request.body)
+  assert.deepEqual(email.to, ['initial.admin@example.test'])
+  assert.equal(email.subject, 'Administrator account setup invitation')
+  assert.match(email.text, /Barangay Legaspi Administrator account/)
+  assert.match(email.text, /\/staff-invite#token=private-token/)
 })
 
 test('Super Admin invitation delivery emails the link through Resend and rejects failed delivery', async () => {

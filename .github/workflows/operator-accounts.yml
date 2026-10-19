@@ -9,6 +9,7 @@ on:
         required: true
         options:
           - promote-admin
+          - invite-admin
           - promote-super-admin
           - invite-super-admin
           - invite-staff
@@ -84,6 +85,12 @@ jobs:
                 exit 1
               fi
               ;;
+            invite-admin)
+              if [[ -n "$ACCOUNT_MOBILE" ]]; then
+                echo "Leave mobile empty for an Admin setup invitation; the invitee will set it."
+                exit 1
+              fi
+              ;;
             *)
               echo "Unsupported account role action."
               exit 1
@@ -125,6 +132,7 @@ jobs:
           set -euo pipefail
           case "$ACCOUNT_ACTION" in
             promote-admin) npm run accounts:promote-admin -- --confirm ;;
+            invite-admin) npm run accounts:invite-admin -- --confirm --email "$ADMIN_EMAIL" ;;
             promote-super-admin) npm run accounts:promote-super-admin -- --confirm ;;
             invite-super-admin) npm run accounts:invite-super-admin -- --confirm ;;
             invite-staff) npm run accounts:invite-staff -- --confirm --email "$STAFF_INVITATION_EMAIL" --position "${STAFF_POSITION:-Staff}" ;;

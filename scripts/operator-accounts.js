@@ -138,16 +138,17 @@ async function run() {
     return
   }
 
-  if (command === 'invite-staff') {
+  if (command === 'invite-admin' || command === 'invite-staff') {
+    const role = command === 'invite-admin' ? 'admin' : 'staff'
     const email = String(getOption('--email') || '').trim().toLowerCase()
-    const position = String(getOption('--position') || 'Staff').trim()
+    const position = role === 'admin' ? 'Administrator' : String(getOption('--position') || 'Staff').trim()
     const hasControlCharacter = [...position].some((character) => {
       const codePoint = character.codePointAt(0)
       return codePoint < 32 || (codePoint >= 127 && codePoint <= 159)
     })
     const publicAppUrl = String(process.env.PUBLIC_APP_URL || 'https://barangay-legaspi.vercel.app').trim()
     if (!emailPattern.test(email)) throw new Error('Provide a valid recipient email with --email.')
-    if (!position || position.length > 120 || hasControlCharacter || position.includes('<') || position.includes('>')) {
+    if (role === 'staff' && (!position || position.length > 120 || hasControlCharacter || position.includes('<') || position.includes('>'))) {
       throw new Error('Provide a staff position with 1 to 120 printable characters using --position.')
     }
     const apiKey = process.env.RESEND_API_KEY || ''
@@ -165,7 +166,7 @@ async function run() {
     ) {
       throw new Error('PUBLIC_APP_URL must be an HTTPS origin without credentials.')
     }
-    const result = await issueStaffInvitation({ email, position, publicAppUrl: parsedUrl.origin, store: postgres })
+    const result = await issueStaffInvitation({ email, position, role, publicAppUrl: parsedUrl.origin, store: postgres })
     if (result.status === 'account_exists') {
       throw new Error('An account already uses that email. No invitation was created.')
     }
@@ -177,7 +178,7 @@ async function run() {
         email,
         inviteUrl: result.inviteUrl,
         expiresAt: result.expiresAt,
-        role: 'staff',
+        role,
       })
     } catch (deliveryError) {
       const revoked = await postgres.revokeStaffInvitation({
@@ -187,8 +188,8 @@ async function run() {
           id: randomUUID(),
           actorId: null,
           actorRole: 'deployment_operator',
-          action: 'staff.invitation.delivery_failed',
-          targetType: 'staff_invitation',
+          action: `${role}.invitation.delivery_failed`,
+          targetType: `${role}_invitation`,
           targetId: result.id,
           metadata: { role: 'staff' },
         },
@@ -198,11 +199,11 @@ async function run() {
       }
       throw new Error(`Invitation email delivery failed; the invitation was revoked and its link was not printed. ${deliveryError.message}`)
     }
-    console.log(`Staff setup invitation was emailed to the intended account holder. It expires at ${result.expiresAt}. The link was not printed.`)
+    console.log(`${role === 'admin' ? 'Admin' : 'Staff'} setup invitation was emailed to the intended account holder. It expires at ${result.expiresAt}. The link was not printed.`)
     return
   }
 
-  throw new Error('Usage: node scripts/operator-accounts.js <promote-admin|promote-super-admin|invite-super-admin|invite-staff> --confirm [--email recipient] [--position title]')
+  throw new Error('Usage: node scripts/operator-accounts.js <promote-admin|promote-super-admin|invite-admin|invite-super-admin|invite-staff> --confirm [--email recipient] [--position title]')
 }
 
 try {
