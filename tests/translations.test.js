@@ -41,30 +41,30 @@ test('Filipino role dashboards have translated controls and accessible navigatio
   assert.equal(fil.staffProfile, 'Profile ng staff')
 })
 
-test('account invitation controls and role permissions are translated in both locales', () => {
+test('account creation controls and role permissions are translated in both locales', () => {
   for (const locale of [translations.en, translations.fil]) {
     for (const key of [
-      'accountInvitationTitle',
-      'accountInvitationIntro',
-      'accountInvitationRole',
-      'accountInvitationEmail',
-      'accountInvitationPosition',
-      'accountInvitationSent',
-      'accountInvitationSend',
-      'accountInvitationUnavailable',
-      'accountInvitationPermissionNote',
+      'accountCreationTitle',
+      'accountCreationIntro',
+      'accountCreationRole',
+      'accountCreationEmail',
+      'accountCreationPosition',
+      'accountCreationUnavailable',
+      'accountCreationPermissionNote',
+      'accountCreatedNotice',
+      'createAccount',
+      'temporaryPassword',
+      'temporaryPasswordShareWarning',
+      'temporaryPasswordChangeRequired',
       'superAdminInvitationOperatorOnly',
-      'inviteStaffAccount',
     ]) {
       assert.equal(typeof locale[key], 'string')
       assert.ok(locale[key].length > 0)
     }
-    assert.match(locale.accountInvitationSent, /\{role\}/)
-    assert.match(locale.accountInvitationSent, /\{email\}/)
   }
 
-  assert.match(translations.en.accountInvitationPermissionNote, /Admins can invite Admin or Staff/i)
-  assert.match(translations.en.accountInvitationPermissionNote, /Staff can invite Staff accounts only/i)
+  assert.match(translations.en.accountCreationPermissionNote, /Admins can create Admin or Staff/i)
+  assert.match(translations.en.accountCreationPermissionNote, /Staff can create Staff accounts only/i)
 })
 
 test('Filipino resident, staff, and admin dashboard copy is localized', () => {
@@ -462,13 +462,10 @@ test('captain photo controls and profile details have localized labels', () => {
 
 test('staff account management labels are available in both supported languages', () => {
   for (const locale of [translations.en, translations.fil]) {
-    assert.ok(locale.operatorOnlyAccounts)
+    assert.ok(locale.accountCreationPermissionNote)
     assert.ok(locale.createStaffAccount)
     assert.ok(locale.staffAccounts)
     assert.ok(locale.noStaffAccounts)
-    assert.ok(locale.staffInitialPassword)
-    assert.ok(locale.staffCreatedNotice)
-    assert.ok(locale.staffCreateFailed)
     assert.ok(locale.staffCredentialsNote)
     assert.ok(locale.resetStaffPassword)
     assert.ok(locale.staffPasswordResetIntro)

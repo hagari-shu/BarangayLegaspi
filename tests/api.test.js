@@ -1057,10 +1057,15 @@ test('admin can update user details but cannot change account roles', async () =
         lastName: 'Staff',
         email: `portal.staff.${Date.now()}@example.com`,
         mobile: `091${Math.floor(10000000 + Math.random() * 90000000)}`,
-        password: 'StaffPass123!',
       }),
     })
-    assert.equal(staffCreateResponse.status, 403)
+    assert.equal(staffCreateResponse.status, 201)
+    const staffCreateData = await staffCreateResponse.json()
+    assert.equal(staffCreateData.user.role, 'staff')
+    assert.equal(staffCreateData.user.mustChangePassword, true)
+    assert.match(staffCreateData.temporaryPassword, /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z0-9\s]).{8,}$/)
+    assert.equal(Object.hasOwn(staffCreateData.user, 'passwordHash'), false)
+    assert.equal(staffCreateResponse.headers.get('cache-control'), 'no-store')
 
     const adminCreateResponse = await fetch(`${baseUrl}/api/admin/users`, {
       method: 'POST',
@@ -1073,10 +1078,39 @@ test('admin can update user details but cannot change account roles', async () =
         lastName: 'Admin',
         email: `portal.admin.${Date.now()}@example.com`,
         mobile: `091${Math.floor(10000000 + Math.random() * 90000000)}`,
-        password: 'AdminPass123!',
       }),
     })
-    assert.equal(adminCreateResponse.status, 403)
+    assert.equal(adminCreateResponse.status, 201)
+    const adminCreateData = await adminCreateResponse.json()
+    assert.equal(adminCreateData.user.role, 'admin')
+    assert.equal(adminCreateData.user.mustChangePassword, true)
+    assert.ok(adminCreateData.temporaryPassword)
+
+    const adminTempLoginResponse = await fetch(`${baseUrl}/api/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        identifier: adminCreateData.user.email,
+        password: adminCreateData.temporaryPassword,
+      }),
+    })
+    assert.equal(adminTempLoginResponse.status, 200)
+    const adminTempLogin = await adminTempLoginResponse.json()
+    const restrictedAdminList = await fetch(`${baseUrl}/api/admin/users`, {
+      headers: { Authorization: 'Bearer ' + adminTempLogin.token },
+    })
+    assert.equal(restrictedAdminList.status, 403)
+    assert.equal((await restrictedAdminList.json()).code, 'password_change_required')
+
+    const portalInviteResponse = await fetch(`${baseUrl}/api/staff/invitations`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer ' + adminToken,
+      },
+      body: JSON.stringify({ role: 'staff', email: 'unused@example.com' }),
+    })
+    assert.equal(portalInviteResponse.status, 410)
   } finally {
     await new Promise((resolve, reject) => {
       server.close((error) => (error ? reject(error) : resolve()))
@@ -1084,7 +1118,7 @@ test('admin can update user details but cannot change account roles', async () =
   }
 })
 
-test('staff cannot create staff accounts', async () => {
+test('staff can create staff accounts but not admins, and temporary passwords require a first-change', async () => {
   const { server, baseUrl } = await createTestServer()
 
   try {
@@ -1113,6 +1147,7 @@ test('staff cannot create staff accounts', async () => {
     assert.equal(loginResponse.status, 200)
     const loginData = await loginResponse.json()
 
+    const email = `created.staff.${Date.now()}@example.com`
     const createResponse = await fetch(`${baseUrl}/api/staff/members`, {
       method: 'POST',
       headers: {
@@ -1120,14 +1155,70 @@ test('staff cannot create staff accounts', async () => {
         Authorization: `Bearer ${loginData.token}`,
       },
       body: JSON.stringify({
-        firstName: 'Unauthorized',
+        firstName: 'Created',
         lastName: 'Staff',
-        email: `unauthorized.${Date.now()}@example.com`,
+        email,
         mobile: `091${Math.floor(10000000 + Math.random() * 90000000)}`,
       }),
     })
+    assert.equal(createResponse.status, 201)
+    const created = await createResponse.json()
+    assert.equal(created.user.role, 'staff')
+    assert.equal(created.user.mustChangePassword, true)
 
-    assert.equal(createResponse.status, 403)
+    const adminCreateResponse = await fetch(`${baseUrl}/api/admin/users`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer ' + loginData.token,
+      },
+      body: JSON.stringify({
+        firstName: 'Unauthorized',
+        lastName: 'Admin',
+        email: `unauthorized.admin.${Date.now()}@example.com`,
+        mobile: `091${Math.floor(10000000 + Math.random() * 90000000)}`,
+      }),
+    })
+    assert.equal(adminCreateResponse.status, 403)
+
+    const tempLoginResponse = await fetch(`${baseUrl}/api/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ identifier: email, password: created.temporaryPassword }),
+    })
+    assert.equal(tempLoginResponse.status, 200)
+    const tempLogin = await tempLoginResponse.json()
+    assert.equal(tempLogin.mustChangePassword, true)
+
+    const restrictedResponse = await fetch(`${baseUrl}/api/staff/members`, {
+      headers: { Authorization: 'Bearer ' + tempLogin.token },
+    })
+    assert.equal(restrictedResponse.status, 403)
+    assert.equal((await restrictedResponse.json()).code, 'password_change_required')
+
+    const profileResponse = await fetch(`${baseUrl}/api/profile`, {
+      headers: { Authorization: 'Bearer ' + tempLogin.token },
+    })
+    assert.equal(profileResponse.status, 200)
+    assert.equal((await profileResponse.json()).user.mustChangePassword, true)
+
+    const changePasswordResponse = await fetch(`${baseUrl}/api/change-password`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer ' + tempLogin.token,
+      },
+      body: JSON.stringify({ currentPassword: created.temporaryPassword, newPassword: 'ChangedStaff123!' }),
+    })
+    assert.equal(changePasswordResponse.status, 200)
+    const changed = await changePasswordResponse.json()
+    assert.ok(changed.token)
+    assert.equal(changed.user.mustChangePassword, false)
+
+    const fullAccessResponse = await fetch(`${baseUrl}/api/staff/members`, {
+      headers: { Authorization: 'Bearer ' + changed.token },
+    })
+    assert.equal(fullAccessResponse.status, 200)
   } finally {
     await new Promise((resolve, reject) => {
       server.close((error) => (error ? reject(error) : resolve()))
@@ -1135,7 +1226,7 @@ test('staff cannot create staff accounts', async () => {
   }
 })
 
-test('pre-provisioned staff positions persist in login profiles while portal creation stays disabled', async () => {
+test('pre-provisioned staff positions persist and duplicate account creation is rejected', async () => {
   const { server, baseUrl } = await createTestServer()
   const email = `secretary.${Date.now()}@example.com`
   const mobile = `091${Math.floor(10000000 + Math.random() * 90000000)}`
@@ -1179,7 +1270,7 @@ test('pre-provisioned staff positions persist in login profiles while portal cre
         password: 'StaffPass123!',
       }),
     })
-    assert.equal(createResponse.status, 403)
+    assert.equal(createResponse.status, 409)
     assert.equal(staffMember.role, 'staff')
     assert.equal(staffMember.status, 'On Duty')
     assert.equal(staffMember.position, 'Secretary')

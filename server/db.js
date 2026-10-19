@@ -94,6 +94,23 @@ export async function saveUser(user) {
   return user
 }
 
+export async function createUser(user) {
+  return serializeProvisioningMutation(async () => {
+    const db = await readDb()
+    const email = String(user.email || '').toLowerCase()
+    if (db.users.some((existing) => (
+      String(existing.email || '').toLowerCase() === email
+      || String(existing.mobile || '') === user.mobile
+    ))) {
+      return { status: 'account_exists' }
+    }
+
+    db.users.push(user)
+    await writeDb(db)
+    return { status: 'created', user }
+  })
+}
+
 export async function registerResident(user, auditEntry) {
   return serializeProvisioningMutation(async () => {
     const db = await readDb()

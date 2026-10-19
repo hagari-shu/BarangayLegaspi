@@ -24,6 +24,7 @@ const normalizeUser = (user = null) => {
    familyMembers: user.familyMembers ?? user.family_members ?? null,
   householdMembers: user.householdMembers ?? user.household_members ?? [],
    passwordHash: user.passwordHash ?? user.password_hash ?? null,
+   mustChangePassword: Boolean(user.mustChangePassword ?? user.must_change_password),
   mfaSecret: user.mfaSecret ?? user.mfa_secret ?? '',
   mfaEnabled: user.mfaEnabled ?? user.mfa_enabled ?? false,
   mfaLastStep: Number(user.mfaLastStep ?? user.mfa_last_step ?? 0),
@@ -79,6 +80,7 @@ export async function initDatabase() {
       mobile VARCHAR(20) UNIQUE NOT NULL,
       email VARCHAR(255) UNIQUE NOT NULL,
       password_hash TEXT NOT NULL,
+      must_change_password BOOLEAN NOT NULL DEFAULT false,
       role VARCHAR(30) NOT NULL DEFAULT 'resident',
       household_id VARCHAR(50),
       family_members INTEGER DEFAULT 4,
@@ -93,6 +95,7 @@ export async function initDatabase() {
   `)
 
   await query("ALTER TABLE users ADD COLUMN IF NOT EXISTS household_members JSONB DEFAULT '[]'::jsonb")
+  await query('ALTER TABLE users ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN NOT NULL DEFAULT false')
   await query('ALTER TABLE users ADD COLUMN IF NOT EXISTS mfa_secret TEXT DEFAULT NULL')
   await query('ALTER TABLE users ADD COLUMN IF NOT EXISTS mfa_enabled BOOLEAN NOT NULL DEFAULT false')
   await query('ALTER TABLE users ADD COLUMN IF NOT EXISTS mfa_last_step BIGINT NOT NULL DEFAULT 0')
@@ -332,11 +335,11 @@ export async function findUserById(id) {
 }
 
 export async function createUser(user) {
-  const { id, firstName, lastName, mobile, email, passwordHash, role, householdId, familyMembers, householdMembers = [], status, address, zone, position, availability } = user
+  const { id, firstName, lastName, mobile, email, passwordHash, role, householdId, familyMembers, householdMembers = [], status, address, zone, position, availability, mustChangePassword = false } = user
   await query(
-    `INSERT INTO users (id, first_name, last_name, mobile, email, password_hash, role, household_id, family_members, household_members, status, address, zone, position, availability)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
-    [id, firstName, lastName, mobile, email, passwordHash, role, householdId, familyMembers, JSON.stringify(householdMembers), status, address, zone ?? null, position ?? null, availability ?? 'Available']
+    `INSERT INTO users (id, first_name, last_name, mobile, email, password_hash, role, household_id, family_members, household_members, status, address, zone, position, availability, must_change_password)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
+    [id, firstName, lastName, mobile, email, passwordHash, role, householdId, familyMembers, JSON.stringify(householdMembers), status, address, zone ?? null, position ?? null, availability ?? 'Available', mustChangePassword]
   )
   return { ...user, firstName, lastName, mobile, email }
 }
@@ -853,6 +856,7 @@ export async function updateUser(userId, updates = {}) {
     mfaSecret: updates.mfaSecret,
     mfaEnabled: updates.mfaEnabled,
     mfaLastStep: updates.mfaLastStep,
+    mustChangePassword: updates.mustChangePassword ?? updates.must_change_password,
   }).filter(([, value]) => value !== undefined)
 
   if (entries.length === 0) {
@@ -878,6 +882,7 @@ export async function updateUser(userId, updates = {}) {
     mfaSecret: 'mfa_secret',
     mfaEnabled: 'mfa_enabled',
     mfaLastStep: 'mfa_last_step',
+    mustChangePassword: 'must_change_password',
   }
 
   const values = entries.map(([key, value]) => key === 'householdMembers' ? JSON.stringify(value) : value)

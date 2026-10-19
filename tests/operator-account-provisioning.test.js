@@ -118,7 +118,7 @@ test('staff invitations preserve the assigned position and user-chosen password,
   }
 })
 
-test('Admin and Staff invitations enforce role permissions and send private setup links', async () => {
+test('portal invitation issuance is disabled while role permissions and operator acceptance remain enforced', async () => {
   const previousEnvironment = {
     RESEND_API_KEY: process.env.RESEND_API_KEY,
     SUPER_ADMIN_INVITATION_FROM_EMAIL: process.env.SUPER_ADMIN_INVITATION_FROM_EMAIL,
@@ -196,42 +196,29 @@ test('Admin and Staff invitations enforce role permissions and send private setu
         role: 'staff',
         position: 'Secretary',
       })
-      assert.equal(staffInvite.status, 202)
+      assert.equal(staffInvite.status, 410)
       const staffInviteResponse = await staffInvite.json()
-      assert.equal(staffInviteResponse.expiresAt !== undefined, true)
-      assert.equal(JSON.stringify(staffInviteResponse).includes('token'), false)
+      assert.match(staffInviteResponse.message, /create the account directly/i)
 
       const deliveryFailure = await sendInvitation(staff, {
         email: 'mail.failure@example.test',
         role: 'staff',
       })
-      assert.equal(deliveryFailure.status, 502)
+      assert.equal(deliveryFailure.status, 410)
 
       const adminInvite = await sendInvitation(admin, { email: 'new.admin@example.test', role: 'admin' })
-      assert.equal(adminInvite.status, 202)
+      assert.equal(adminInvite.status, 410)
       const adminStaffInvite = await sendInvitation(admin, { email: 'second.staff@example.test', role: 'staff' })
-      assert.equal(adminStaffInvite.status, 202)
+      assert.equal(adminStaffInvite.status, 410)
       const adminSuperAdmin = await sendInvitation(admin, { email: 'denied.super2@example.test', role: 'super_admin' })
       assert.equal(adminSuperAdmin.status, 403)
       const superAdminInvite = await sendInvitation(superAdmin, { email: 'denied.by.super@example.test', role: 'staff' })
       assert.equal(superAdminInvite.status, 403)
 
-      assert.equal(emailRequests.length, 4)
-      assert.equal(emailRequests[0].to[0], 'new.staff@example.test')
-      assert.equal(emailRequests[0].subject, 'Staff account setup invitation')
-      assert.match(emailRequests[0].text, /\/staff-invite#token=/)
-      assert.equal(emailRequests[2].to[0], 'new.admin@example.test')
-      assert.equal(emailRequests[2].subject, 'Administrator account setup invitation')
-      assert.equal(emailRequests[3].to[0], 'second.staff@example.test')
+      assert.equal(emailRequests.length, 0)
 
       const stored = await jsonDb.readDb()
-      assert.equal(stored.staffInvitations.find((invite) => invite.email === 'new.staff@example.test').role, 'staff')
-      assert.equal(stored.staffInvitations.find((invite) => invite.email === 'new.admin@example.test').role, 'admin')
-      assert.equal(stored.staffInvitations.find((invite) => invite.email === 'new.staff@example.test').position, 'Secretary')
-      assert.ok(stored.staffInvitations.find((invite) => invite.email === 'mail.failure@example.test').revokedAt)
-      assert.ok(stored.auditLogs.find((entry) => entry.action === 'staff.invitation.delivery_failed'))
-      assert.equal(JSON.stringify(stored.staffInvitations).includes('token='), false)
-      assert.equal(stored.auditLogs.some((entry) => entry.metadata?.email), false)
+      assert.equal((stored.staffInvitations || []).length, 0)
     } finally {
       await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
     }

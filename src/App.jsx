@@ -279,87 +279,110 @@ function WorkflowModal({ title, onClose, children, wide = false, className = '',
   )
 }
 
-function AccountInvitationModal({ allowedRoles, language, onClose }) {
+function AccountCreationModal({ allowedRoles, language, onClose, onCreated }) {
   const t = translations[language] || translations.en
   const [role, setRole] = useState(allowedRoles.includes('admin') ? 'staff' : allowedRoles[0])
+  const [firstName, setFirstName] = useState('')
+  const [lastName, setLastName] = useState('')
   const [email, setEmail] = useState('')
+  const [mobile, setMobile] = useState('')
   const [position, setPosition] = useState('Staff')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  const [success, setSuccess] = useState('')
+  const [createdAccount, setCreatedAccount] = useState(null)
 
   const submit = async (event) => {
     event.preventDefault()
     setBusy(true)
     setError('')
-    setSuccess('')
     try {
-      const response = await fetch(`${API_BASE}/staff/invitations`, {
+      const endpoint = role === 'admin' ? '/admin/users' : '/staff/members'
+      const response = await fetch(`${API_BASE}${endpoint}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ role, email: email.trim(), position }),
+        body: JSON.stringify({
+          firstName: firstName.trim(),
+          lastName: lastName.trim(),
+          email: email.trim(),
+          mobile: mobile.trim(),
+          position,
+        }),
       })
       const data = await response.json().catch(() => ({}))
-      if (!response.ok) throw new Error(data.message || t.accountInvitationUnavailable)
-      const roleLabel = role === 'admin' ? t.administrator : t.staffRole
-      setSuccess(t.accountInvitationSent
-        .replace('{role}', roleLabel)
-        .replace('{email}', email.trim()))
+      if (!response.ok) throw new Error(data.message || t.accountCreationUnavailable)
+      onCreated?.(data.user)
+      setCreatedAccount(data)
     } catch (requestError) {
-      setError(requestError.message || t.accountInvitationUnavailable)
+      setError(requestError.message || t.accountCreationUnavailable)
     } finally {
       setBusy(false)
     }
   }
 
   return (
-    <WorkflowModal title={t.accountInvitationTitle} onClose={onClose} wide disableClose={busy}>
-      <form className="editor-panel workflow-modal-form" onSubmit={submit}>
-        <p>{t.accountInvitationIntro}</p>
-        <p className="report-metric-note">{t.accountInvitationPermissionNote}</p>
-        <div className="editor-grid">
-          {allowedRoles.length > 1 && (
-            <div className="input-block">
-              <label htmlFor="account-invitation-role">{t.accountInvitationRole}</label>
-              <select id="account-invitation-role" value={role} onChange={(event) => setRole(event.target.value)}>
-                {allowedRoles.map((option) => (
-                  <option key={option} value={option}>{option === 'admin' ? t.administrator : t.staffRole}</option>
-                ))}
-              </select>
-            </div>
-          )}
-          <div className="input-block">
-            <label htmlFor="account-invitation-email">{t.accountInvitationEmail}</label>
-            <input
-              id="account-invitation-email"
-              type="email"
-              autoComplete="email"
-              maxLength={255}
-              value={email}
-              onChange={(event) => setEmail(event.target.value)}
-              required
-            />
+    <WorkflowModal title={t.accountCreationTitle} onClose={onClose} wide disableClose={busy}>
+      {createdAccount ? (
+        <div className="editor-panel workflow-modal-form">
+          <p role="status">{t.accountCreatedNotice}</p>
+          <p><strong>{t.accountCreationEmail}:</strong> {createdAccount.user?.email || email}</p>
+          <p><strong>{t.temporaryPassword}:</strong></p>
+          <input className="mfa-secret-input" value={createdAccount.temporaryPassword || ''} readOnly onFocus={(event) => event.target.select()} aria-label={t.temporaryPassword} />
+          <p className="report-metric-note">{t.temporaryPasswordShareWarning}</p>
+          <div className="editor-actions">
+            <button type="button" className="primary-btn small" onClick={onClose}>{t.done}</button>
           </div>
-          {role === 'staff' && (
+        </div>
+      ) : (
+        <form className="editor-panel workflow-modal-form" onSubmit={submit}>
+          <p>{t.accountCreationIntro}</p>
+          <p className="report-metric-note">{t.accountCreationPermissionNote}</p>
+          <div className="editor-grid">
+            {allowedRoles.length > 1 && (
+              <div className="input-block">
+                <label htmlFor="account-creation-role">{t.accountCreationRole}</label>
+                <select id="account-creation-role" value={role} onChange={(event) => setRole(event.target.value)}>
+                  {allowedRoles.map((option) => (
+                    <option key={option} value={option}>{option === 'admin' ? t.administrator : t.staffRole}</option>
+                  ))}
+                </select>
+              </div>
+            )}
             <div className="input-block">
-              <label htmlFor="account-invitation-position">{t.accountInvitationPosition}</label>
-              <select id="account-invitation-position" value={position} onChange={(event) => setPosition(event.target.value)}>
-                <option value="Staff">{t.staffRole}</option>
-                <option value="Secretary">{t.secretaryRole}</option>
-                <option value="Barangay Captain">{t.barangayCaptainRole}</option>
-                <option value="Treasurer">{t.treasurerRole}</option>
-                <option value="Utility Worker">{t.utilityWorkerRole}</option>
-              </select>
+              <label htmlFor="account-creation-first-name">{t.firstName}</label>
+              <input id="account-creation-first-name" autoComplete="given-name" maxLength={100} value={firstName} onChange={(event) => setFirstName(event.target.value)} required />
             </div>
-          )}
-        </div>
-        {error && <p className="inline-error" role="alert">{error}</p>}
-        {success && <p className="request-staff-note" role="status">{success}</p>}
-        <div className="editor-actions">
-          <button type="button" className="secondary-btn small" onClick={onClose} disabled={busy}>{t.cancel}</button>
-          {!success && <button type="submit" className="primary-btn small" disabled={busy}>{busy ? t.working : t.accountInvitationSend}</button>}
-        </div>
-      </form>
+            <div className="input-block">
+              <label htmlFor="account-creation-last-name">{t.lastName}</label>
+              <input id="account-creation-last-name" autoComplete="family-name" maxLength={100} value={lastName} onChange={(event) => setLastName(event.target.value)} required />
+            </div>
+            <div className="input-block">
+              <label htmlFor="account-creation-email">{t.accountCreationEmail}</label>
+              <input id="account-creation-email" type="email" autoComplete="email" maxLength={255} value={email} onChange={(event) => setEmail(event.target.value)} required />
+            </div>
+            <div className="input-block">
+              <label htmlFor="account-creation-mobile">{t.mobileNumberLabel}</label>
+              <input id="account-creation-mobile" type="tel" autoComplete="tel" inputMode="numeric" maxLength={11} value={mobile} onChange={(event) => setMobile(event.target.value)} required />
+            </div>
+            {role === 'staff' && (
+              <div className="input-block">
+                <label htmlFor="account-creation-position">{t.accountCreationPosition}</label>
+                <select id="account-creation-position" value={position} onChange={(event) => setPosition(event.target.value)}>
+                  <option value="Staff">{t.staffRole}</option>
+                  <option value="Secretary">{t.secretaryRole}</option>
+                  <option value="Barangay Captain">{t.barangayCaptainRole}</option>
+                  <option value="Treasurer">{t.treasurerRole}</option>
+                  <option value="Utility Worker">{t.utilityWorkerRole}</option>
+                </select>
+              </div>
+            )}
+          </div>
+          {error && <p className="inline-error" role="alert">{error}</p>}
+          <div className="editor-actions">
+            <button type="button" className="secondary-btn small" onClick={onClose} disabled={busy}>{t.cancel}</button>
+            <button type="submit" className="primary-btn small" disabled={busy}>{busy ? t.working : t.createAccount}</button>
+          </div>
+        </form>
+      )}
     </WorkflowModal>
   )
 }
@@ -787,8 +810,15 @@ function LoginPage({ onLogin, language, setLanguage }) {
       }
 
       const nextRole = data.user?.role || 'resident'
-      onLogin({ token: data.token, user: data.user, identifier: cleanedIdentifier, role: nextRole, isActive: true })
-      navigate(getDashboardPath(nextRole))
+      onLogin({
+        token: data.token,
+        user: data.user,
+        identifier: cleanedIdentifier,
+        role: nextRole,
+        isActive: true,
+        mustChangePassword: Boolean(data.mustChangePassword || data.user?.mustChangePassword),
+      })
+      navigate(data.mustChangePassword || data.user?.mustChangePassword ? '/settings' : getDashboardPath(nextRole))
     } catch (error) {
       setLoginError(error.message || 'Your login details are not recognized. Please try again.')
     }
@@ -2352,7 +2382,8 @@ function EventsPage({ events, onLogout, language, setLanguage }) {
   )
 }
 
-function SettingsPage({ profile, onLogout, language, setLanguage }) {
+function SettingsPage({ profile, onLogout, onPasswordChanged, language, setLanguage }) {
+  const navigate = useNavigate()
   const t = translations[language] || translations.en
   const [settingsProfile, setSettingsProfile] = useState(profile)
   const [passwordForm, setPasswordForm] = useState({ currentPassword: '', newPassword: '', confirmPassword: '' })
@@ -2478,6 +2509,10 @@ function SettingsPage({ profile, onLogout, language, setLanguage }) {
       const data = await response.json().catch(() => ({}))
       if (!response.ok) throw new Error(data.message || 'Unable to change password.')
       setPasswordForm({ currentPassword: '', newPassword: '', confirmPassword: '' })
+      if (data.token && data.user) {
+        onPasswordChanged({ token: data.token, user: data.user })
+        navigate(getDashboardPath(data.user.role), { replace: true })
+      }
       alert(data.message || 'Password changed successfully.')
     } catch (error) {
       alert(error.message || 'Unable to change password.')
@@ -2533,55 +2568,63 @@ function SettingsPage({ profile, onLogout, language, setLanguage }) {
             </div>
 
             <div className="info-box mfa-settings">
-              <h3>{t.mfaSetupTitle}</h3>
-              <p>{t.mfaSetupHint}</p>
-              {mfaEnabled ? (
-                <form className="password-change-form" onSubmit={disableMfa}>
-                  <p className="mfa-status enabled">{t.mfaEnabled}</p>
-                  <label className="input-block">
-                    <span>{t.mfaCurrentPassword}</span>
-                    <input type="password" autoComplete="current-password" value={mfaCurrentPassword} onChange={(event) => setMfaCurrentPassword(event.target.value)} required />
-                  </label>
-                  <label className="input-block">
-                    <span>{t.mfaCodeLabel}</span>
-                    <input inputMode="numeric" autoComplete="one-time-code" maxLength={6} value={mfaCode} onChange={(event) => setMfaCode(event.target.value.replace(/\D/g, '').slice(0, 6))} required />
-                  </label>
-                  <button type="submit" className="secondary-btn small" disabled={mfaBusy}>{mfaBusy ? t.working : t.mfaDisableAction}</button>
-                </form>
-              ) : mfaSetup ? (
-                <form className="password-change-form" onSubmit={enableMfa}>
-                  <p>{t.mfaSetupInstructions}</p>
-                  <label className="input-block">
-                    <span>{t.mfaSecretLabel}</span>
-                    <input className="mfa-secret-input" value={mfaSetup.secret} readOnly onFocus={(event) => event.target.select()} aria-label={t.mfaSecretLabel} />
-                  </label>
-                  <button type="button" className="secondary-btn small" onClick={() => startMfaSetup(true)} disabled={mfaBusy}>{mfaBusy ? t.working : t.mfaRotateKey}</button>
-                  <label className="input-block">
-                    <span>{t.mfaCodeLabel}</span>
-                    <input inputMode="numeric" autoComplete="one-time-code" maxLength={6} value={mfaCode} onChange={(event) => setMfaCode(event.target.value.replace(/\D/g, '').slice(0, 6))} required />
-                  </label>
-                  <button type="submit" className="primary-btn small" disabled={mfaBusy}>{mfaBusy ? t.working : t.mfaEnableAction}</button>
-                </form>
+              {settingsProfile.mustChangePassword ? (
+                <p>{t.temporaryPasswordChangeRequired}</p>
               ) : (
-                <button type="button" className="primary-btn small" onClick={startMfaSetup} disabled={mfaBusy}>{mfaBusy ? t.working : t.mfaSetupAction}</button>
+                <>
+                  <h3>{t.mfaSetupTitle}</h3>
+                  <p>{t.mfaSetupHint}</p>
+                  {mfaEnabled ? (
+                    <form className="password-change-form" onSubmit={disableMfa}>
+                      <p className="mfa-status enabled">{t.mfaEnabled}</p>
+                      <label className="input-block">
+                        <span>{t.mfaCurrentPassword}</span>
+                        <input type="password" autoComplete="current-password" value={mfaCurrentPassword} onChange={(event) => setMfaCurrentPassword(event.target.value)} required />
+                      </label>
+                      <label className="input-block">
+                        <span>{t.mfaCodeLabel}</span>
+                        <input inputMode="numeric" autoComplete="one-time-code" maxLength={6} value={mfaCode} onChange={(event) => setMfaCode(event.target.value.replace(/\D/g, '').slice(0, 6))} required />
+                      </label>
+                      <button type="submit" className="secondary-btn small" disabled={mfaBusy}>{mfaBusy ? t.working : t.mfaDisableAction}</button>
+                    </form>
+                  ) : mfaSetup ? (
+                    <form className="password-change-form" onSubmit={enableMfa}>
+                      <p>{t.mfaSetupInstructions}</p>
+                      <label className="input-block">
+                        <span>{t.mfaSecretLabel}</span>
+                        <input className="mfa-secret-input" value={mfaSetup.secret} readOnly onFocus={(event) => event.target.select()} aria-label={t.mfaSecretLabel} />
+                      </label>
+                      <button type="button" className="secondary-btn small" onClick={() => startMfaSetup(true)} disabled={mfaBusy}>{mfaBusy ? t.working : t.mfaRotateKey}</button>
+                      <label className="input-block">
+                        <span>{t.mfaCodeLabel}</span>
+                        <input inputMode="numeric" autoComplete="one-time-code" maxLength={6} value={mfaCode} onChange={(event) => setMfaCode(event.target.value.replace(/\D/g, '').slice(0, 6))} required />
+                      </label>
+                      <button type="submit" className="primary-btn small" disabled={mfaBusy}>{mfaBusy ? t.working : t.mfaEnableAction}</button>
+                    </form>
+                  ) : (
+                    <button type="button" className="primary-btn small" onClick={startMfaSetup} disabled={mfaBusy}>{mfaBusy ? t.working : t.mfaSetupAction}</button>
+                  )}
+                  {mfaMessage && <p className="mfa-message" role="status">{mfaMessage}</p>}
+                </>
               )}
-              {mfaMessage && <p className="mfa-message" role="status">{mfaMessage}</p>}
             </div>
           </div>
 
-          <div className="profile-footer">
-            <Link to={dashboardPath} className="secondary-btn small">{t.backToDashboard}</Link>
-          </div>
+          {!settingsProfile.mustChangePassword && (
+            <div className="profile-footer">
+              <Link to={dashboardPath} className="secondary-btn small">{t.backToDashboard}</Link>
+            </div>
+          )}
         </div>
       </main>
     </div>
   )
 }
 
-function StaffPage({ staffMembers = [], announcements = [], currentUser, userRole = 'staff', onProcessRequest, onLogout, onStaffMemberUpdated, onAddAnnouncement, onDeleteAnnouncement, onRetractAnnouncement, onDeleteStaffMember, language, setLanguage }) {
+function StaffPage({ staffMembers = [], announcements = [], currentUser, userRole = 'staff', onProcessRequest, onLogout, onStaffMemberUpdated, onPortalAccountCreated, onAddAnnouncement, onDeleteAnnouncement, onRetractAnnouncement, onDeleteStaffMember, language, setLanguage }) {
   const t = translations[language] || translations.en
   const [activeTab, setActiveTab] = useState('queue')
-  const [showAccountInvitation, setShowAccountInvitation] = useState(false)
+  const [showAccountCreation, setShowAccountCreation] = useState(false)
   const [openRequestPanel, setOpenRequestPanel] = useState('queue')
   const [queueSearch, setQueueSearch] = useState('')
   const [debouncedQueueSearch, setDebouncedQueueSearch] = useState('')
@@ -3684,15 +3727,16 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
                   </div>
                   {userRole === 'staff' && (
                     <div className="editor-actions">
-                      <p className="field-note">{t.accountInvitationPermissionNote}</p>
-                      <button type="button" className="primary-btn small" onClick={() => setShowAccountInvitation(true)}>{t.inviteStaffAccount}</button>
+                      <p className="field-note">{t.accountCreationPermissionNote}</p>
+                      <button type="button" className="primary-btn small" onClick={() => setShowAccountCreation(true)}>{t.createStaffAccount}</button>
                     </div>
                   )}
-                  {showAccountInvitation && userRole === 'staff' && (
-                    <AccountInvitationModal
+                  {showAccountCreation && userRole === 'staff' && (
+                    <AccountCreationModal
                       allowedRoles={['staff']}
                       language={language}
-                      onClose={() => setShowAccountInvitation(false)}
+                      onCreated={onPortalAccountCreated}
+                      onClose={() => setShowAccountCreation(false)}
                     />
                   )}
 
@@ -3978,12 +4022,12 @@ function SuperAdminMonitoringPanel({ language }) {
   )
 }
 
-function AdminPage({ users, residents = [], requests, reports = [], currentUser, onLogout, language, setLanguage }) {
+function AdminPage({ users, residents = [], requests, reports = [], currentUser, onLogout, onPortalAccountCreated, language, setLanguage }) {
   const t = translations[language] || translations.en
   const zoneNumbers = [1, 2, 3, 4, 5, 6, 7]
   const [managedUsers, setManagedUsers] = useState(users)
   const [activeTab, setActiveTab] = useState('overview')
-  const [showAccountInvitation, setShowAccountInvitation] = useState(false)
+  const [showAccountCreation, setShowAccountCreation] = useState(false)
   const [healthRefreshKey, setHealthRefreshKey] = useState(0)
   const [apiHealth, setApiHealth] = useState({ status: 'checking', storage: null, checkedAt: null })
   const [searchQuery, setSearchQuery] = useState('')
@@ -4781,17 +4825,21 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
                     <div className="editor-actions">
                       <span className="soft-label">{managedUsers.length} total users</span>
                       {currentUser?.role === 'admin' && (
-                        <button type="button" className="primary-btn small" onClick={() => setShowAccountInvitation(true)}>{t.accountInvitationTitle}</button>
+                        <button type="button" className="primary-btn small" onClick={() => setShowAccountCreation(true)}>{t.accountCreationTitle}</button>
                       )}
                     </div>
                   </div>
-                  {currentUser?.role === 'admin' && <p className="field-note">{t.accountInvitationPermissionNote}</p>}
+                  {currentUser?.role === 'admin' && <p className="field-note">{t.accountCreationPermissionNote}</p>}
                   {currentUser?.role === 'super_admin' && <p className="field-note">{t.superAdminInvitationOperatorOnly}</p>}
-                  {showAccountInvitation && currentUser?.role === 'admin' && (
-                    <AccountInvitationModal
+                  {showAccountCreation && currentUser?.role === 'admin' && (
+                    <AccountCreationModal
                       allowedRoles={['staff', 'admin']}
                       language={language}
-                      onClose={() => setShowAccountInvitation(false)}
+                      onCreated={(createdUser) => {
+                        onPortalAccountCreated?.(createdUser)
+                        setManagedUsers((current) => [createdUser, ...current])
+                      }}
+                      onClose={() => setShowAccountCreation(false)}
                     />
                   )}
 
@@ -5629,7 +5677,7 @@ function App() {
   }, [language, session?.user?.id, t.reminderMessage, t.reminderTitle])
 
   useEffect(() => {
-    if (!isAuthenticated || userRole !== 'staff' || !session?.token) return undefined
+    if (!isAuthenticated || userRole !== 'staff' || !session?.token || session?.mustChangePassword || session?.user?.mustChangePassword) return undefined
 
     const updateStaffPresence = async () => {
       if (document.visibilityState !== 'visible') return
@@ -5654,11 +5702,11 @@ function App() {
       window.clearInterval(interval)
       document.removeEventListener('visibilitychange', handleVisibilityChange)
     }
-  }, [isAuthenticated, userRole, session?.token])
+  }, [isAuthenticated, userRole, session?.token, session?.mustChangePassword, session?.user?.mustChangePassword])
 
   useEffect(() => {
     const loadUserData = async () => {
-      if (!session?.token) return
+      if (!session?.token || session?.mustChangePassword || session?.user?.mustChangePassword) return
 
       try {
         // profile
@@ -5743,10 +5791,18 @@ function App() {
     }
 
     loadUserData()
-  }, [session?.token, userRole])
+  }, [session?.token, session?.mustChangePassword, session?.user?.mustChangePassword, userRole])
 
   const handleLogin = (newSession) => {
     const nextSession = { ...newSession, isActive: true }
+    setProfile(newSession.user || initialProfile)
+    setSession(nextSession)
+    writeStoredSession(nextSession)
+  }
+
+  const handlePasswordChanged = ({ token, user }) => {
+    const nextSession = { ...session, token, user, mustChangePassword: false, isActive: true }
+    setProfile(user)
     setSession(nextSession)
     writeStoredSession(nextSession)
   }
@@ -5793,6 +5849,14 @@ function App() {
       const nextMember = { ...member, ...updated }
       return nextMember.role === 'staff' ? [nextMember] : []
     }))
+  }
+
+  const handlePortalAccountCreated = (createdUser) => {
+    if (!createdUser?.id) return
+    setUsers((current) => [createdUser, ...current.filter((user) => user.id !== createdUser.id)])
+    if (createdUser.role === 'staff') {
+      setStaffMembers((current) => [createdUser, ...current.filter((member) => member.id !== createdUser.id)])
+    }
   }
 
   const handleDeleteStaffMember = async (staffId) => {
@@ -5878,6 +5942,11 @@ function App() {
     return data
   }
 
+  const mustChangePassword = Boolean(session?.mustChangePassword || session?.user?.mustChangePassword)
+  if (isAuthenticated && mustChangePassword && location.pathname !== '/settings') {
+    return <Navigate to="/settings" replace />
+  }
+
   return (
     <>
       {reminderAlerts.length > 0 && (
@@ -5903,10 +5972,10 @@ function App() {
         <Route path="/profile" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['resident']} userRole={userRole}><ProfilePage profile={profile} onLogout={handleLogout} language={language} setLanguage={switchLanguage} /></ProtectedRoute>} />
         <Route path="/payments" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['resident']} userRole={userRole}><PaymentsPage payments={payments} onLogout={handleLogout} language={language} setLanguage={switchLanguage} /></ProtectedRoute>} />
         <Route path="/events" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['resident']} userRole={userRole}><EventsPage events={events} onLogout={handleLogout} language={language} setLanguage={switchLanguage} /></ProtectedRoute>} />
-        <Route path="/settings" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['resident', 'staff', 'admin', 'super_admin']} userRole={userRole}><SettingsPage profile={profile} onLogout={handleLogout} language={language} setLanguage={switchLanguage} /></ProtectedRoute>} />
-        <Route path="/staff" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['staff', 'admin', 'super_admin']} userRole={userRole}><StaffPage staffMembers={staffMembers} announcements={announcementsData} currentUser={session?.user} userRole={userRole} onProcessRequest={handleRequestStatus} onLogout={handleLogout} onStaffMemberUpdated={handleStaffMemberUpdated} onAddAnnouncement={handleAddAnnouncement} onDeleteAnnouncement={handleDeleteAnnouncement} onRetractAnnouncement={handleRetractAnnouncement} onDeleteStaffMember={handleDeleteStaffMember} language={language} setLanguage={switchLanguage} /></ProtectedRoute>} />
-        <Route path="/admin" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['admin']} userRole={userRole}><AdminPage users={users} residents={residents} requests={requests} reports={reports} currentUser={session?.user} onLogout={handleLogout} language={language} setLanguage={switchLanguage} /></ProtectedRoute>} />
-        <Route path="/super-admin" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['super_admin']} userRole={userRole}><AdminPage users={users} residents={residents} requests={requests} reports={reports} currentUser={session?.user} onLogout={handleLogout} language={language} setLanguage={switchLanguage} /></ProtectedRoute>} />
+        <Route path="/settings" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['resident', 'staff', 'admin', 'super_admin']} userRole={userRole}><SettingsPage profile={profile} onLogout={handleLogout} onPasswordChanged={handlePasswordChanged} language={language} setLanguage={switchLanguage} /></ProtectedRoute>} />
+        <Route path="/staff" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['staff', 'admin', 'super_admin']} userRole={userRole}><StaffPage staffMembers={staffMembers} announcements={announcementsData} currentUser={session?.user} userRole={userRole} onProcessRequest={handleRequestStatus} onLogout={handleLogout} onStaffMemberUpdated={handleStaffMemberUpdated} onPortalAccountCreated={handlePortalAccountCreated} onAddAnnouncement={handleAddAnnouncement} onDeleteAnnouncement={handleDeleteAnnouncement} onRetractAnnouncement={handleRetractAnnouncement} onDeleteStaffMember={handleDeleteStaffMember} language={language} setLanguage={switchLanguage} /></ProtectedRoute>} />
+        <Route path="/admin" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['admin']} userRole={userRole}><AdminPage users={users} residents={residents} requests={requests} reports={reports} currentUser={session?.user} onLogout={handleLogout} onPortalAccountCreated={handlePortalAccountCreated} language={language} setLanguage={switchLanguage} /></ProtectedRoute>} />
+        <Route path="/super-admin" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['super_admin']} userRole={userRole}><AdminPage users={users} residents={residents} requests={requests} reports={reports} currentUser={session?.user} onLogout={handleLogout} onPortalAccountCreated={handlePortalAccountCreated} language={language} setLanguage={switchLanguage} /></ProtectedRoute>} />
         <Route path="*" element={<Navigate to={getDashboardPath(userRole)} replace />} />
       </Routes>
       <MauAssistant language={language} userRole={userRole} isAuthenticated={isAuthenticated} pathname={location.pathname} mobileDashboard={userRole === 'resident' && location.pathname === '/dashboard'} />

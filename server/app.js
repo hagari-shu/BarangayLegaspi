@@ -31,12 +31,7 @@ import {
   createStaffInvitationAcceptanceAudit,
   hashStaffInvitationToken,
   isValidStaffInvitationToken,
-  issueStaffInvitation,
 } from './staff-invitations.js'
-import {
-  deliverAccountInvitationEmail,
-  validateAccountInvitationEmailConfig,
-} from './account-invitation-email.js'
 import {
   createSuperAdminInvitationAcceptanceAudit,
   hashSuperAdminInvitationToken,
@@ -92,6 +87,13 @@ const isValidMobile = (value) => /^09\d{9}$/.test(String(value).trim())
 const isValidPassword = (value) => {
   const password = String(value).trim()
   return password.length >= 8 && /[a-z]/.test(password) && /[A-Z]/.test(password) && /\d/.test(password) && /[^A-Za-z0-9\s]/.test(password)
+}
+const generateInitialPassword = () => {
+  let password = ''
+  do {
+    password = randomBytes(24).toString('base64url')
+  } while (!isValidPassword(password))
+  return password
 }
 const passwordRequirements = 'at least 8 characters, one uppercase letter, one lowercase letter, one number, and one special character'
 const serviceCatalog = [
@@ -247,6 +249,38 @@ export function createApp() {
   app.use(express.json({ limit: '100kb' }))
   app.use(express.urlencoded({ extended: true, limit: '100kb' }))
 
+  app.use('/api', async (req, res, next) => {
+    const authHeader = req.headers.authorization || ''
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null
+    if (!token) return next()
+
+    let payload
+    try {
+      payload = verifyToken(token)
+    } catch {
+      return next()
+    }
+    if (!payload.mustChangePassword) return next()
+
+    try {
+      const user = await store.findUserById?.(payload.sub)
+      if (!(user?.mustChangePassword ?? user?.must_change_password)) return next()
+
+      const path = req.originalUrl.split('?')[0]
+      if ((path === '/api/change-password' && req.method === 'POST')
+        || (path === '/api/profile' && req.method === 'GET')) {
+        return next()
+      }
+      return res.status(403).json({
+        code: 'password_change_required',
+        message: 'Change your temporary password before using the portal.',
+      })
+    } catch (error) {
+      console.error('temporary password access check failed', error)
+      return res.status(503).json({ message: 'Unable to verify account access. Please try again.' })
+    }
+  })
+
   const getCurrentActor = async (token) => {
     const payload = verifyToken(token)
     if (payload.purpose === 'mfa_pending') return null
@@ -297,6 +331,81 @@ export function createApp() {
       metadata,
       createdAt: new Date().toISOString(),
     })
+  }
+
+  const createPortalAccount = async (actor, role, req, res) => {
+    const firstName = sanitizeText(req.body?.firstName)
+    const lastName = sanitizeText(req.body?.lastName)
+    const email = sanitizeText(req.body?.email).toLowerCase()
+    const mobile = sanitizeText(req.body?.mobile)
+    const position = role === 'staff' ? sanitizeText(req.body?.position || 'Staff') : 'Administrator'
+
+    if (!firstName || firstName.length > 100 || !lastName || lastName.length > 100) {
+      return res.status(400).json({ message: 'First and last names are required and must be 100 characters or fewer.' })
+    }
+    if (!isValidEmail(email) || email.length > 255) {
+      return res.status(400).json({ message: 'Provide a valid account email address.' })
+    }
+    if (!isValidMobile(mobile)) {
+      return res.status(400).json({ message: 'Provide a valid 11-digit Philippine mobile number starting with 09.' })
+    }
+    if (role === 'staff' && (
+      !position
+      || position.length > 120
+      || [...position].some((character) => {
+        const codePoint = character.codePointAt(0)
+        return codePoint < 32 || (codePoint >= 127 && codePoint <= 159)
+      })
+      || position.includes('<')
+      || position.includes('>')
+    )) {
+      return res.status(400).json({ message: 'Provide a valid staff position with 1 to 120 printable characters.' })
+    }
+
+    res.set('Cache-Control', 'no-store')
+    let temporaryPassword
+    try {
+      temporaryPassword = generateInitialPassword()
+      const user = {
+        id: randomUUID(),
+        firstName,
+        lastName,
+        email,
+        mobile,
+        passwordHash: await hashPassword(temporaryPassword),
+        mustChangePassword: true,
+        role,
+        status: role === 'admin' ? 'Administrator' : 'On Duty',
+        address: '',
+        householdId: null,
+        familyMembers: 1,
+        householdMembers: [],
+        position,
+        availability: 'Available',
+        createdAt: new Date().toISOString(),
+      }
+      const result = await store.createUser(user)
+      if (result?.status === 'account_exists') {
+        return res.status(409).json({ message: 'An account already uses this email or mobile number.' })
+      }
+      const createdUser = result?.user || result
+      try {
+        await writeAudit(actor.user, 'account.created', 'user', user.id, { role, email })
+      } catch (error) {
+        console.error('failed to record portal account creation audit entry', error)
+      }
+      return res.status(201).json({
+        message: `${role === 'admin' ? 'Admin' : 'Staff'} account created. Share the temporary password securely; it will only be shown once.`,
+        user: sanitizeUserRecord(createdUser),
+        temporaryPassword,
+      })
+    } catch (error) {
+      if (error?.code === '23505') {
+        return res.status(409).json({ message: 'An account already uses this email or mobile number.' })
+      }
+      console.error('failed to create portal account', error)
+      return res.status(500).json({ message: 'Unable to create the account.' })
+    }
   }
 
   registerResidentRegistryRoutes(app, { store })
@@ -630,124 +739,14 @@ export function createApp() {
       return res.status(401).json({ message: 'Invalid or expired token.' })
     }
     if (!actor || !['admin', 'staff'].includes(actor.user.role)) {
-      return res.status(403).json({ message: 'Only Admin and Staff accounts can issue permitted account invitations.' })
+      return res.status(403).json({ message: 'Only Admin and Staff accounts can create permitted accounts.' })
     }
 
     const role = String(req.body?.role || 'staff').trim().toLowerCase()
-    const email = sanitizeText(req.body?.email).toLowerCase()
-    const position = sanitizeText(req.body?.position || 'Staff')
-    const hasControlCharacter = [...position].some((character) => {
-      const codePoint = character.codePointAt(0)
-      return codePoint < 32 || (codePoint >= 127 && codePoint <= 159)
-    })
     if (!['admin', 'staff'].includes(role) || (role === 'admin' && actor.user.role !== 'admin')) {
-      return res.status(403).json({ message: 'Staff may invite Staff only. Only an Admin may invite Admin accounts.' })
+      return res.status(403).json({ message: 'Staff can create Staff accounts only. Only an Admin can create Admin accounts.' })
     }
-    if (!isValidEmail(email) || email.length > 255) {
-      return res.status(400).json({ message: 'Provide a valid account email address.' })
-    }
-    if (role === 'staff' && (
-      !position
-      || position.length > 120
-      || hasControlCharacter
-      || position.includes('<')
-      || position.includes('>')
-    )) {
-      return res.status(400).json({ message: 'Provide a valid staff position with 1 to 120 printable characters.' })
-    }
-
-    const apiKey = String(process.env.RESEND_API_KEY || '')
-    const fromEmail = String(process.env.SUPER_ADMIN_INVITATION_FROM_EMAIL || '').trim()
-    try {
-      validateAccountInvitationEmailConfig({ apiKey, fromEmail })
-    } catch (error) {
-      console.error('account invitation email configuration is unavailable', error.message)
-      return res.status(503).json({ message: 'Account invitation email is not configured. Contact the system operator.' })
-    }
-
-    const publicAppUrl = String(process.env.PUBLIC_APP_URL || 'https://barangay-legaspi.vercel.app').trim()
-    let publicAppOrigin
-    try {
-      const parsedUrl = new URL(publicAppUrl)
-      if (
-        parsedUrl.protocol !== 'https:'
-        || parsedUrl.username
-        || parsedUrl.password
-        || parsedUrl.pathname !== '/'
-        || parsedUrl.search
-        || parsedUrl.hash
-      ) {
-        throw new Error('Invalid application origin.')
-      }
-      publicAppOrigin = parsedUrl.origin
-    } catch (error) {
-      console.error('account invitation portal URL configuration is invalid', error.message)
-      return res.status(503).json({ message: 'Account invitation portal URL is not configured. Contact the system operator.' })
-    }
-
-    let invitation
-    try {
-      invitation = await issueStaffInvitation({
-        email,
-        publicAppUrl: publicAppOrigin,
-        role,
-        position: role === 'admin' ? 'Administrator' : position,
-        actor: actor.user,
-        store,
-      })
-      if (invitation.status === 'account_exists') {
-        return res.status(409).json({ message: 'An account already uses this email. No invitation was sent.' })
-      }
-      if (invitation.status === 'invitation_pending') {
-        return res.status(409).json({ message: 'A Super Admin invitation is already pending for this email. Resolve it before continuing.' })
-      }
-      if (invitation.status === 'invitation_conflict') {
-        return res.status(409).json({ message: 'An invitation for this email is already being processed. Try again shortly.' })
-      }
-      if (invitation.status !== 'created') {
-        throw new Error(`Account invitation issuance returned ${invitation.status}.`)
-      }
-    } catch (error) {
-      console.error('account invitation issuance failed', error)
-      return res.status(500).json({ message: 'Unable to issue this account invitation.' })
-    }
-
-    try {
-      await deliverAccountInvitationEmail({
-        apiKey,
-        fromEmail,
-        email,
-        inviteUrl: invitation.inviteUrl,
-        expiresAt: invitation.expiresAt,
-        role,
-      })
-      return res.status(202).json({
-        message: `${role === 'admin' ? 'Administrator' : 'Staff'} setup invitation sent to the account email.`,
-        expiresAt: invitation.expiresAt,
-      })
-    } catch (error) {
-      console.error('account invitation email delivery failed', error)
-      try {
-        const revoked = await store.revokeStaffInvitation?.({
-          invitationId: invitation.id,
-          revokedAt: new Date().toISOString(),
-          auditEntry: {
-            id: randomUUID(),
-            actorId: actor.user.id,
-            actorRole: actor.user.role,
-            action: `${role}.invitation.delivery_failed`,
-            targetType: `${role}_invitation`,
-            targetId: invitation.id,
-            metadata: { role },
-          },
-        })
-        if (revoked?.status !== 'revoked') throw new Error('The undelivered invitation could not be revoked.')
-      } catch (revocationError) {
-        console.error('undelivered account invitation revocation failed', revocationError)
-        return res.status(500).json({ message: 'Email delivery failed and the pending invitation could not be revoked. Contact the system operator before retrying.' })
-      }
-      return res.status(502).json({ message: 'Email delivery failed. The invitation was revoked; correct the email service settings and try again.' })
-    }
+    return res.status(410).json({ message: 'Portal invitations are no longer issued. Create the account directly from the portal.' })
   })
 
   app.post('/api/staff/invitations/accept', authRateLimit, async (req, res) => {
@@ -985,12 +984,14 @@ export function createApp() {
         return res.json({ message: 'Authenticator verification required.', requiresMfa: true, challengeToken })
       }
 
-      const token = signToken({ sub: user.id, role: normalizedRole })
+      const mustChangePassword = Boolean(user.mustChangePassword ?? user.must_change_password)
+      const token = signToken({ sub: user.id, role: normalizedRole, mustChangePassword })
 
       return res.json({
         message: 'Login successful',
         token,
         user: safeUser,
+        mustChangePassword,
       })
     } catch (error) {
       console.error('Login error:', error)
@@ -1030,7 +1031,8 @@ export function createApp() {
       mfaChallenges.delete(challengeKey)
       await store.updateUser?.(user.id, { mfaLastStep: matchedStep })
       const role = String(user.role || 'resident').toLowerCase()
-      const token = signToken({ sub: user.id, role })
+      const mustChangePassword = Boolean(user.mustChangePassword ?? user.must_change_password)
+      const token = signToken({ sub: user.id, role, mustChangePassword })
       return res.json({ message: 'Login successful.', token, user: sanitizeUserRecord({ ...user, role }) })
     } catch (error) {
       console.error('MFA login error:', error)
@@ -1220,8 +1222,20 @@ export function createApp() {
         return res.status(401).json({ message: 'Current password is incorrect.' })
       }
 
-      await store.updateUser?.(user.id, { passwordHash: await hashPassword(newPassword) })
+      const mustChangePassword = Boolean(user.mustChangePassword ?? user.must_change_password)
+      const updatedUser = await store.updateUser?.(user.id, {
+        passwordHash: await hashPassword(newPassword),
+        mustChangePassword: false,
+      })
       await writeAudit(user, 'password.changed', 'user', user.id)
+      if (mustChangePassword) {
+        const role = String(user.role || 'resident').toLowerCase()
+        return res.json({
+          message: 'Temporary password changed successfully. You now have full portal access.',
+          token: signToken({ sub: user.id, role }),
+          user: sanitizeUserRecord({ ...updatedUser, mustChangePassword: false }),
+        })
+      }
       return res.json({ message: 'Password changed successfully.' })
     } catch (error) {
       console.error('change password error', error)
@@ -1978,11 +1992,10 @@ export function createApp() {
 
     try {
       const actor = await getCurrentActor(token)
-      if (!actor || !isAdminRole(actor.user.role) || ['Suspended', 'Disabled'].includes(actor.user.status)) {
-        return res.status(403).json({ message: 'Administrator access required.' })
+      if (!actor || !['admin', 'staff'].includes(actor.user.role)) {
+        return res.status(403).json({ message: 'Admin or Staff access required.' })
       }
-
-      return res.status(403).json({ message: 'Staff accounts can only be created through a deployment-operator invitation.' })
+      return await createPortalAccount(actor, 'staff', req, res)
     } catch (error) {
       console.error('failed to create staff member', error)
       return res.status(401).json({ message: 'Invalid or expired token.' })
@@ -2100,14 +2113,14 @@ export function createApp() {
 
     try {
       const actor = await getCurrentActor(token)
-      if (!actor || !isAdminRole(actor.user.role) || ['Suspended', 'Disabled'].includes(actor.user.status)) {
+      if (!actor || actor.user.role !== 'admin') {
         return res.status(403).json({ message: 'Admin access required.' })
       }
 
-      return res.status(403).json({ message: 'Administrator accounts can only be provisioned by an authorized deployment operator.' })
+      return await createPortalAccount(actor, 'admin', req, res)
     } catch (error) {
       console.error('failed to create admin user', error)
-      return res.status(500).json({ message: 'Unable to create administrator account.' })
+      return res.status(401).json({ message: 'Invalid or expired token.' })
     }
   })
 
