@@ -41,6 +41,32 @@ test('Filipino role dashboards have translated controls and accessible navigatio
   assert.equal(fil.staffProfile, 'Profile ng staff')
 })
 
+test('account invitation controls and role permissions are translated in both locales', () => {
+  for (const locale of [translations.en, translations.fil]) {
+    for (const key of [
+      'accountInvitationTitle',
+      'accountInvitationIntro',
+      'accountInvitationRole',
+      'accountInvitationEmail',
+      'accountInvitationPosition',
+      'accountInvitationSent',
+      'accountInvitationSend',
+      'accountInvitationUnavailable',
+      'accountInvitationPermissionNote',
+      'superAdminInvitationOperatorOnly',
+      'inviteStaffAccount',
+    ]) {
+      assert.equal(typeof locale[key], 'string')
+      assert.ok(locale[key].length > 0)
+    }
+    assert.match(locale.accountInvitationSent, /\{role\}/)
+    assert.match(locale.accountInvitationSent, /\{email\}/)
+  }
+
+  assert.match(translations.en.accountInvitationPermissionNote, /Admins can invite Admin or Staff/i)
+  assert.match(translations.en.accountInvitationPermissionNote, /Staff can invite Staff accounts only/i)
+})
+
 test('Filipino resident, staff, and admin dashboard copy is localized', () => {
   const { fil } = translations
 

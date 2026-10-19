@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { createApp, seedDemoResident } from '../server/app.js'
+import { hashPassword, signToken } from '../server/auth.js'
 import { DB_PATH } from '../server/config.js'
 import * as jsonDb from '../server/db.js'
 import { hashStaffInvitationToken, issueStaffInvitation } from '../server/staff-invitations.js'
@@ -61,6 +62,7 @@ test('staff invitations preserve the assigned position and user-chosen password,
     assert.equal(lookup.headers.get('cache-control'), 'no-store')
     assert.deepEqual(await lookup.json(), {
       email: 'staff.invitee@example.test',
+      role: 'staff',
       expiresAt: invitation.expiresAt,
     })
 
@@ -76,7 +78,7 @@ test('staff invitations preserve the assigned position and user-chosen password,
       }),
     })
     assert.equal(accepted.status, 201)
-    assert.deepEqual(await accepted.json(), { message: 'Staff account created. You can now sign in.' })
+    assert.deepEqual(await accepted.json(), { message: 'Staff account created. You can now sign in.', role: 'staff' })
 
     const login = await fetch(`${baseUrl}/api/login`, {
       method: 'POST',
@@ -111,6 +113,183 @@ test('staff invitations preserve the assigned position and user-chosen password,
     assert.equal(storedAfterAcceptance.staffInvitations[0].acceptedAt !== undefined, true)
     assert.equal(storedAfterAcceptance.auditLogs.at(-1).action, 'staff.invitation.accepted')
     assert.equal(storedAfterAcceptance.auditLogs.at(-1).targetId, staffUser.id)
+  } finally {
+    await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
+  }
+})
+
+test('Admin and Staff invitations enforce role permissions and send private setup links', async () => {
+  const previousEnvironment = {
+    RESEND_API_KEY: process.env.RESEND_API_KEY,
+    SUPER_ADMIN_INVITATION_FROM_EMAIL: process.env.SUPER_ADMIN_INVITATION_FROM_EMAIL,
+    PUBLIC_APP_URL: process.env.PUBLIC_APP_URL,
+  }
+  const originalFetch = globalThis.fetch
+  const emailRequests = []
+  process.env.RESEND_API_KEY = 'resend-test-key'
+  process.env.SUPER_ADMIN_INVITATION_FROM_EMAIL = 'accounts@example.test'
+  process.env.PUBLIC_APP_URL = 'https://barangay-legaspi.vercel.app'
+
+  try {
+    globalThis.fetch = async (input, options) => {
+      if (String(input) === 'https://api.resend.com/emails') {
+        const request = JSON.parse(options.body)
+        emailRequests.push(request)
+        if (request.to[0] === 'mail.failure@example.test') return { ok: false, status: 503 }
+        return { ok: true, status: 200 }
+      }
+      return originalFetch(input, options)
+    }
+
+    const staff = {
+      id: 'staff-inviter',
+      email: 'staff.inviter@example.test',
+      mobile: '09170000991',
+      passwordHash: await hashPassword('StaffInviter!123'),
+      role: 'staff',
+      status: 'On Duty',
+    }
+    const admin = {
+      id: 'admin-inviter',
+      email: 'admin.inviter@example.test',
+      mobile: '09170000992',
+      passwordHash: await hashPassword('AdminInviter!123'),
+      role: 'admin',
+      status: 'Administrator',
+    }
+    const superAdmin = {
+      id: 'super-admin-inviter',
+      email: 'super.inviter@example.test',
+      mobile: '09170000993',
+      passwordHash: await hashPassword('SuperInviter!123'),
+      role: 'super_admin',
+      status: 'Administrator',
+    }
+    await jsonDb.saveUser(staff)
+    await jsonDb.saveUser(admin)
+    await jsonDb.saveUser(superAdmin)
+
+    const { server, baseUrl } = await startTestServer()
+    const sendInvitation = (user, body) => fetch(`${baseUrl}/api/staff/invitations`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${signToken({ sub: user.id })}`,
+      },
+      body: JSON.stringify(body),
+    })
+    try {
+      const unauthenticated = await fetch(`${baseUrl}/api/staff/invitations`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: 'unauthenticated@example.test', role: 'staff' }),
+      })
+      assert.equal(unauthenticated.status, 401)
+
+      const staffAdmin = await sendInvitation(staff, { email: 'denied.admin@example.test', role: 'admin' })
+      assert.equal(staffAdmin.status, 403)
+      const staffSuperAdmin = await sendInvitation(staff, { email: 'denied.super@example.test', role: 'super_admin' })
+      assert.equal(staffSuperAdmin.status, 403)
+
+      const staffInvite = await sendInvitation(staff, {
+        email: 'new.staff@example.test',
+        role: 'staff',
+        position: 'Secretary',
+      })
+      assert.equal(staffInvite.status, 202)
+      const staffInviteResponse = await staffInvite.json()
+      assert.equal(staffInviteResponse.expiresAt !== undefined, true)
+      assert.equal(JSON.stringify(staffInviteResponse).includes('token'), false)
+
+      const deliveryFailure = await sendInvitation(staff, {
+        email: 'mail.failure@example.test',
+        role: 'staff',
+      })
+      assert.equal(deliveryFailure.status, 502)
+
+      const adminInvite = await sendInvitation(admin, { email: 'new.admin@example.test', role: 'admin' })
+      assert.equal(adminInvite.status, 202)
+      const adminStaffInvite = await sendInvitation(admin, { email: 'second.staff@example.test', role: 'staff' })
+      assert.equal(adminStaffInvite.status, 202)
+      const adminSuperAdmin = await sendInvitation(admin, { email: 'denied.super2@example.test', role: 'super_admin' })
+      assert.equal(adminSuperAdmin.status, 403)
+      const superAdminInvite = await sendInvitation(superAdmin, { email: 'denied.by.super@example.test', role: 'staff' })
+      assert.equal(superAdminInvite.status, 403)
+
+      assert.equal(emailRequests.length, 4)
+      assert.equal(emailRequests[0].to[0], 'new.staff@example.test')
+      assert.equal(emailRequests[0].subject, 'Staff account setup invitation')
+      assert.match(emailRequests[0].text, /\/staff-invite#token=/)
+      assert.equal(emailRequests[2].to[0], 'new.admin@example.test')
+      assert.equal(emailRequests[2].subject, 'Administrator account setup invitation')
+      assert.equal(emailRequests[3].to[0], 'second.staff@example.test')
+
+      const stored = await jsonDb.readDb()
+      assert.equal(stored.staffInvitations.find((invite) => invite.email === 'new.staff@example.test').role, 'staff')
+      assert.equal(stored.staffInvitations.find((invite) => invite.email === 'new.admin@example.test').role, 'admin')
+      assert.equal(stored.staffInvitations.find((invite) => invite.email === 'new.staff@example.test').position, 'Secretary')
+      assert.ok(stored.staffInvitations.find((invite) => invite.email === 'mail.failure@example.test').revokedAt)
+      assert.ok(stored.auditLogs.find((entry) => entry.action === 'staff.invitation.delivery_failed'))
+      assert.equal(JSON.stringify(stored.staffInvitations).includes('token='), false)
+      assert.equal(stored.auditLogs.some((entry) => entry.metadata?.email), false)
+    } finally {
+      await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
+    }
+  } finally {
+    globalThis.fetch = originalFetch
+    for (const [key, value] of Object.entries(previousEnvironment)) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
+  }
+})
+
+test('Admin setup invitation validates its role and creates an Admin account after acceptance', async () => {
+  const invitation = await issueStaffInvitation({
+    email: 'new.admin.account@example.test',
+    publicAppUrl: 'https://barangay-legaspi.vercel.app',
+    role: 'admin',
+    position: 'Administrator',
+    store: jsonDb,
+  })
+  assert.equal(invitation.status, 'created')
+  const token = new URLSearchParams(new URL(invitation.inviteUrl).hash.slice(1)).get('token')
+  const { server, baseUrl } = await startTestServer()
+  try {
+    const validation = await fetch(`${baseUrl}/api/staff/invitations/validate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token }),
+    })
+    assert.equal(validation.status, 200)
+    assert.equal((await validation.json()).role, 'admin')
+
+    const accepted = await fetch(`${baseUrl}/api/staff/invitations/accept`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        token,
+        firstName: 'Alex',
+        lastName: 'Administrator',
+        mobile: '09170000994',
+        password: 'Admin!Account2026',
+      }),
+    })
+    assert.equal(accepted.status, 201)
+    assert.deepEqual(await accepted.json(), {
+      message: 'Administrator account created. You can now sign in.',
+      role: 'admin',
+    })
+    const login = await fetch(`${baseUrl}/api/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        identifier: 'new.admin.account@example.test',
+        password: 'Admin!Account2026',
+      }),
+    })
+    assert.equal(login.status, 200)
+    assert.equal((await login.json()).user.role, 'admin')
   } finally {
     await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
   }
@@ -216,7 +395,7 @@ test('Super Admin invitation delivery requires a Resend API key and valid sender
   )
   assert.throws(
     () => validateSuperAdminInvitationDeliveryConfig({ apiKey: '', fromEmail: 'admin@example.test' }),
-    /Resend API key and verified Super Admin invitation sender email must be configured/,
+    /Resend API key and verified account invitation sender email must be configured/,
   )
 })
 

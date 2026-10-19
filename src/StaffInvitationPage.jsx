@@ -4,12 +4,14 @@ import { Link } from 'react-router-dom'
 const API_BASE = (import.meta.env.VITE_API_BASE || (import.meta.env.DEV ? 'http://localhost:3001/api' : '')).replace(/\/$/, '')
 
 export default function StaffInvitationPage({ language = 'en', accountType = 'staff' }) {
-  const isSuperAdmin = accountType === 'super_admin'
   const [token] = useState(() => new URLSearchParams(window.location.hash.slice(1)).get('token') || '')
   const [invitation, setInvitation] = useState(null)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [created, setCreated] = useState(false)
+  const accountRole = invitation?.role || accountType
+  const isSuperAdmin = accountRole === 'super_admin'
+  const isAdmin = accountRole === 'admin'
   const copy = language === 'fil'
     ? isSuperAdmin
       ? {
@@ -26,20 +28,35 @@ export default function StaffInvitationPage({ language = 'en', accountType = 'st
         invalid: 'Hindi wasto, paso na, o nagamit na ang imbitasyon.',
         mismatch: 'Hindi magkapareho ang mga password.',
       }
-      : {
-      title: 'I-set up ang staff account',
-      intro: 'Gamitin ang imbitasyong ito para gumawa ng staff account. Isang beses lang ito magagamit at mawawalan ng bisa pagkalipas ng 12 oras.',
+      : isAdmin
+        ? {
+      title: 'I-set up ang Administrator account',
+      intro: 'Gamitin ang imbitasyong ito para gumawa ng Administrator account. Isang beses lang ito magagamit at mawawalan ng bisa pagkalipas ng 12 oras.',
       firstName: 'Pangalan',
       lastName: 'Apelyido',
       mobile: 'Mobile (09XXXXXXXXX)',
       password: 'Gumawa ng password',
       confirmPassword: 'Ulitin ang password',
       submit: 'Gumawa ng account',
-      success: 'Nagawa na ang staff account. Maaari ka nang mag-sign in.',
+      success: 'Nagawa na ang Administrator account. Maaari ka nang mag-sign in.',
       login: 'Pumunta sa sign in',
       invalid: 'Hindi wasto, paso na, o nagamit na ang imbitasyon.',
       mismatch: 'Hindi magkapareho ang mga password.',
     }
+        : {
+          title: 'I-set up ang staff account',
+          intro: 'Gamitin ang imbitasyong ito para gumawa ng staff account. Isang beses lang ito magagamit at mawawalan ng bisa pagkalipas ng 12 oras.',
+          firstName: 'Pangalan',
+          lastName: 'Apelyido',
+          mobile: 'Mobile (09XXXXXXXXX)',
+          password: 'Gumawa ng password',
+          confirmPassword: 'Ulitin ang password',
+          submit: 'Gumawa ng account',
+          success: 'Nagawa na ang staff account. Maaari ka nang mag-sign in.',
+          login: 'Pumunta sa sign in',
+          invalid: 'Hindi wasto, paso na, o nagamit na ang imbitasyon.',
+          mismatch: 'Hindi magkapareho ang mga password.',
+        }
     : isSuperAdmin
       ? {
         title: 'Set up your Super Admin account',
@@ -55,20 +72,35 @@ export default function StaffInvitationPage({ language = 'en', accountType = 'st
         invalid: 'This invitation is invalid, expired, or already used.',
         mismatch: 'The passwords do not match.',
       }
-      : {
-      title: 'Set up your staff account',
-      intro: 'Use this invitation to create your staff account. It can be used once and expires after 12 hours.',
+      : isAdmin
+        ? {
+      title: 'Set up your Administrator account',
+      intro: 'Use this invitation to create your Administrator account. It can be used once and expires after 12 hours.',
       firstName: 'First name',
       lastName: 'Last name',
       mobile: 'Mobile (09XXXXXXXXX)',
       password: 'Create password',
       confirmPassword: 'Confirm password',
       submit: 'Create account',
-      success: 'Your staff account is ready. You can now sign in.',
+      success: 'Your Administrator account is ready. You can now sign in.',
       login: 'Go to sign in',
       invalid: 'This invitation is invalid, expired, or already used.',
       mismatch: 'The passwords do not match.',
     }
+        : {
+          title: 'Set up your staff account',
+          intro: 'Use this invitation to create your staff account. It can be used once and expires after 12 hours.',
+          firstName: 'First name',
+          lastName: 'Last name',
+          mobile: 'Mobile (09XXXXXXXXX)',
+          password: 'Create password',
+          confirmPassword: 'Confirm password',
+          submit: 'Create account',
+          success: 'Your staff account is ready. You can now sign in.',
+          login: 'Go to sign in',
+          invalid: 'This invitation is invalid, expired, or already used.',
+          mismatch: 'The passwords do not match.',
+        }
   const invitationApiPath = isSuperAdmin ? 'super-admin/invitations' : 'staff/invitations'
 
   useEffect(() => {

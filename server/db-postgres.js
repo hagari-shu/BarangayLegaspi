@@ -172,6 +172,7 @@ export async function initDatabase() {
     CREATE TABLE IF NOT EXISTS staff_invitations (
       id UUID PRIMARY KEY,
       email VARCHAR(255) NOT NULL,
+      role VARCHAR(30) NOT NULL DEFAULT 'staff',
       position VARCHAR(120) NOT NULL DEFAULT 'Staff',
       token_hash CHAR(64) NOT NULL UNIQUE,
       issued_at TIMESTAMPTZ NOT NULL,
@@ -180,6 +181,7 @@ export async function initDatabase() {
       revoked_at TIMESTAMPTZ
     );
   `)
+  await query("ALTER TABLE staff_invitations ADD COLUMN IF NOT EXISTS role VARCHAR(30) NOT NULL DEFAULT 'staff'")
   await query("ALTER TABLE staff_invitations ADD COLUMN IF NOT EXISTS position VARCHAR(120) NOT NULL DEFAULT 'Staff'")
   await query(`CREATE UNIQUE INDEX IF NOT EXISTS staff_invitations_pending_email_idx
     ON staff_invitations (LOWER(email)) WHERE accepted_at IS NULL AND revoked_at IS NULL`)
@@ -446,9 +448,9 @@ export async function issueStaffInvitation(invitation, auditEntry) {
       [invitation.email, invitation.issuedAt],
     )
     await client.query(
-      `INSERT INTO staff_invitations (id, email, position, token_hash, issued_at, expires_at)
-       VALUES ($1, $2, $3, $4, $5, $6)`,
-      [invitation.id, invitation.email, invitation.position || 'Staff', invitation.tokenHash, invitation.issuedAt, invitation.expiresAt],
+      `INSERT INTO staff_invitations (id, email, role, position, token_hash, issued_at, expires_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [invitation.id, invitation.email, invitation.role || 'staff', invitation.position || 'Staff', invitation.tokenHash, invitation.issuedAt, invitation.expiresAt],
     )
     await writeProvisioningAudit(client, auditEntry)
     await client.query('COMMIT')
@@ -465,11 +467,37 @@ export async function issueStaffInvitation(invitation, auditEntry) {
 
 export async function getStaffInvitationByTokenHash(tokenHash) {
   const result = await query(
-    `SELECT id, email, position, expires_at AS "expiresAt", accepted_at AS "acceptedAt", revoked_at AS "revokedAt"
+    `SELECT id, email, role, position, expires_at AS "expiresAt", accepted_at AS "acceptedAt", revoked_at AS "revokedAt"
      FROM staff_invitations WHERE token_hash = $1 LIMIT 1`,
     [tokenHash],
   )
   return result.rows[0] || null
+}
+
+export async function revokeStaffInvitation({ invitationId, revokedAt, auditEntry }) {
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+    const result = await client.query(
+      `UPDATE staff_invitations SET revoked_at = $2
+       WHERE id = $1 AND accepted_at IS NULL AND revoked_at IS NULL
+       RETURNING id`,
+      [invitationId, revokedAt],
+    )
+    if (!result.rows.length) {
+      await client.query('ROLLBACK')
+      return { status: 'not_pending' }
+    }
+    await writeProvisioningAudit(client, auditEntry)
+    await client.query('COMMIT')
+    return { status: 'revoked' }
+  } catch (error) {
+    await client.query('ROLLBACK')
+    console.error('PostgreSQL staff invitation revocation failed', error)
+    throw error
+  } finally {
+    client.release()
+  }
 }
 
 export async function acceptStaffInvitation({ tokenHash, user, acceptedAt, auditEntry }) {
@@ -486,7 +514,7 @@ export async function acceptStaffInvitation({ tokenHash, user, acceptedAt, audit
     }
     await lockAccountEmail(client, invitationLookup.rows[0].email)
     const invitationResult = await client.query(
-      `SELECT id, email, position, expires_at AS "expiresAt", accepted_at AS "acceptedAt", revoked_at AS "revokedAt"
+      `SELECT id, email, role, position, expires_at AS "expiresAt", accepted_at AS "acceptedAt", revoked_at AS "revokedAt"
        FROM staff_invitations WHERE token_hash = $1 FOR UPDATE`,
       [tokenHash],
     )
@@ -510,10 +538,13 @@ export async function acceptStaffInvitation({ tokenHash, user, acceptedAt, audit
       return { status: 'account_exists' }
     }
 
+    const role = invitation.role === 'admin' ? 'admin' : 'staff'
+    const position = role === 'admin' ? 'Administrator' : (invitation.position || 'Staff')
+    const status = role === 'admin' ? 'Administrator' : 'On Duty'
     await client.query(
       `INSERT INTO users (id, first_name, last_name, mobile, email, password_hash, role, household_id, family_members, household_members, status, address, zone, position, availability, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, 'staff', $7, 1, '[]'::jsonb, 'On Duty', 'Barangay Hall, Legaspi', 0, $8, 'Available', $9)`,
-      [user.id, user.firstName, user.lastName, user.mobile, invitation.email, user.passwordHash, user.householdId, invitation.position || 'Staff', acceptedAt],
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 1, '[]'::jsonb, $9, 'Barangay Hall, Legaspi', 0, $10, 'Available', $11)`,
+      [user.id, user.firstName, user.lastName, user.mobile, invitation.email, user.passwordHash, role, user.householdId, status, position, acceptedAt],
     )
     await client.query(
       'UPDATE staff_invitations SET accepted_at = $2 WHERE id = $1',
