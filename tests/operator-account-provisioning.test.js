@@ -370,3 +370,87 @@ test('admin promotion refuses residents who have not been verified', async () =>
   assert.equal(result.status, 'account_unverified')
   assert.equal((await jsonDb.findUserById(account.id)).role, 'resident')
 })
+
+test('Super Admin promotion requires a verified resident, preserves credentials, and is idempotent', async () => {
+  const account = {
+    id: '00000000-0000-4000-8000-000000000131',
+    email: 'verified.superadmin@example.test',
+    mobile: '09170000031',
+    role: 'resident',
+    status: 'Active Resident',
+    passwordHash: 'unchanged-super-admin-hash',
+  }
+  await jsonDb.saveUser(account)
+  const auditEntry = (userId, previousRole) => ({
+    id: `audit-super-${userId}`,
+    actorId: null,
+    actorRole: 'deployment_operator',
+    action: 'super_admin.promoted',
+    targetType: 'user',
+    targetId: userId,
+    metadata: { previousRole, newRole: 'super_admin' },
+  })
+
+  const mismatch = await jsonDb.promoteExistingUserToSuperAdmin({
+    email: account.email,
+    mobile: '09170000032',
+    auditEntry,
+  })
+  assert.equal(mismatch.status, 'not_found')
+
+  const promoted = await jsonDb.promoteExistingUserToSuperAdmin({
+    email: account.email.toUpperCase(),
+    mobile: account.mobile,
+    auditEntry,
+  })
+  assert.equal(promoted.status, 'promoted')
+
+  const repeated = await jsonDb.promoteExistingUserToSuperAdmin({
+    email: account.email,
+    mobile: account.mobile,
+    auditEntry,
+  })
+  assert.equal(repeated.status, 'already_super_admin')
+
+  const saved = await jsonDb.findUserById(account.id)
+  assert.equal(saved.role, 'super_admin')
+  assert.equal(saved.passwordHash, 'unchanged-super-admin-hash')
+  const audit = (await jsonDb.listAuditLogs()).find((entry) => entry.action === 'super_admin.promoted')
+  assert.equal(audit.actorRole, 'deployment_operator')
+  assert.deepEqual(audit.metadata, { previousRole: 'resident', newRole: 'super_admin' })
+
+  await jsonDb.clearData({ keepAdmins: true })
+  assert.equal((await jsonDb.findUserById(account.id)).role, 'super_admin')
+})
+
+test('Super Admin promotion rejects an unverified resident and never promotes a regular admin', async () => {
+  const unverified = {
+    id: '00000000-0000-4000-8000-000000000141',
+    email: 'unverified.superadmin@example.test',
+    mobile: '09170000041',
+    role: 'resident',
+    status: 'Pending Verification',
+    passwordHash: 'unchanged-hash',
+  }
+  const regularAdmin = {
+    id: '00000000-0000-4000-8000-000000000142',
+    email: 'regular.admin@example.test',
+    mobile: '09170000042',
+    role: 'admin',
+    status: 'Administrator',
+    passwordHash: 'regular-admin-hash',
+  }
+  await jsonDb.saveUser(unverified)
+  await jsonDb.saveUser(regularAdmin)
+
+  const promote = (account) => jsonDb.promoteExistingUserToSuperAdmin({
+    email: account.email,
+    mobile: account.mobile,
+    auditEntry: () => ({ id: `audit-${account.id}`, action: 'super_admin.promoted' }),
+  })
+
+  assert.equal((await promote(unverified)).status, 'account_unverified')
+  assert.equal((await promote(regularAdmin)).status, 'role_conflict')
+  assert.equal((await jsonDb.findUserById(unverified.id)).role, 'resident')
+  assert.equal((await jsonDb.findUserById(regularAdmin.id)).role, 'admin')
+})

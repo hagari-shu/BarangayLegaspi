@@ -53,6 +53,41 @@ async function run() {
     throw new Error(messages[result.status] || 'Admin promotion did not complete.')
   }
 
+  if (command === 'promote-super-admin') {
+    const email = String(process.env.SUPER_ADMIN_EMAIL || '').trim().toLowerCase()
+    const mobile = String(process.env.SUPER_ADMIN_MOBILE || '').trim()
+    if (!emailPattern.test(email) || !/^09\d{9}$/.test(mobile)) {
+      throw new Error('SUPER_ADMIN_EMAIL and SUPER_ADMIN_MOBILE must identify the verified account.')
+    }
+    const result = await postgres.promoteExistingUserToSuperAdmin({
+      email,
+      mobile,
+      auditEntry: (userId, previousRole) => ({
+        id: randomUUID(),
+        actorId: null,
+        actorRole: 'deployment_operator',
+        action: 'super_admin.promoted',
+        targetType: 'user',
+        targetId: userId,
+        metadata: { previousRole, newRole: 'super_admin' },
+      }),
+    })
+    if (result.status === 'promoted') {
+      console.log('The verified account is now a Super Admin. Its password and other account details were not changed.')
+      return
+    }
+    if (result.status === 'already_super_admin') {
+      console.log('The verified account already has the Super Admin role. No changes made.')
+      return
+    }
+    const messages = {
+      not_found: 'No account matched both configured identifiers. No changes made.',
+      role_conflict: 'The matching account is not an active resident. No changes made.',
+      account_unverified: 'The matching resident is not an active, verified resident. No changes made.',
+    }
+    throw new Error(messages[result.status] || 'Super Admin promotion did not complete.')
+  }
+
   if (command === 'invite-staff') {
     const email = String(getOption('--email') || '').trim().toLowerCase()
     const position = String(getOption('--position') || 'Staff').trim()
@@ -88,7 +123,7 @@ async function run() {
     return
   }
 
-  throw new Error('Usage: node scripts/operator-accounts.js <promote-admin|invite-staff> --confirm [--email recipient] [--position title]')
+  throw new Error('Usage: node scripts/operator-accounts.js <promote-admin|promote-super-admin|invite-staff> --confirm [--email recipient] [--position title]')
 }
 
 try {

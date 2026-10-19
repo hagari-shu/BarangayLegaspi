@@ -473,3 +473,14 @@ test('approval archive and live user search labels are localized', () => {
     assert.ok(locale.archiveRefreshFailed)
   }
 })
+
+test('Super Admin dashboard and monitoring labels are localized', () => {
+  for (const locale of [translations.en, translations.fil]) {
+    assert.ok(locale.superAdminPortal)
+    assert.ok(locale.superAdminConsole)
+    assert.ok(locale.superAdminMonitoring)
+    assert.ok(locale.superAdminMonitoringUnavailable)
+    assert.ok(locale.superAdminAccounts)
+    assert.ok(locale.recentAuditActivity)
+  }
+})

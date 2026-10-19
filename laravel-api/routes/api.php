@@ -33,6 +33,7 @@ Route::middleware('auth.api')->group(function () {
     Route::delete('/staff/archive-file', [ApiController::class, 'deleteStaffArchive'])->middleware('role:admin');
     Route::get('/admin/users', [ApiController::class, 'adminUsers'])->middleware('role:admin');
     Route::get('/admin/audit-logs', [ApiController::class, 'auditLogs'])->middleware('role:admin');
+    Route::get('/super-admin/monitoring', [ApiController::class, 'superAdminMonitoring'])->middleware('role:super_admin');
     Route::get('/admin/summary', [ApiController::class, 'adminSummary'])->middleware('role:admin');
     Route::post('/admin/users', [ApiController::class, 'createAdmin'])->middleware('role:admin');
     Route::patch('/admin/users/{id}', [ApiController::class, 'updateUser'])->middleware('role:admin');

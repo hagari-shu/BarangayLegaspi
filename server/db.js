@@ -574,6 +574,28 @@ export async function promoteExistingUserToAdmin({ email, mobile, auditEntry }) 
   })
 }
 
+export async function promoteExistingUserToSuperAdmin({ email, mobile, auditEntry }) {
+  return serializeProvisioningMutation(async () => {
+    const db = await readDb()
+    const matches = db.users.filter((user) => (
+      String(user.email || '').toLowerCase() === email.toLowerCase()
+      && String(user.mobile || '') === mobile
+    ))
+    if (matches.length !== 1) return { status: 'not_found' }
+
+    const user = matches[0]
+    if (user.role === 'super_admin') return { status: 'already_super_admin', userId: user.id }
+    if (user.role !== 'resident') return { status: 'role_conflict' }
+    if (user.status !== 'Active Resident') return { status: 'account_unverified' }
+
+    user.role = 'super_admin'
+    db.auditLogs = Array.isArray(db.auditLogs) ? db.auditLogs : []
+    db.auditLogs.push(auditEntry(user.id, 'resident'))
+    await writeDb(db)
+    return { status: 'promoted', userId: user.id }
+  })
+}
+
 export async function listAuditLogs(limit = 100) {
   const db = await readDb()
   return (db.auditLogs || []).slice(-Math.max(1, Math.min(Number(limit) || 100, 500))).reverse()
@@ -904,7 +926,7 @@ export async function archiveProcessedRequestsOlderThan(days = 30) {
 export async function clearData(options = { keepAdmins: true }) {
   const db = await readDb()
   if (options.keepAdmins) {
-    db.users = (db.users || []).filter((u) => ['admin', 'staff'].includes(u.role))
+    db.users = (db.users || []).filter((u) => ['admin', 'super_admin', 'staff'].includes(u.role))
   } else {
     db.users = []
   }

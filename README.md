@@ -60,6 +60,12 @@ Only an authorized deployment operator may provision administrators or issue sta
 
 The production schema is initialized by the Node API at startup. Deploy this code and wait for a healthy service before running either command. The operator commands do not initialize the schema or run the administrator seed, preventing unrelated startup writes. Never pass passwords, database URLs, or invitation tokens as command-line arguments.
 
+#### Super Admin role assignment
+
+`super_admin` is a distinct account role. It retains the existing Admin API and dashboard access and adds a read-only system-monitoring view; regular Admin accounts cannot open that view or modify Super Admin profiles. Neither role can assign account roles through the portal. Super Admin assignment only promotes an existing, active, verified resident whose email and mobile both match; it does not create an account, change credentials, or modify profile details.
+
+The protected `Production account role assignment` GitHub Actions workflow can promote an existing resident to Admin or Super Admin. It runs only when manually dispatched from `main`, uses the protected `production` environment, and requires the environment variable `PRODUCTION_ACCOUNT_WORKFLOW_ENABLED=true`. Configure that environment with required reviewers and the `PRODUCTION_DATABASE_URL` and `PRODUCTION_JWT_SECRET` secrets before enabling the workflow. Review the account holder's identity and obtain the required production approval before dispatching. Inputs are masked in workflow logs. The workflow does not reset passwords or create duplicate accounts; already-assigned Super Admin accounts are left unchanged. Do not enable the workflow or dispatch it until the role-support change has been reviewed and approved for production.
+
 ### Mau assistant maintenance
 
 Mau currently uses client-side, keyword-matched responses; it is not a machine-learning model and does not continuously train on conversations. Adapt it through staff-approved, version-controlled FAQ updates: maintain role- and language-specific intents in `src/mau-responses.js`, keep English and Filipino answers aligned in `src/translations.js`, and add question, role, language, and out-of-scope coverage in `tests/translations.test.js`. Recheck these answers whenever a portal workflow or policy changes, and keep claims about unavailable features explicit.

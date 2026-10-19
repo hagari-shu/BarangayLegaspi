@@ -16,6 +16,14 @@ const sessionKey = 'brgy-legaspi-session'
 const readableTextStorageKey = 'brgy-legaspi-readable-text'
 const getRequestReminderStorageKey = (userId) => `brgy-legaspi-request-reminders:${userId}`
 const API_BASE = (import.meta.env.VITE_API_BASE || (import.meta.env.DEV ? 'http://localhost:3001/api' : '')).replace(/\/$/, '')
+const isAdminRole = (role) => role === 'admin' || role === 'super_admin'
+const getDashboardPath = (role) => role === 'super_admin'
+  ? '/super-admin'
+  : role === 'admin'
+    ? '/admin'
+    : role === 'staff'
+      ? '/staff'
+      : '/dashboard'
 
 if (!API_BASE) {
   throw new Error('VITE_API_BASE must be configured to point to the deployed API base URL, such as https://api.example.com/api.')
@@ -499,7 +507,7 @@ function ProtectedRoute({ isAuthenticated, allowedRoles, userRole, children }) {
   }
 
   if (allowedRoles && !allowedRoles.includes(userRole)) {
-    const fallback = userRole === 'staff' ? '/staff' : userRole === 'admin' ? '/admin' : '/dashboard'
+    const fallback = getDashboardPath(userRole)
     return <Navigate to={fallback} replace />
   }
 
@@ -695,7 +703,7 @@ function LoginPage({ onLogin, language, setLanguage }) {
 
       const nextRole = data.user?.role || 'resident'
       onLogin({ token: data.token, user: data.user, identifier: cleanedIdentifier, role: nextRole, isActive: true })
-      navigate(nextRole === 'staff' ? '/staff' : nextRole === 'admin' ? '/admin' : '/dashboard')
+      navigate(getDashboardPath(nextRole))
     } catch (error) {
       setLoginError(error.message || 'Your login details are not recognized. Please try again.')
     }
@@ -734,7 +742,7 @@ function LoginPage({ onLogin, language, setLanguage }) {
       })
       setMfaState({ required: false, challengeToken: '', identifier: '' })
       setMfaCode('')
-      navigate(nextRole === 'staff' ? '/staff' : nextRole === 'admin' ? '/admin' : '/dashboard')
+      navigate(getDashboardPath(nextRole))
     } catch (error) {
       alert(error.message || 'Your login details are not recognized. Please try again or use the demo account.')
     }
@@ -2362,7 +2370,7 @@ function SettingsPage({ profile, onLogout, language, setLanguage }) {
     }
   }
 
-  const dashboardPath = settingsProfile.role === 'admin' ? '/admin' : settingsProfile.role === 'staff' ? '/staff' : '/dashboard'
+  const dashboardPath = getDashboardPath(settingsProfile.role)
 
   const handlePasswordSubmit = async (event) => {
     event.preventDefault()
@@ -2400,7 +2408,7 @@ function SettingsPage({ profile, onLogout, language, setLanguage }) {
           <img className="seal-logo tiny" src={barangaySeal} alt="Barangay Legaspi official seal" />
           <div>
             <div className="brand-name">Barangay Legaspi</div>
-            <small>{settingsProfile.role === 'admin' ? t.adminPortal : settingsProfile.role === 'staff' ? t.staffPortal : t.residentPortal}</small>
+            <small>{settingsProfile.role === 'super_admin' ? t.superAdminPortal : settingsProfile.role === 'admin' ? t.adminPortal : settingsProfile.role === 'staff' ? t.staffPortal : t.residentPortal}</small>
           </div>
         </div>
         <div className="topbar-actions">
@@ -2928,7 +2936,7 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
         <div className="topbar-actions">
           <LanguageToggle language={language} setLanguage={setLanguage} />
           <Link to="/settings" className="secondary-btn small">{t.settings}</Link>
-          <span className="role-chip">{getDisplayName(currentUser)} • {getStaffPositionLabel(currentUser?.position || (userRole === 'admin' ? t.administrator : 'Staff'), t)}</span>
+          <span className="role-chip">{getDisplayName(currentUser)} • {getStaffPositionLabel(currentUser?.position || (isAdminRole(userRole) ? t.administrator : 'Staff'), t)}</span>
           <button className="logout-btn" type="button" onClick={onLogout}>{t.logout}</button>
         </div>
       </header>
@@ -3588,7 +3596,7 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
                     <h2>{t.staffDirectory}</h2>
                     <span className="soft-label">{staffMembers.length} {t.staffMembersAvailable}</span>
                   </div>
-                  {userRole === 'admin' && <p className="field-note">{t.operatorOnlyAccounts}</p>}
+                  {isAdminRole(userRole) && <p className="field-note">{t.operatorOnlyAccounts}</p>}
 
                   <div className="staff-grid">
                     {staffMembers.map((member) => (
@@ -3606,7 +3614,7 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
                           <p className="contact">{member.mobile}</p>
                           <p className="contact">{member.email}</p>
                         </div>
-                        {userRole === 'admin' && (
+                        {isAdminRole(userRole) && (
                           <button
                             type="button"
                             className="small-action danger"
@@ -3805,7 +3813,7 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
           <pre className="archive-preview">{JSON.stringify(selectedArchive.contents, null, 2)}</pre>
         </WorkflowModal>
       )}
-      {selectedUser && <UserDetailModal user={selectedUser} onClose={() => setSelectedUser(null)} allowEdit={userRole === 'admin'} onUserUpdated={(updated) => {
+      {selectedUser && <UserDetailModal user={selectedUser} onClose={() => setSelectedUser(null)} allowEdit={isAdminRole(userRole)} onUserUpdated={(updated) => {
         setSelectedUser((prev) => ({ ...(prev || {}), ...updated }))
         onStaffMemberUpdated?.(updated)
       }} />}
@@ -3820,6 +3828,55 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
         />
       )}
     </div>
+  )
+}
+
+function SuperAdminMonitoringPanel({ language }) {
+  const t = translations[language] || translations.en
+  const [monitoring, setMonitoring] = useState(null)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    let active = true
+    fetch(`${API_BASE}/super-admin/monitoring`)
+      .then(async (response) => {
+        const data = await response.json().catch(() => ({}))
+        if (!response.ok) throw new Error(data.message || t.superAdminMonitoringUnavailable)
+        if (active) setMonitoring(data)
+      })
+      .catch((loadError) => {
+        console.error('load Super Admin monitoring failed', loadError)
+        if (active) setError(loadError.message || t.superAdminMonitoringUnavailable)
+      })
+
+    return () => { active = false }
+  }, [t.superAdminMonitoringUnavailable])
+
+  return (
+    <article className="panel-card compact-panel" aria-labelledby="super-admin-monitoring-title">
+      <div className="panel-header">
+        <h2 id="super-admin-monitoring-title">{t.superAdminMonitoring}</h2>
+        <span className="soft-label">{t.superAdminMonitoringHint}</span>
+      </div>
+      {error && <p role="alert">{error}</p>}
+      {!monitoring && !error && <p role="status">{t.loading}</p>}
+      {monitoring && (
+        <>
+          <div className="overview-grid">
+            <div className="overview-item"><h4>{t.residents}</h4><p className="overview-value">{monitoring.summary.totalResidents}</p></div>
+            <div className="overview-item"><h4>{t.staffRole}</h4><p className="overview-value">{monitoring.summary.totalStaff}</p></div>
+            <div className="overview-item"><h4>{t.administrator}</h4><p className="overview-value">{monitoring.summary.totalAdmins}</p></div>
+            <div className="overview-item"><h4>{t.superAdminAccounts}</h4><p className="overview-value">{monitoring.summary.totalSuperAdmins}</p></div>
+            <div className="overview-item"><h4>{t.serviceRequests}</h4><p className="overview-value">{monitoring.summary.totalRequests}</p></div>
+            <div className="overview-item"><h4>{t.pending}</h4><p className="overview-value">{monitoring.summary.pendingRequests}</p></div>
+          </div>
+          <h3>{t.recentAuditActivity}</h3>
+          {monitoring.recentActivity.length
+            ? <ul>{monitoring.recentActivity.map((entry, index) => <li key={`${entry.createdAt || 'activity'}-${entry.action}-${index}`}>{entry.action} · {entry.actorRole}</li>)}</ul>
+            : <p>{t.noRecentAuditActivity}</p>}
+        </>
+      )}
+    </article>
   )
 }
 
@@ -3892,6 +3949,7 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
   const residentCount = managedUsers.filter((user) => user.role === 'resident').length
   const staffCount = managedUsers.filter((user) => user.role === 'staff').length
   const admins = managedUsers.filter((user) => user.role === 'admin').length
+  const superAdmins = managedUsers.filter((user) => user.role === 'super_admin').length
   const pending = requests.filter((item) => ['Pending', 'In Review', 'Needs Information'].includes(item.status)).length
   const pendingVerificationUsers = managedUsers.filter((user) => user.role === 'resident' && user.status === 'Pending Verification')
   const approvedUsers = managedUsers.filter((user) => user.role === 'resident' && user.status === 'Active Resident').length
@@ -4266,7 +4324,7 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
           <img className="seal-logo tiny" src={barangaySeal} alt="Barangay Legaspi official seal" />
           <div>
             <div className="brand-name">Barangay Legaspi</div>
-            <small>{t.adminPortal}</small>
+            <small>{currentUser?.role === 'super_admin' ? t.superAdminPortal : t.adminPortal}</small>
           </div>
         </div>
 
@@ -4278,7 +4336,7 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
             <strong>{getDisplayName(currentUser)}</strong>
             <span>{currentUser?.email || currentUser?.mobile || t.administrator}</span>
           </div>
-          <span className="role-chip">{t.adminConsole}</span>
+          <span className="role-chip">{currentUser?.role === 'super_admin' ? t.superAdminConsole : t.adminConsole}</span>
           <button className="logout-btn" type="button" onClick={onLogout}>{t.logout}</button>
         </div>
       </header>
@@ -4355,6 +4413,14 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
               <p>{t.systemOperators}</p>
             </article>
 
+            {currentUser?.role === 'super_admin' && (
+              <article className="stat-card">
+                <div className="stat-header"><span className="label">{t.superAdminAccounts}</span></div>
+                <div className="stat-number">{superAdmins}</div>
+                <p>{t.superAdminMonitoring}</p>
+              </article>
+            )}
+
             <article className="stat-card">
               <div className="stat-header">
                 <span className="label">{t.pending}</span>
@@ -4366,6 +4432,7 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
 
           <div className="dashboard-body">
             <div className="main-column">
+              {activeTab === 'overview' && currentUser?.role === 'super_admin' && <SuperAdminMonitoringPanel language={language} />}
               {activeTab === 'overview' && <CaptainPhotoSettings language={language} />}
               {activeTab === 'overview' && (
                 <article className="panel-card compact-panel">
@@ -5135,7 +5202,7 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
 function MauAssistant({ language, userRole, isAuthenticated, pathname, mobileDashboard }) {
   const t = translations[language] || translations.en
   const isHomepage = !isAuthenticated && pathname === '/'
-  const hasBottomNavigation = ['staff', 'admin'].includes(userRole)
+  const hasBottomNavigation = ['staff', 'admin', 'super_admin'].includes(userRole)
   const [open, setOpen] = useState(false)
   const [question, setQuestion] = useState('')
   const [quickOptionsMinimized, setQuickOptionsMinimized] = useState(() => (
@@ -5393,9 +5460,9 @@ function App() {
 
   useEffect(() => {
     document.documentElement.lang = language
-    const portalLabel = userRole === 'admin' ? t.adminPortal : userRole === 'staff' ? t.staffPortal : t.residentPortal
+    const portalLabel = userRole === 'super_admin' ? t.superAdminPortal : userRole === 'admin' ? t.adminPortal : userRole === 'staff' ? t.staffPortal : t.residentPortal
     document.title = `${t.barangayLegaspi} - ${portalLabel}`
-  }, [language, userRole, t.adminPortal, t.barangayLegaspi, t.residentPortal, t.staffPortal])
+  }, [language, userRole, t.adminPortal, t.barangayLegaspi, t.residentPortal, t.staffPortal, t.superAdminPortal])
 
   useEffect(() => {
     const handleWindowError = (event) => {
@@ -5514,10 +5581,10 @@ function App() {
         }
 
         // staff or admin: load shared staff data and request queue
-        if (['staff', 'admin'].includes(userRole)) {
+        if (['staff', 'admin', 'super_admin'].includes(userRole)) {
           try {
             const [staffRequestsResp, staffMembersResp, announcementsResp] = await Promise.all([
-              userRole === 'admin' ? fetch(`${API_BASE}/staff/requests`) : Promise.resolve(null),
+              isAdminRole(userRole) ? fetch(`${API_BASE}/staff/requests`) : Promise.resolve(null),
               fetch(`${API_BASE}/staff/members`),
               fetch(`${API_BASE}/announcements`),
             ])
@@ -5539,7 +5606,7 @@ function App() {
           }
         }
 
-        if (userRole === 'admin') {
+        if (isAdminRole(userRole)) {
           // admin-only data
           try {
             const [usersResp, residentsResp, reportsResp] = await Promise.all([
@@ -5715,18 +5782,19 @@ function App() {
         </div>
       )}
       <Routes>
-        <Route path="/" element={isAuthenticated ? <Navigate to={userRole === 'staff' ? '/staff' : userRole === 'admin' ? '/admin' : '/dashboard'} replace /> : <LoginPage onLogin={handleLogin} language={language} setLanguage={switchLanguage} />} />
-        <Route path="/register" element={isAuthenticated ? <Navigate to={userRole === 'staff' ? '/staff' : userRole === 'admin' ? '/admin' : '/dashboard'} replace /> : <RegisterPage language={language} setLanguage={switchLanguage} />} />
+        <Route path="/" element={isAuthenticated ? <Navigate to={getDashboardPath(userRole)} replace /> : <LoginPage onLogin={handleLogin} language={language} setLanguage={switchLanguage} />} />
+        <Route path="/register" element={isAuthenticated ? <Navigate to={getDashboardPath(userRole)} replace /> : <RegisterPage language={language} setLanguage={switchLanguage} />} />
         <Route path="/staff-invite" element={<StaffInvitationPage language={language} />} />
         <Route path="/dashboard" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['resident']} userRole={userRole}><DashboardPage profile={profile} requests={requests} services={services} announcements={announcementsData} events={events} payments={payments} onLogout={handleLogout} onProfileUpdated={setProfile} language={language} setLanguage={switchLanguage} /></ProtectedRoute>} />
         <Route path="/requests" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['resident']} userRole={userRole}><RequestsPage requests={requests} onSubmit={handleRequestSubmit} onRequestUpdated={handleRequestUpdated} onLogout={handleLogout} language={language} setLanguage={switchLanguage} userId={session?.user?.id} /></ProtectedRoute>} />
         <Route path="/profile" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['resident']} userRole={userRole}><ProfilePage profile={profile} onLogout={handleLogout} language={language} setLanguage={switchLanguage} /></ProtectedRoute>} />
         <Route path="/payments" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['resident']} userRole={userRole}><PaymentsPage payments={payments} onLogout={handleLogout} language={language} setLanguage={switchLanguage} /></ProtectedRoute>} />
         <Route path="/events" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['resident']} userRole={userRole}><EventsPage events={events} onLogout={handleLogout} language={language} setLanguage={switchLanguage} /></ProtectedRoute>} />
-        <Route path="/settings" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['resident', 'staff', 'admin']} userRole={userRole}><SettingsPage profile={profile} onLogout={handleLogout} language={language} setLanguage={switchLanguage} /></ProtectedRoute>} />
-        <Route path="/staff" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['staff', 'admin']} userRole={userRole}><StaffPage staffMembers={staffMembers} announcements={announcementsData} currentUser={session?.user} userRole={userRole} onProcessRequest={handleRequestStatus} onLogout={handleLogout} onStaffMemberUpdated={handleStaffMemberUpdated} onAddAnnouncement={handleAddAnnouncement} onDeleteAnnouncement={handleDeleteAnnouncement} onRetractAnnouncement={handleRetractAnnouncement} onDeleteStaffMember={handleDeleteStaffMember} language={language} setLanguage={switchLanguage} /></ProtectedRoute>} />
+        <Route path="/settings" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['resident', 'staff', 'admin', 'super_admin']} userRole={userRole}><SettingsPage profile={profile} onLogout={handleLogout} language={language} setLanguage={switchLanguage} /></ProtectedRoute>} />
+        <Route path="/staff" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['staff', 'admin', 'super_admin']} userRole={userRole}><StaffPage staffMembers={staffMembers} announcements={announcementsData} currentUser={session?.user} userRole={userRole} onProcessRequest={handleRequestStatus} onLogout={handleLogout} onStaffMemberUpdated={handleStaffMemberUpdated} onAddAnnouncement={handleAddAnnouncement} onDeleteAnnouncement={handleDeleteAnnouncement} onRetractAnnouncement={handleRetractAnnouncement} onDeleteStaffMember={handleDeleteStaffMember} language={language} setLanguage={switchLanguage} /></ProtectedRoute>} />
         <Route path="/admin" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['admin']} userRole={userRole}><AdminPage users={users} residents={residents} requests={requests} reports={reports} currentUser={session?.user} onLogout={handleLogout} language={language} setLanguage={switchLanguage} /></ProtectedRoute>} />
-        <Route path="*" element={<Navigate to={userRole === 'staff' ? '/staff' : userRole === 'admin' ? '/admin' : '/dashboard'} replace />} />
+        <Route path="/super-admin" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['super_admin']} userRole={userRole}><AdminPage users={users} residents={residents} requests={requests} reports={reports} currentUser={session?.user} onLogout={handleLogout} language={language} setLanguage={switchLanguage} /></ProtectedRoute>} />
+        <Route path="*" element={<Navigate to={getDashboardPath(userRole)} replace />} />
       </Routes>
       <MauAssistant language={language} userRole={userRole} isAuthenticated={isAuthenticated} pathname={location.pathname} mobileDashboard={userRole === 'resident' && location.pathname === '/dashboard'} />
     </>

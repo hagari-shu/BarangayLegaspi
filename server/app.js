@@ -32,6 +32,7 @@ import {
   hashStaffInvitationToken,
   isValidStaffInvitationToken,
 } from './staff-invitations.js'
+import { isAdminRole, isStaffOrAdminRole, isSuperAdminRole } from './rbac.js'
 
 let store = process.env.DATABASE_URL && !IS_TEST_RUN ? pgDb : jsonDb
 
@@ -246,7 +247,11 @@ export function createApp() {
 
   const hasCurrentRole = async (token, roles) => {
     const actor = await getCurrentActor(token)
-    return Boolean(actor && roles.includes(actor.user.role) && !['Suspended', 'Disabled'].includes(actor.user.status))
+    const roleAllowed = actor && (
+      roles.includes(actor.user.role)
+      || (roles.includes('admin') && isAdminRole(actor.user.role))
+    )
+    return Boolean(roleAllowed && !['Suspended', 'Disabled'].includes(actor.user.status))
   }
 
   const deliverAnnouncementChannels = async (announcement, channels, options = {}) => {
@@ -372,7 +377,7 @@ export function createApp() {
     const routeSegment = requestedRoute.split('/').filter(Boolean)[0]
     const route = routeSegment ? `/${routeSegment}` : '/'
     const normalizedRoute = allowedRoutes.has(route) ? route : '/other'
-    const role = ['resident', 'staff', 'admin'].includes(req.body?.role) ? req.body.role : 'unknown'
+    const role = ['resident', 'staff', 'admin', 'super_admin'].includes(req.body?.role) ? req.body.role : 'unknown'
     const language = ['en', 'fil'].includes(req.body?.language) ? req.body.language : 'unknown'
 
     console.warn('client-side error reported', { type, route: normalizedRoute, role, language })
@@ -434,7 +439,7 @@ export function createApp() {
 
     try {
       const actor = await getCurrentActor(token)
-      if (!actor || actor.user.role !== 'admin' || ['Suspended', 'Disabled'].includes(actor.user.status)) {
+      if (!actor || !isAdminRole(actor.user.role) || ['Suspended', 'Disabled'].includes(actor.user.status)) {
         return res.status(403).json({ message: 'Admin access required.' })
       }
       if (!isCaptainPhotoStorageConfigured()) return res.status(503).json({ message: 'Image storage is not configured.' })
@@ -461,7 +466,7 @@ export function createApp() {
 
     try {
       const actor = await getCurrentActor(token)
-      if (!actor || actor.user.role !== 'admin' || ['Suspended', 'Disabled'].includes(actor.user.status)) {
+      if (!actor || !isAdminRole(actor.user.role) || ['Suspended', 'Disabled'].includes(actor.user.status)) {
         return res.status(403).json({ message: 'Admin access required.' })
       }
       if (!isCaptainPhotoStorageConfigured()) return res.status(503).json({ message: 'Image storage is not configured.' })
@@ -695,7 +700,7 @@ export function createApp() {
         })
         return res.status(403).json({ message: 'Your account is disabled. Please contact the barangay office for assistance.' })
       }
-      const isApprovedUser = ['admin', 'staff'].includes(normalizedRole) || ['Administrator', 'On Duty', 'Active Resident'].includes(normalizedStatus)
+      const isApprovedUser = ['admin', 'super_admin', 'staff'].includes(normalizedRole) || ['Administrator', 'On Duty', 'Active Resident'].includes(normalizedStatus)
 
       if (normalizedRole === 'resident' && !isApprovedUser) {
         if (normalizedStatus.toLowerCase() === 'pending verification') {
@@ -1130,7 +1135,7 @@ export function createApp() {
 
     try {
       const actor = await getCurrentActor(token)
-      if (!actor || !['admin', 'staff'].includes(actor.user.role)) {
+      if (!actor || !isStaffOrAdminRole(actor.user.role)) {
         return res.status(403).json({ message: 'Staff access required.' })
       }
       return res.json({
@@ -1158,7 +1163,7 @@ export function createApp() {
     } catch {
       return res.status(401).json({ message: 'Invalid or expired token.' })
     }
-    if (!actor || !['admin', 'staff'].includes(actor.user.role)) {
+    if (!actor || !isStaffOrAdminRole(actor.user.role)) {
       return res.status(403).json({ message: 'Staff access required.' })
     }
 
@@ -1223,7 +1228,7 @@ export function createApp() {
     } catch {
       return res.status(401).json({ message: 'Invalid or expired token.' })
     }
-    if (!actor || !['admin', 'staff'].includes(actor.user.role)) {
+    if (!actor || !isStaffOrAdminRole(actor.user.role)) {
       return res.status(403).json({ message: 'Staff access required.' })
     }
 
@@ -1263,7 +1268,7 @@ export function createApp() {
     } catch {
       return res.status(401).json({ message: 'Invalid or expired token.' })
     }
-    if (!actor || !['admin', 'staff'].includes(actor.user.role)) {
+    if (!actor || !isStaffOrAdminRole(actor.user.role)) {
       return res.status(403).json({ message: 'Staff access required.' })
     }
 
@@ -1349,7 +1354,7 @@ export function createApp() {
 
     try {
       const actor = await getCurrentActor(token)
-      if (!actor || actor.user.role !== 'admin') {
+      if (!actor || !isAdminRole(actor.user.role)) {
         return res.status(403).json({ message: 'Administrator access required.' })
       }
 
@@ -1434,7 +1439,7 @@ export function createApp() {
       console.error('staff dashboard authorization lookup error', error)
       return res.status(500).json({ message: 'Unable to verify staff access.' })
     }
-    if (!actor || !['staff', 'admin'].includes(actor.role) || ['Suspended', 'Disabled'].includes(actor.status)) {
+    if (!actor || !isStaffOrAdminRole(actor.role) || ['Suspended', 'Disabled'].includes(actor.status)) {
       return res.status(403).json({ message: 'Staff access required.' })
     }
 
@@ -1498,7 +1503,7 @@ export function createApp() {
 
     try {
       const actor = await getCurrentActor(token)
-      if (!actor || actor.user.role !== 'admin' || ['Suspended', 'Disabled'].includes(actor.user.status)) {
+      if (!actor || !isAdminRole(actor.user.role) || ['Suspended', 'Disabled'].includes(actor.user.status)) {
         return res.status(403).json({ message: 'Admin access required.' })
       }
 
@@ -1516,7 +1521,7 @@ export function createApp() {
 
     try {
       const actor = await getCurrentActor(token)
-      if (!actor || actor.user.role !== 'admin') return res.status(403).json({ message: 'Admin access required.' })
+      if (!actor || !isAdminRole(actor.user.role)) return res.status(403).json({ message: 'Admin access required.' })
       const logs = await store.listAuditLogs?.(req.query.limit) || []
       return res.json({ logs })
     } catch {
@@ -1549,12 +1554,55 @@ export function createApp() {
           totalResidents: sanitizedUsers.filter((user) => user.role === 'resident').length,
           totalStaff: sanitizedUsers.filter((user) => user.role === 'staff').length,
           totalAdmins: sanitizedUsers.filter((user) => user.role === 'admin').length,
+          totalSuperAdmins: sanitizedUsers.filter((user) => user.role === 'super_admin').length,
           totalRequests: requests.length,
           pendingRequests: requests.filter((item) => ['Pending', 'In Review', 'Needs Information'].includes(item.status)).length,
         },
       })
     } catch {
       return res.status(401).json({ message: 'Invalid or expired token.' })
+    }
+  })
+
+  app.get('/api/super-admin/monitoring', async (req, res) => {
+    const authHeader = req.headers.authorization || ''
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : ''
+    if (!token) return res.status(401).json({ message: 'Authentication required.' })
+
+    let actor
+    try {
+      actor = await getCurrentActor(token)
+    } catch {
+      return res.status(401).json({ message: 'Invalid or expired token.' })
+    }
+    if (!actor) return res.status(401).json({ message: 'Authentication required.' })
+    if (!isSuperAdminRole(actor.user.role)) return res.status(403).json({ message: 'Super Admin access required.' })
+
+    try {
+      const [users, requests, auditLogs] = await Promise.all([
+        store.listAllUsers?.() || [],
+        store.listAllRequests?.() || [],
+        store.listAuditLogs?.(10) || [],
+      ])
+      const visibleUsers = filterVisibleUsers(users)
+      return res.json({
+        summary: {
+          totalResidents: visibleUsers.filter((user) => user.role === 'resident').length,
+          totalStaff: visibleUsers.filter((user) => user.role === 'staff').length,
+          totalAdmins: visibleUsers.filter((user) => user.role === 'admin').length,
+          totalSuperAdmins: visibleUsers.filter((user) => user.role === 'super_admin').length,
+          totalRequests: requests.length,
+          pendingRequests: requests.filter((item) => ['Pending', 'In Review', 'Needs Information'].includes(item.status)).length,
+        },
+        recentActivity: auditLogs.map((entry) => ({
+          action: entry.action,
+          actorRole: entry.actorRole || entry.actor_role || 'unknown',
+          createdAt: entry.createdAt || entry.created_at || null,
+        })),
+      })
+    } catch (error) {
+      console.error('super admin monitoring query failed', error)
+      return res.status(500).json({ message: 'Unable to load Super Admin monitoring data.' })
     }
   })
 
@@ -1604,7 +1652,7 @@ export function createApp() {
       res.status(500).json({ message: 'Unable to verify staff access.' })
       return
     }
-    if (!actor || !['staff', 'admin'].includes(actor.role) || ['Suspended', 'Disabled'].includes(actor.status)) {
+    if (!actor || !isStaffOrAdminRole(actor.role) || ['Suspended', 'Disabled'].includes(actor.status)) {
       res.status(403).json({ message: 'Staff access required.' })
       return
     }
@@ -1656,7 +1704,7 @@ export function createApp() {
     try {
       const payload = verifyToken(token)
       const actor = await store.findUserById?.(payload.sub)
-      if (!actor || !['staff', 'admin'].includes(actor.role) || ['Suspended', 'Disabled'].includes(actor.status)) {
+      if (!actor || !isStaffOrAdminRole(actor.role) || ['Suspended', 'Disabled'].includes(actor.status)) {
         return res.status(403).json({ message: 'Staff access required.' })
       }
 
@@ -1688,7 +1736,7 @@ export function createApp() {
 
     try {
       const actor = await getCurrentActor(token)
-      if (!actor || actor.user.role !== 'admin' || ['Suspended', 'Disabled'].includes(actor.user.status)) {
+      if (!actor || !isAdminRole(actor.user.role) || ['Suspended', 'Disabled'].includes(actor.user.status)) {
         return res.status(403).json({ message: 'Administrator access required.' })
       }
 
@@ -1736,7 +1784,7 @@ export function createApp() {
     } catch {
       return res.status(401).json({ message: 'Invalid or expired token.' })
     }
-    if (!actor || actor.user.role !== 'admin') {
+    if (!actor || !isAdminRole(actor.user.role)) {
       return res.status(403).json({ message: 'Administrator access required.' })
     }
 
@@ -1775,7 +1823,7 @@ export function createApp() {
       return res.status(401).json({ message: 'Invalid or expired token.' })
     }
 
-    if (!actor || actor.user.role !== 'admin') {
+    if (!actor || !isAdminRole(actor.user.role)) {
       return res.status(403).json({ message: 'Administrator access required.' })
     }
 
@@ -1810,7 +1858,7 @@ export function createApp() {
 
     try {
       const actor = await getCurrentActor(token)
-      if (!actor || actor.user.role !== 'admin' || ['Suspended', 'Disabled'].includes(actor.user.status)) {
+      if (!actor || !isAdminRole(actor.user.role) || ['Suspended', 'Disabled'].includes(actor.user.status)) {
         return res.status(403).json({ message: 'Admin access required.' })
       }
 
@@ -1831,7 +1879,7 @@ export function createApp() {
 
     try {
       const actor = await getCurrentActor(token)
-      if (!actor || actor.user.role !== 'admin' || ['Suspended', 'Disabled'].includes(actor.user.status)) {
+      if (!actor || !isAdminRole(actor.user.role) || ['Suspended', 'Disabled'].includes(actor.user.status)) {
         return res.status(403).json({ message: 'Administrator access required.' })
       }
 
@@ -1904,7 +1952,7 @@ export function createApp() {
 
       const actor = await getCurrentActor(token)
       const archives = await store.listArchives?.() || []
-      const visibleArchives = actor?.user.role === 'admin'
+      const visibleArchives = actor && isAdminRole(actor.user.role)
         ? archives
         : archives.filter((archive) => archive.name.startsWith('queue-approvals-'))
       return res.json({ archives: visibleArchives })
@@ -1921,7 +1969,7 @@ export function createApp() {
 
     try {
       const actor = await getCurrentActor(token)
-      if (!actor || !['staff', 'admin'].includes(actor.user.role) || ['Suspended', 'Disabled'].includes(actor.user.status)) {
+      if (!actor || !isStaffOrAdminRole(actor.user.role) || ['Suspended', 'Disabled'].includes(actor.user.status)) {
         return res.status(403).json({ message: 'Staff access required.' })
       }
 
@@ -1929,7 +1977,7 @@ export function createApp() {
       if (!name || typeof name !== 'string' || name.includes('..') || !/^[\w\-.]+$/.test(name)) {
         return res.status(400).json({ message: 'Invalid file name.' })
       }
-      if (actor.user.role !== 'admin' && !name.startsWith('queue-approvals-')) {
+      if (!isAdminRole(actor.user.role) && !name.startsWith('queue-approvals-')) {
         return res.status(403).json({ message: 'This archive is not available to staff.' })
       }
 
@@ -1979,7 +2027,7 @@ export function createApp() {
 
     try {
       const actor = await getCurrentActor(token)
-      if (!actor || actor.user.role !== 'admin' || ['Suspended', 'Disabled'].includes(actor.user.status)) {
+      if (!actor || !isAdminRole(actor.user.role) || ['Suspended', 'Disabled'].includes(actor.user.status)) {
         return res.status(403).json({ message: 'Admin access required.' })
       }
 
@@ -1987,9 +2035,12 @@ export function createApp() {
       if (!existingUser) {
         return res.status(404).json({ message: 'User not found.' })
       }
+      if (existingUser.role === 'super_admin' && !isSuperAdminRole(actor.user.role)) {
+        return res.status(403).json({ message: 'Only a Super Admin can update a Super Admin account.' })
+      }
 
       const nextRole = sanitizeText(req.body?.role || '').toLowerCase() || existingUser.role || 'resident'
-      if (!['resident', 'staff', 'admin'].includes(nextRole)) {
+      if (!['resident', 'staff', 'admin', 'super_admin'].includes(nextRole)) {
         return res.status(400).json({ message: 'Invalid role.' })
       }
       if (nextRole !== existingUser.role) {
@@ -2112,7 +2163,7 @@ export function createApp() {
 
     try {
       const actor = await getCurrentActor(token)
-      if (!actor || actor.user.role !== 'admin') {
+      if (!actor || !isAdminRole(actor.user.role)) {
         return res.status(403).json({ message: 'Admin access required.' })
       }
 
@@ -2472,7 +2523,7 @@ export function createApp() {
     try {
       const payload = verifyToken(token)
       const actor = await store.findUserById?.(payload.sub)
-      if (!actor || !['staff', 'admin'].includes(actor.role) || ['Suspended', 'Disabled'].includes(actor.status)) {
+      if (!actor || !isStaffOrAdminRole(actor.role) || ['Suspended', 'Disabled'].includes(actor.status)) {
         return res.status(403).json({ message: 'Staff access required.' })
       }
 
