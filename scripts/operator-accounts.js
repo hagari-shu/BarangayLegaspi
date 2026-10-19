@@ -97,9 +97,9 @@ async function run() {
     const email = String(process.env.SUPER_ADMIN_INVITATION_EMAIL || '').trim().toLowerCase()
     const publicAppUrl = String(process.env.PUBLIC_APP_URL || 'https://barangay-legaspi.vercel.app').trim()
     if (!emailPattern.test(email)) throw new Error('SUPER_ADMIN_INVITATION_EMAIL must be a valid recipient email.')
-    const deliveryUrl = process.env.SUPER_ADMIN_INVITATION_DELIVERY_URL || ''
-    const deliveryToken = process.env.SUPER_ADMIN_INVITATION_DELIVERY_TOKEN || ''
-    validateSuperAdminInvitationDeliveryConfig({ deliveryUrl, deliveryToken })
+    const apiKey = process.env.RESEND_API_KEY || ''
+    const fromEmail = String(process.env.SUPER_ADMIN_INVITATION_FROM_EMAIL || '').trim()
+    validateSuperAdminInvitationDeliveryConfig({ apiKey, fromEmail })
     const parsedUrl = new URL(publicAppUrl)
     if (
       parsedUrl.protocol !== 'https:'
@@ -121,16 +121,16 @@ async function run() {
     if (result.status !== 'created') throw new Error('Super Admin invitation could not be created; no link was issued.')
     try {
       await deliverSuperAdminInvitation({
-        deliveryUrl,
-        deliveryToken,
+        apiKey,
+        fromEmail,
         email,
         inviteUrl: result.inviteUrl,
         expiresAt: result.expiresAt,
       })
     } catch (error) {
-      throw new Error(`Invitation was created but private delivery failed; the setup link was not printed. Reissue after fixing delivery. ${error.message}`)
+      throw new Error(`Invitation was created but private email delivery failed; the setup link was not printed. Reissue after fixing delivery. ${error.message}`)
     }
-    console.log(`Super Admin setup invitation was privately delivered to the intended account holder. It expires at ${result.expiresAt}. The link was not printed.`)
+    console.log(`Super Admin setup invitation was emailed to the intended account holder. It expires at ${result.expiresAt}. The link was not printed.`)
     return
   }
 
