@@ -260,6 +260,57 @@ class ApiContractTest extends TestCase
             ->assertForbidden();
     }
 
+    public function test_super_admin_setup_invitation_is_single_use_and_stores_only_a_token_hash(): void
+    {
+        $token = str_repeat('A', 43);
+        $tokenHash = hash('sha256', $token);
+        DB::table('super_admin_invitations')->insert([
+            'id' => '00000000-0000-4000-8000-000000000201',
+            'email' => 'invited.super.admin@example.test',
+            'token_hash' => $tokenHash,
+            'issued_at' => now(),
+            'expires_at' => now()->addHours(12),
+        ]);
+
+        $this->postJson('/api/super-admin/invitations/validate', ['token' => $token])
+            ->assertOk()
+            ->assertHeader('Cache-Control', 'no-store')
+            ->assertJsonPath('email', 'invited.super.admin@example.test');
+
+        $this->postJson('/api/super-admin/invitations/accept', [
+            'token' => $token,
+            'firstName' => 'Invited',
+            'lastName' => 'Administrator',
+            'mobile' => '09170000201',
+            'password' => 'Chosen!Password2026',
+        ])->assertCreated()
+            ->assertHeader('Cache-Control', 'no-store');
+
+        $this->assertDatabaseHas('users', [
+            'email' => 'invited.super.admin@example.test',
+            'role' => 'super_admin',
+            'status' => 'Administrator',
+        ]);
+        $this->assertDatabaseHas('super_admin_invitations', [
+            'token_hash' => $tokenHash,
+        ]);
+        $this->assertDatabaseMissing('super_admin_invitations', [
+            'token_hash' => $token,
+        ]);
+        $this->assertDatabaseHas('audit_logs', [
+            'action' => 'super_admin.invitation.accepted',
+            'actor_role' => 'super_admin',
+        ]);
+
+        $this->postJson('/api/super-admin/invitations/accept', [
+            'token' => $token,
+            'firstName' => 'Invited',
+            'lastName' => 'Administrator',
+            'mobile' => '09170000201',
+            'password' => 'Chosen!Password2026',
+        ])->assertStatus(410);
+    }
+
     public function test_quality_assessment_endpoints_are_no_longer_registered(): void
     {
         $this->getJson('/api/quality-assessment')->assertNotFound();

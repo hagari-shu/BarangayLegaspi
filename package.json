@@ -16,6 +16,7 @@
     "accounts:invite-staff": "node scripts/operator-accounts.js invite-staff",
     "accounts:promote-admin": "node scripts/operator-accounts.js promote-admin",
     "accounts:promote-super-admin": "node scripts/operator-accounts.js promote-super-admin",
+    "accounts:invite-super-admin": "node scripts/operator-accounts.js invite-super-admin",
     "mfa:rotate-key": "node scripts/rotate-mfa-encryption.js"
   },
   "dependencies": {

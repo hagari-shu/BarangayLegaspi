@@ -10,14 +10,15 @@ on:
         options:
           - promote-admin
           - promote-super-admin
+          - invite-super-admin
       email:
-        description: Verified account email (must match the existing resident account)
+        description: Account holder email, or existing verified account email for promotion
         type: string
         required: true
       mobile:
-        description: Verified Philippine mobile number (must match the existing resident account)
+        description: Required for promotion; omitted when issuing a Super Admin setup invitation
         type: string
-        required: true
+        required: false
 
 permissions:
   contents: read
@@ -44,22 +45,37 @@ jobs:
             exit 1
           fi
 
-      - name: Mask and validate account identifiers
+      - name: Mask and validate account details
         env:
+          ACCOUNT_ACTION: ${{ inputs.action }}
           ACCOUNT_EMAIL: ${{ inputs.email }}
           ACCOUNT_MOBILE: ${{ inputs.mobile }}
         run: |
           set -euo pipefail
           echo "::add-mask::$ACCOUNT_EMAIL"
-          echo "::add-mask::$ACCOUNT_MOBILE"
           if [[ ! "$ACCOUNT_EMAIL" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]]; then
             echo "Provide a valid account email."
             exit 1
           fi
-          if [[ ! "$ACCOUNT_MOBILE" =~ ^09[0-9]{9}$ ]]; then
-            echo "Provide a valid Philippine mobile number."
-            exit 1
-          fi
+          case "$ACCOUNT_ACTION" in
+            promote-admin|promote-super-admin)
+              echo "::add-mask::$ACCOUNT_MOBILE"
+              if [[ ! "$ACCOUNT_MOBILE" =~ ^09[0-9]{9}$ ]]; then
+                echo "Provide a valid Philippine mobile number for promotion."
+                exit 1
+              fi
+              ;;
+            invite-super-admin)
+              if [[ -n "$ACCOUNT_MOBILE" ]]; then
+                echo "Leave mobile empty for a Super Admin setup invitation; the invitee will set it."
+                exit 1
+              fi
+              ;;
+            *)
+              echo "Unsupported account role action."
+              exit 1
+              ;;
+          esac
 
       - name: Check out approved main branch
         uses: actions/checkout@v4
@@ -87,10 +103,12 @@ jobs:
           ADMIN_MOBILE: ${{ inputs.mobile }}
           SUPER_ADMIN_EMAIL: ${{ inputs.email }}
           SUPER_ADMIN_MOBILE: ${{ inputs.mobile }}
+          SUPER_ADMIN_INVITATION_EMAIL: ${{ inputs.email }}
         run: |
           set -euo pipefail
           case "$ACCOUNT_ACTION" in
             promote-admin) npm run accounts:promote-admin -- --confirm ;;
             promote-super-admin) npm run accounts:promote-super-admin -- --confirm ;;
+            invite-super-admin) npm run accounts:invite-super-admin -- --confirm ;;
             *) echo "Unsupported account role assignment."; exit 1 ;;
           esac
