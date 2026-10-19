@@ -527,12 +527,73 @@ async function optimizeCaptainPhoto(file) {
 
 function CaptainPhotoSettings({ language }) {
   const t = translations[language] || translations.en
-  const [busy, setBusy] = useState(false)
+  const initialProfiles = [
+    { role: 'captain', displayName: '', profileUrl: '', groupUrl: '' },
+    { role: 'secretary', displayName: '', profileUrl: '', groupUrl: '' },
+    { role: 'treasurer', displayName: '', profileUrl: '', groupUrl: '' },
+  ]
+  const [profiles, setProfiles] = useState(initialProfiles)
+  const [loading, setLoading] = useState(true)
+  const [savingRole, setSavingRole] = useState('')
+  const [photoBusyRole, setPhotoBusyRole] = useState('')
+  const [photoVersions, setPhotoVersions] = useState({})
   const [error, setError] = useState('')
-  const [photoVersion, setPhotoVersion] = useState(0)
-  const fileInput = useRef(null)
+  const fileInputs = useRef({})
 
-  const handleUpload = async (event) => {
+  useEffect(() => {
+    let active = true
+    fetch(`${API_BASE}/official-profiles`)
+      .then(async (response) => {
+        const data = await response.json().catch(() => ({}))
+        if (!response.ok || !Array.isArray(data.profiles)) {
+          throw new Error(data.message || t.officialProfilesLoadFailed)
+        }
+        if (active) {
+          setProfiles(data.profiles)
+          setError('')
+        }
+      })
+      .catch((loadError) => {
+        console.error('load official profiles failed', loadError)
+        if (active) setError(t.officialProfilesLoadFailed)
+      })
+      .finally(() => {
+        if (active) setLoading(false)
+      })
+    return () => { active = false }
+  }, [t.officialProfilesLoadFailed])
+
+  const handleSaveProfile = async (event, role) => {
+    event.preventDefault()
+    const profile = profiles.find((item) => item.role === role)
+    if (!profile) return
+
+    setSavingRole(role)
+    setError('')
+    try {
+      const response = await fetch(`${API_BASE}/admin/official-profiles/${role}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          displayName: profile.displayName,
+          profileUrl: profile.profileUrl,
+          groupUrl: profile.groupUrl,
+        }),
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(data.message || t.officialProfileSaveFailed)
+      setProfiles((current) => current.map((item) => item.role === role
+        ? { ...item, ...data.profile }
+        : item))
+    } catch (saveError) {
+      console.error('save official profile failed', saveError)
+      setError(saveError.message || t.officialProfileSaveFailed)
+    } finally {
+      setSavingRole('')
+    }
+  }
+
+  const handleUpload = async (event, role) => {
     const file = event.target.files?.[0]
     event.target.value = ''
     if (!file) return
@@ -545,7 +606,7 @@ function CaptainPhotoSettings({ language }) {
       return
     }
 
-    setBusy(true)
+    setPhotoBusyRole(role)
     setError('')
     try {
       const optimizedPhoto = await optimizeCaptainPhoto(file)
@@ -555,7 +616,8 @@ function CaptainPhotoSettings({ language }) {
       if (optimizedPhoto.size < 1 || optimizedPhoto.size > 5 * 1024 * 1024) {
         throw new Error(t.captainPhotoTooLarge)
       }
-      const linkResponse = await fetch(`${API_BASE}/admin/captain-photo/upload-url`, {
+      const route = `${API_BASE}/admin/official-profiles/${role}/photo`
+      const linkResponse = await fetch(`${route}/upload-url`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ contentType: optimizedPhoto.type }),
@@ -565,73 +627,244 @@ function CaptainPhotoSettings({ language }) {
 
       const form = new FormData()
       for (const [name, value] of Object.entries(upload.fields)) form.append(name, value)
-      form.append('file', optimizedPhoto, 'captain-photo.webp')
+      form.append('file', optimizedPhoto, `${role}-photo.webp`)
       const storageResponse = await fetch(upload.url, { method: 'POST', body: form })
       if (!storageResponse.ok) throw new Error(t.captainPhotoUploadFailed)
 
-      const finalizeResponse = await fetch(`${API_BASE}/admin/captain-photo`, {
+      const finalizeResponse = await fetch(route, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ key: upload.key }),
       })
       const result = await finalizeResponse.json().catch(() => ({}))
       if (!finalizeResponse.ok) throw new Error(result.message || t.captainPhotoUploadFailed)
-      setPhotoVersion(Date.now())
+      setPhotoVersions((current) => ({ ...current, [role]: Date.now() }))
     } catch (uploadError) {
-      console.error('upload captain photo failed', uploadError)
+      console.error('upload official profile photo failed', uploadError)
       setError(uploadError.message || t.captainPhotoUploadFailed)
     } finally {
-      setBusy(false)
+      setPhotoBusyRole('')
     }
   }
 
-  const handleRemove = async () => {
+  const handleRemove = async (role) => {
+    setPhotoBusyRole(role)
+    setError('')
+    try {
+      const response = await fetch(`${API_BASE}/admin/official-profiles/${role}/photo`, { method: 'DELETE' })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(data.message || t.captainPhotoUploadFailed)
+      setPhotoVersions((current) => ({ ...current, [role]: Date.now() }))
+    } catch (removeError) {
+      console.error('remove official profile photo failed', removeError)
+      setError(removeError.message || t.captainPhotoUploadFailed)
+    } finally {
+      setPhotoBusyRole('')
+    }
+  }
+
+  const labels = {
+    captain: t.barangayCaptainRole,
+    secretary: t.secretaryRole,
+    treasurer: t.treasurerRole,
+  }
+
+  return (
+    <article className="panel-card official-profile-settings">
+      <div className="panel-header">
+        <h2>{t.officialProfilesTitle}</h2>
+        <span className="soft-label">{t.captainPhotoStorageHint}</span>
+      </div>
+      {loading && <p role="status">{t.loadingRequests}</p>}
+      <div className="official-profile-settings-grid">
+        {profiles.map((profile) => (
+          <form key={profile.role} className="official-profile-editor" onSubmit={(event) => handleSaveProfile(event, profile.role)}>
+            <h3>{labels[profile.role]}</h3>
+            <label>
+              {t.officialNameLabel}
+              <input
+                maxLength={120}
+                value={profile.displayName || ''}
+                onChange={(event) => setProfiles((current) => current.map((item) => item.role === profile.role
+                  ? { ...item, displayName: event.target.value }
+                  : item))}
+              />
+            </label>
+            <label>
+              {t.officialProfileLinkLabel}
+              <input
+                type="url"
+                placeholder="https://"
+                value={profile.profileUrl || ''}
+                onChange={(event) => setProfiles((current) => current.map((item) => item.role === profile.role
+                  ? { ...item, profileUrl: event.target.value }
+                  : item))}
+              />
+            </label>
+            <label>
+              {t.officialGroupLinkLabel}
+              <input
+                type="url"
+                placeholder="https://"
+                value={profile.groupUrl || ''}
+                onChange={(event) => setProfiles((current) => current.map((item) => item.role === profile.role
+                  ? { ...item, groupUrl: event.target.value }
+                  : item))}
+              />
+            </label>
+            <div className="official-profile-photo-row">
+              <img
+                key={photoVersions[profile.role] || 'initial'}
+                src={`${API_BASE}/official-profiles/${profile.role}/photo?v=${photoVersions[profile.role] || 0}`}
+                alt=""
+                onError={(event) => { event.currentTarget.hidden = true }}
+              />
+              <input
+                ref={(element) => { fileInputs.current[profile.role] = element }}
+                type="file"
+                accept="image/jpeg,image/png,image/webp"
+                aria-label={t.officialProfilePhotoLabel.replace('{role}', labels[profile.role])}
+                disabled={photoBusyRole === profile.role}
+                onChange={(event) => handleUpload(event, profile.role)}
+              />
+              <button
+                className="secondary-btn small"
+                type="button"
+                disabled={photoBusyRole === profile.role}
+                onClick={() => fileInputs.current[profile.role]?.click()}
+              >
+                {photoBusyRole === profile.role ? t.captainPhotoUploading : t.captainPhotoChoose}
+              </button>
+              <button
+                className="secondary-btn small"
+                type="button"
+                disabled={photoBusyRole === profile.role}
+                onClick={() => handleRemove(profile.role)}
+              >
+                {t.captainPhotoRemove}
+              </button>
+            </div>
+            <button className="primary-btn small" type="submit" disabled={savingRole === profile.role || loading}>
+              {savingRole === profile.role ? t.saving : t.saveChanges}
+            </button>
+          </form>
+        ))}
+      </div>
+      {error && <p className="captain-photo-error" role="alert">{error}</p>}
+    </article>
+  )
+}
+
+function StaffTemporaryAccessPage({ onLogin, language, setLanguage }) {
+  const navigate = useNavigate()
+  const t = translations[language] || translations.en
+  const [challengeToken, setChallengeToken] = useState('')
+  const [mfaCode, setMfaCode] = useState('')
+  const [busy, setBusy] = useState(true)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    let active = true
+    const accessToken = window.location.hash.slice(1)
+    window.history.replaceState(window.history.state, '', `${window.location.pathname}${window.location.search}`)
+
+    if (!/^[0-9a-f]{64}$/i.test(accessToken)) {
+      setError(t.staffAccessInvalid)
+      setBusy(false)
+      return () => { active = false }
+    }
+
+    fetch(`${API_BASE}/staff/temporary-access/redeem`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: accessToken }),
+    })
+      .then(async (response) => {
+        const data = await response.json().catch(() => ({}))
+        if (!response.ok) throw new Error(data.message || t.staffAccessInvalid)
+        if (data.requiresMfa) {
+          if (active) setChallengeToken(data.challengeToken)
+          return
+        }
+        if (!data.token || data.user?.role !== 'staff') throw new Error(t.staffAccessInvalid)
+        if (active) {
+          onLogin({ token: data.token, user: data.user, identifier: data.user.email, role: 'staff', isActive: true })
+          navigate('/staff', { replace: true })
+        }
+      })
+      .catch((redeemError) => {
+        if (active) setError(redeemError.message || t.staffAccessInvalid)
+      })
+      .finally(() => {
+        if (active) setBusy(false)
+      })
+
+    return () => { active = false }
+  }, [navigate, onLogin, t.staffAccessInvalid])
+
+  const handleMfaSubmit = async (event) => {
+    event.preventDefault()
+    if (!/^\d{6}$/.test(mfaCode.trim())) {
+      setError(t.mfaInvalid)
+      return
+    }
+
     setBusy(true)
     setError('')
     try {
-      const response = await fetch(`${API_BASE}/admin/captain-photo`, { method: 'DELETE' })
+      const response = await fetch(`${API_BASE}/login/mfa`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ challengeToken, code: mfaCode.trim() }),
+      })
       const data = await response.json().catch(() => ({}))
-      if (!response.ok) throw new Error(data.message || t.captainPhotoUploadFailed)
-      setPhotoVersion(Date.now())
-    } catch (removeError) {
-      console.error('remove captain photo failed', removeError)
-      setError(removeError.message || t.captainPhotoUploadFailed)
+      if (!response.ok) throw new Error(data.message || t.mfaInvalid)
+      if (!data.token || data.user?.role !== 'staff') throw new Error(t.staffAccessInvalid)
+      onLogin({ token: data.token, user: data.user, identifier: data.user.email, role: 'staff', isActive: true })
+      navigate('/staff', { replace: true })
+    } catch (submitError) {
+      setError(submitError.message || t.mfaInvalid)
     } finally {
       setBusy(false)
     }
   }
 
   return (
-    <article className="panel-card captain-photo-settings">
-      <div>
-        <h2>{t.captainPhotoSettings}</h2>
-        <p>{t.captainPhotoStorageHint}</p>
-        <input
-          ref={fileInput}
-          type="file"
-          accept="image/jpeg,image/png,image/webp"
-          aria-label={t.captainPhotoLabel}
-          disabled={busy}
-          onChange={handleUpload}
-        />
-        <div className="captain-photo-settings-actions">
-          <button className="primary-btn small" type="button" disabled={busy} onClick={() => fileInput.current?.click()}>
-            {busy ? t.captainPhotoUploading : t.captainPhotoChoose}
-          </button>
-          <button className="secondary-btn small" type="button" disabled={busy} onClick={handleRemove}>
-            {t.captainPhotoRemove}
-          </button>
-        </div>
+    <main className="login-screen staff-access-screen">
+      <section className="login-card" aria-labelledby="staff-access-title">
+        <LanguageToggle language={language} setLanguage={setLanguage} />
+        <h1 id="staff-access-title">{t.staffTemporaryAccess}</h1>
+        {busy && <p role="status">{t.loadingRequests}</p>}
+        {challengeToken && !busy && (
+          <form onSubmit={handleMfaSubmit}>
+            <p>{t.mfaHelper}</p>
+            <label htmlFor="staff-temporary-mfa-code">{t.mfaCodeLabel}</label>
+            <input
+              id="staff-temporary-mfa-code"
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              maxLength={6}
+              value={mfaCode}
+              onChange={(event) => setMfaCode(event.target.value.replace(/\D/g, ''))}
+            />
+            <button className="primary-btn" type="submit" disabled={busy}>{t.mfaVerify}</button>
+          </form>
+        )}
         {error && <p className="captain-photo-error" role="alert">{error}</p>}
-      </div>
-      <img key={photoVersion} src={`${API_BASE}/captain-photo?v=${photoVersion}`} alt={t.captainPortraitAlt} onError={(event) => { event.currentTarget.hidden = true }} />
-    </article>
+        <Link to="/" className="secondary-btn small">{t.backToPortal.replace('{portal}', t.residentPortal)}</Link>
+      </section>
+    </main>
   )
 }
 
 function LoginPage({ onLogin, language, setLanguage }) {
   const navigate = useNavigate()
   const t = translations[language] || translations.en
+  const [officialProfiles, setOfficialProfiles] = useState([
+    { role: 'captain', displayName: '', profileUrl: '', groupUrl: '' },
+    { role: 'secretary', displayName: '', profileUrl: '', groupUrl: '' },
+    { role: 'treasurer', displayName: '', profileUrl: '', groupUrl: '' },
+  ])
   const [form, setForm] = useState({
     identifier: '',
     password: '',
@@ -646,6 +879,21 @@ function LoginPage({ onLogin, language, setLanguage }) {
   const [resetRequested, setResetRequested] = useState(false)
   const [resetting, setResetting] = useState(false)
   const [captainPhotoAvailable, setCaptainPhotoAvailable] = useState(true)
+  const captainProfile = officialProfiles.find((profile) => profile.role === 'captain')
+
+  useEffect(() => {
+    let active = true
+    fetch(`${API_BASE}/official-profiles`)
+      .then(async (response) => {
+        const data = await response.json().catch(() => ({}))
+        if (!response.ok || !Array.isArray(data.profiles)) {
+          throw new Error(data.message || t.officialProfilesLoadFailed)
+        }
+        if (active) setOfficialProfiles(data.profiles)
+      })
+      .catch((error) => console.error('load public official profiles failed', error))
+    return () => { active = false }
+  }, [t.officialProfilesLoadFailed])
 
   const handleChange = (event) => {
     const { name, value, type, checked } = event.target
@@ -832,7 +1080,7 @@ function LoginPage({ onLogin, language, setLanguage }) {
               <div className="captain-photo-picker">
                 {captainPhotoAvailable ? (
                   <img
-                    src={`${API_BASE}/captain-photo`}
+                    src={`${API_BASE}/official-profiles/captain/photo`}
                     alt={t.captainPortraitAlt}
                     onError={() => setCaptainPhotoAvailable(false)}
                   />
@@ -846,10 +1094,36 @@ function LoginPage({ onLogin, language, setLanguage }) {
               </div>
               <div className="captain-details">
                 <span className="captain-role">{t.captainRole}</span>
-                <strong>Arnold C. Cabaong</strong>
+                {captainProfile?.displayName && <strong>{captainProfile.displayName}</strong>}
                 <span className="captain-location">{t.captainLocation}</span>
+                <div className="official-profile-links">
+                  {captainProfile?.profileUrl && <a href={captainProfile.profileUrl} target="_blank" rel="noopener noreferrer">{t.officialProfileLinkLabel}</a>}
+                  {captainProfile?.groupUrl && <a href={captainProfile.groupUrl} target="_blank" rel="noopener noreferrer">{t.officialGroupLinkLabel}</a>}
+                </div>
               </div>
             </section>
+            <div className="official-profile-list" aria-label={t.officialProfilesTitle}>
+              {officialProfiles.filter((profile) => profile.role !== 'captain').map((profile) => {
+                const roleLabel = profile.role === 'secretary' ? t.secretaryRole : t.treasurerRole
+                return (
+                  <article className="official-profile-public-card" key={profile.role}>
+                    <img
+                      src={`${API_BASE}/official-profiles/${profile.role}/photo`}
+                      alt=""
+                      onError={(event) => { event.currentTarget.hidden = true }}
+                    />
+                    <div>
+                      <span className="captain-role">{roleLabel}</span>
+                      {profile.displayName && <strong>{profile.displayName}</strong>}
+                      <div className="official-profile-links">
+                        {profile.profileUrl && <a href={profile.profileUrl} target="_blank" rel="noopener noreferrer">{t.officialProfileLinkLabel}</a>}
+                        {profile.groupUrl && <a href={profile.groupUrl} target="_blank" rel="noopener noreferrer">{t.officialGroupLinkLabel}</a>}
+                      </div>
+                    </div>
+                  </article>
+                )
+              })}
+            </div>
             <div className="brand-social-links" aria-label={t.socialMediaLinks}>
               <a
                 className="social-reference-link"
@@ -3835,6 +4109,7 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
   const [staffPasswordResetTarget, setStaffPasswordResetTarget] = useState(null)
   const [staffPasswordResetForm, setStaffPasswordResetForm] = useState({ password: '', confirmPassword: '' })
   const [resettingStaffPassword, setResettingStaffPassword] = useState(false)
+  const [issuingTemporaryAccessId, setIssuingTemporaryAccessId] = useState('')
   const [staffPresence, setStaffPresence] = useState([])
   const [staffPresenceError, setStaffPresenceError] = useState('')
   const [selectedZone, setSelectedZone] = useState('all')
@@ -3980,6 +4255,21 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
       alert(error.message || t.staffPasswordResetFailed)
     } finally {
       setResettingStaffPassword(false)
+    }
+  }
+
+  const handleIssueStaffTemporaryAccess = async (user) => {
+    if (!window.confirm(t.staffTemporaryAccessConfirm.replace('{name}', getDisplayName(user)))) return
+    setIssuingTemporaryAccessId(user.id)
+    try {
+      const response = await fetch(`${API_BASE}/admin/staff/${user.id}/temporary-access`, { method: 'POST' })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(data.message || t.staffTemporaryAccessFailed)
+      alert(`${t.staffTemporaryAccessQueued} ${new Date(data.expiresAt).toLocaleString()}`)
+    } catch (error) {
+      alert(error.message || t.staffTemporaryAccessFailed)
+    } finally {
+      setIssuingTemporaryAccessId('')
     }
   }
 
@@ -4717,16 +5007,26 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
                                     )}
                                   </td>
                                   <td>
-                                    <button
-                                      type="button"
-                                      className="secondary-btn small"
-                                      onClick={() => {
-                                        setStaffPasswordResetForm({ password: '', confirmPassword: '' })
-                                        setStaffPasswordResetTarget(user)
-                                      }}
-                                    >
-                                      {t.resetStaffPassword}
-                                    </button>
+                                    <div className="staff-access-actions">
+                                      <button
+                                        type="button"
+                                        className="secondary-btn small"
+                                        onClick={() => {
+                                          setStaffPasswordResetForm({ password: '', confirmPassword: '' })
+                                          setStaffPasswordResetTarget(user)
+                                        }}
+                                      >
+                                        {t.resetStaffPassword}
+                                      </button>
+                                      <button
+                                        type="button"
+                                        className="secondary-btn small"
+                                        disabled={issuingTemporaryAccessId === user.id || !user.email}
+                                        onClick={() => handleIssueStaffTemporaryAccess(user)}
+                                      >
+                                        {issuingTemporaryAccessId === user.id ? t.captainPhotoUploading : t.staffTemporaryAccess}
+                                      </button>
+                                    </div>
                                   </td>
                                 </tr>
                               )
@@ -5718,6 +6018,7 @@ function App() {
         <Route path="/" element={isAuthenticated ? <Navigate to={userRole === 'staff' ? '/staff' : userRole === 'admin' ? '/admin' : '/dashboard'} replace /> : <LoginPage onLogin={handleLogin} language={language} setLanguage={switchLanguage} />} />
         <Route path="/register" element={isAuthenticated ? <Navigate to={userRole === 'staff' ? '/staff' : userRole === 'admin' ? '/admin' : '/dashboard'} replace /> : <RegisterPage language={language} setLanguage={switchLanguage} />} />
         <Route path="/staff-invite" element={<StaffInvitationPage language={language} />} />
+        <Route path="/staff-access" element={<StaffTemporaryAccessPage onLogin={handleLogin} language={language} setLanguage={switchLanguage} />} />
         <Route path="/dashboard" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['resident']} userRole={userRole}><DashboardPage profile={profile} requests={requests} services={services} announcements={announcementsData} events={events} payments={payments} onLogout={handleLogout} onProfileUpdated={setProfile} language={language} setLanguage={switchLanguage} /></ProtectedRoute>} />
         <Route path="/requests" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['resident']} userRole={userRole}><RequestsPage requests={requests} onSubmit={handleRequestSubmit} onRequestUpdated={handleRequestUpdated} onLogout={handleLogout} language={language} setLanguage={switchLanguage} userId={session?.user?.id} /></ProtectedRoute>} />
         <Route path="/profile" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['resident']} userRole={userRole}><ProfilePage profile={profile} onLogout={handleLogout} language={language} setLanguage={switchLanguage} /></ProtectedRoute>} />

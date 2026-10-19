@@ -4,11 +4,11 @@ import { createServer } from 'node:http'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { createApp, seedDemoResident } from '../server/app.js'
-import { hashPassword } from '../server/auth.js'
+import { hashPassword, verifyToken } from '../server/auth.js'
 import * as jsonDb from '../server/db.js'
 import { DB_PATH } from '../server/config.js'
 import { isCaptainPhotoStorageConfigured } from '../server/captain-photo-storage.js'
-import { createHmac, randomUUID } from 'node:crypto'
+import { createHash, createHmac, randomUUID } from 'node:crypto'
 import { createTotpSecret, encryptTotpSecret } from '../server/mfa.js'
 import { registryAgeDateRange } from '../server/resident-registry.js'
 
@@ -1353,6 +1353,322 @@ test('captain photo upload links require an administrator and bounded object sto
     await new Promise((resolve, reject) => {
       server.close((error) => (error ? reject(error) : resolve()))
     })
+  }
+})
+
+test('Admin-issued Staff temporary access is emailed, single-use, time-limited, and Staff-only', async () => {
+  const { server, baseUrl } = await createTestServer()
+  const deliveryPayloads = []
+  const deliveryServer = createServer((request, response) => {
+    let body = ''
+    request.on('data', (chunk) => { body += chunk })
+    request.on('end', () => {
+      deliveryPayloads.push(JSON.parse(body))
+      response.writeHead(202)
+      response.end()
+    })
+  })
+  await new Promise((resolve) => deliveryServer.listen(0, '127.0.0.1', resolve))
+  const originalDeliveryUrl = process.env.RESET_DELIVERY_URL
+  const originalDeliveryToken = process.env.RESET_DELIVERY_TOKEN
+  const originalAppUrl = process.env.PUBLIC_APP_URL
+  process.env.RESET_DELIVERY_URL = `http://127.0.0.1:${deliveryServer.address().port}`
+  process.env.RESET_DELIVERY_TOKEN = 'temporary-access-test-token'
+  process.env.PUBLIC_APP_URL = 'https://barangay-legaspi.vercel.app'
+
+  const staff = {
+    id: randomUUID(),
+    firstName: 'Temporary',
+    lastName: 'Access',
+    mobile: `092${Math.floor(10000000 + Math.random() * 90000000)}`,
+    email: `temporary.${Date.now()}@example.com`,
+    passwordHash: await hashPassword('StaffPass123!'),
+    role: 'staff',
+    status: 'On Duty',
+    mfaEnabled: false,
+  }
+
+  try {
+    await jsonDb.saveUser(staff)
+    const login = async (identifier, password) => {
+      const response = await fetch(`${baseUrl}/api/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ identifier, password }),
+      })
+      assert.equal(response.status, 200)
+      return (await response.json()).token
+    }
+    const [adminToken, residentToken] = await Promise.all([
+      login('admin@barangay.gov.ph', 'AdminPass123'),
+      login('maria.delacruz@email.com', 'ResidentPass123!'),
+    ])
+    const endpoint = `${baseUrl}/api/admin/staff/${staff.id}/temporary-access`
+
+    assert.equal((await fetch(endpoint, { method: 'POST' })).status, 401)
+    assert.equal((await fetch(endpoint, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${residentToken}` },
+    })).status, 403)
+
+    const issueResponse = await fetch(endpoint, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${adminToken}` },
+    })
+    assert.equal(issueResponse.status, 202)
+    const issueResult = await issueResponse.json()
+    assert.equal(issueResult.message, 'Temporary access email queued.')
+    const firstDelivery = deliveryPayloads[0]
+    assert.equal(firstDelivery.event, 'staff_temporary_access')
+    assert.equal(firstDelivery.recipient, staff.email)
+    const firstToken = new URL(firstDelivery.metadata.actionUrl).hash.slice(1)
+
+    const secondIssueResponse = await fetch(endpoint, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${adminToken}` },
+    })
+    assert.equal(secondIssueResponse.status, 202)
+    const secondIssueResult = await secondIssueResponse.json()
+    const timeRemaining = new Date(secondIssueResult.expiresAt).getTime() - Date.now()
+    assert.ok(timeRemaining <= 15 * 60 * 1000 && timeRemaining > 14 * 60 * 1000)
+    const deliveryPayload = deliveryPayloads[1]
+    assert.equal(deliveryPayload.event, 'staff_temporary_access')
+    assert.equal(deliveryPayload.recipient, staff.email)
+    const actionUrl = new URL(deliveryPayload.metadata.actionUrl)
+    assert.equal(actionUrl.pathname, '/staff-access')
+    const accessToken = actionUrl.hash.slice(1)
+    assert.match(accessToken, /^[0-9a-f]{64}$/)
+    assert.equal(new Date(issueResult.expiresAt).getTime() - Date.now() <= 15 * 60 * 1000, true)
+
+    const stored = await jsonDb.readDb()
+    assert.equal(stored.staffTemporaryAccessGrants.length, 2)
+    assert.equal(stored.staffTemporaryAccessGrants[0].tokenHash, createHash('sha256').update(firstToken).digest('hex'))
+    assert.ok(stored.staffTemporaryAccessGrants[0].revokedAt)
+    assert.equal(stored.staffTemporaryAccessGrants[1].tokenHash, createHash('sha256').update(accessToken).digest('hex'))
+    assert.equal(JSON.stringify(stored).includes(accessToken), false)
+
+    const redeem = (value) => fetch(`${baseUrl}/api/staff/temporary-access/redeem`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: value }),
+    })
+    assert.equal((await redeem(firstToken)).status, 401)
+    const redeemResponse = await redeem(accessToken)
+    assert.equal(redeemResponse.status, 200)
+    const session = await redeemResponse.json()
+    assert.equal(session.user.role, 'staff')
+    const sessionClaims = verifyToken(session.token)
+    assert.equal(sessionClaims.role, 'staff')
+    assert.ok(sessionClaims.exp * 1000 <= new Date(secondIssueResult.expiresAt).getTime())
+    assert.equal((await fetch(`${baseUrl}/api/staff/members`, {
+      headers: { Authorization: `Bearer ${session.token}` },
+    })).status, 200)
+    assert.equal((await fetch(`${baseUrl}/api/admin/users`, {
+      headers: { Authorization: `Bearer ${session.token}` },
+    })).status, 403)
+    assert.equal((await redeem(accessToken)).status, 401)
+
+    const auditLog = await jsonDb.readDb()
+    assert.equal(auditLog.auditLogs.filter((entry) => entry.action === 'staff.temporary_access.issued').length, 2)
+    assert.ok(auditLog.auditLogs.some((entry) => entry.action === 'staff.temporary_access.redeemed'))
+  } finally {
+    if (originalDeliveryUrl === undefined) delete process.env.RESET_DELIVERY_URL
+    else process.env.RESET_DELIVERY_URL = originalDeliveryUrl
+    if (originalDeliveryToken === undefined) delete process.env.RESET_DELIVERY_TOKEN
+    else process.env.RESET_DELIVERY_TOKEN = originalDeliveryToken
+    if (originalAppUrl === undefined) delete process.env.PUBLIC_APP_URL
+    else process.env.PUBLIC_APP_URL = originalAppUrl
+    await Promise.all([
+      new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve())),
+      new Promise((resolve, reject) => deliveryServer.close((error) => error ? reject(error) : resolve())),
+    ])
+  }
+})
+
+test('Staff temporary access keeps enrolled MFA mandatory and does not elevate the session', async () => {
+  const { server, baseUrl } = await createTestServer()
+  let deliveryPayload
+  const deliveryServer = createServer((request, response) => {
+    let body = ''
+    request.on('data', (chunk) => { body += chunk })
+    request.on('end', () => {
+      deliveryPayload = JSON.parse(body)
+      response.writeHead(202)
+      response.end()
+    })
+  })
+  await new Promise((resolve) => deliveryServer.listen(0, '127.0.0.1', resolve))
+  const originalDeliveryUrl = process.env.RESET_DELIVERY_URL
+  const originalDeliveryToken = process.env.RESET_DELIVERY_TOKEN
+  process.env.RESET_DELIVERY_URL = `http://127.0.0.1:${deliveryServer.address().port}`
+  process.env.RESET_DELIVERY_TOKEN = 'temporary-access-test-token'
+  const totpSecret = createTotpSecret()
+  const staff = {
+    id: randomUUID(),
+    firstName: 'Mfa',
+    lastName: 'Staff',
+    mobile: `092${Math.floor(10000000 + Math.random() * 90000000)}`,
+    email: `mfa.staff.${Date.now()}@example.com`,
+    passwordHash: await hashPassword('StaffPass123!'),
+    role: 'staff',
+    status: 'On Duty',
+    mfaEnabled: true,
+    mfaSecret: encryptTotpSecret(totpSecret),
+    mfaLastStep: 0,
+  }
+
+  try {
+    await jsonDb.saveUser(staff)
+    const adminResponse = await fetch(`${baseUrl}/api/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ identifier: 'admin@barangay.gov.ph', password: 'AdminPass123' }),
+    })
+    const adminToken = (await adminResponse.json()).token
+    const issueResponse = await fetch(`${baseUrl}/api/admin/staff/${staff.id}/temporary-access`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${adminToken}` },
+    })
+    assert.equal(issueResponse.status, 202)
+    const accessToken = new URL(deliveryPayload.metadata.actionUrl).hash.slice(1)
+    const redeemResponse = await fetch(`${baseUrl}/api/staff/temporary-access/redeem`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: accessToken }),
+    })
+    assert.equal(redeemResponse.status, 200)
+    const challenge = await redeemResponse.json()
+    assert.equal(challenge.requiresMfa, true)
+    assert.equal(typeof challenge.challengeToken, 'string')
+
+    const mfaResponse = await fetch(`${baseUrl}/api/login/mfa`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ challengeToken: challenge.challengeToken, code: createTotpCode(totpSecret) }),
+    })
+    assert.equal(mfaResponse.status, 200)
+    const session = await mfaResponse.json()
+    assert.equal(session.user.role, 'staff')
+    assert.equal((await fetch(`${baseUrl}/api/admin/users`, {
+      headers: { Authorization: `Bearer ${session.token}` },
+    })).status, 403)
+    assert.equal((await fetch(`${baseUrl}/api/staff/members`, {
+      headers: { Authorization: `Bearer ${session.token}` },
+    })).status, 200)
+    assert.equal((await fetch(`${baseUrl}/api/login/mfa`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ challengeToken: challenge.challengeToken, code: createTotpCode(totpSecret) }),
+    })).status, 401)
+  } finally {
+    if (originalDeliveryUrl === undefined) delete process.env.RESET_DELIVERY_URL
+    else process.env.RESET_DELIVERY_URL = originalDeliveryUrl
+    if (originalDeliveryToken === undefined) delete process.env.RESET_DELIVERY_TOKEN
+    else process.env.RESET_DELIVERY_TOKEN = originalDeliveryToken
+    await Promise.all([
+      new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve())),
+      new Promise((resolve, reject) => deliveryServer.close((error) => error ? reject(error) : resolve())),
+    ])
+  }
+})
+
+test('temporary access delivery failure revokes the pending grant', async () => {
+  const { server, baseUrl } = await createTestServer()
+  const deliveryServer = createServer((_request, response) => {
+    response.writeHead(503)
+    response.end()
+  })
+  await new Promise((resolve) => deliveryServer.listen(0, '127.0.0.1', resolve))
+  const originalDeliveryUrl = process.env.RESET_DELIVERY_URL
+  const originalDeliveryToken = process.env.RESET_DELIVERY_TOKEN
+  process.env.RESET_DELIVERY_URL = `http://127.0.0.1:${deliveryServer.address().port}`
+  process.env.RESET_DELIVERY_TOKEN = 'temporary-access-test-token'
+  const staff = {
+    id: randomUUID(),
+    firstName: 'Undelivered',
+    lastName: 'Staff',
+    mobile: `092${Math.floor(10000000 + Math.random() * 90000000)}`,
+    email: `undelivered.${Date.now()}@example.com`,
+    passwordHash: await hashPassword('StaffPass123!'),
+    role: 'staff',
+    status: 'On Duty',
+  }
+
+  try {
+    await jsonDb.saveUser(staff)
+    const adminResponse = await fetch(`${baseUrl}/api/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ identifier: 'admin@barangay.gov.ph', password: 'AdminPass123' }),
+    })
+    const adminToken = (await adminResponse.json()).token
+    const response = await fetch(`${baseUrl}/api/admin/staff/${staff.id}/temporary-access`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${adminToken}` },
+    })
+    assert.equal(response.status, 502)
+    const db = await jsonDb.readDb()
+    assert.equal(db.staffTemporaryAccessGrants.length, 1)
+    assert.ok(db.staffTemporaryAccessGrants[0].revokedAt)
+  } finally {
+    if (originalDeliveryUrl === undefined) delete process.env.RESET_DELIVERY_URL
+    else process.env.RESET_DELIVERY_URL = originalDeliveryUrl
+    if (originalDeliveryToken === undefined) delete process.env.RESET_DELIVERY_TOKEN
+    else process.env.RESET_DELIVERY_TOKEN = originalDeliveryToken
+    await Promise.all([
+      new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve())),
+      new Promise((resolve, reject) => deliveryServer.close((error) => error ? reject(error) : resolve())),
+    ])
+  }
+})
+
+test('public officer profiles are blank-ready and editable only by Admin over HTTPS', async () => {
+  const { server, baseUrl } = await createTestServer()
+
+  try {
+    const profilesResponse = await fetch(`${baseUrl}/api/official-profiles`)
+    assert.equal(profilesResponse.status, 200)
+    const initial = await profilesResponse.json()
+    assert.equal(initial.profiles.find((profile) => profile.role === 'captain').displayName, '')
+    assert.equal(initial.profiles.find((profile) => profile.role === 'secretary').displayName, '')
+    assert.equal(initial.profiles.find((profile) => profile.role === 'treasurer').displayName, '')
+
+    const login = async (identifier, password) => {
+      const response = await fetch(`${baseUrl}/api/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ identifier, password }),
+      })
+      return (await response.json()).token
+    }
+    const [adminToken, residentToken] = await Promise.all([
+      login('admin@barangay.gov.ph', 'AdminPass123'),
+      login('maria.delacruz@email.com', 'ResidentPass123!'),
+    ])
+    const endpoint = `${baseUrl}/api/admin/official-profiles/secretary`
+    const body = { displayName: 'Secretary Name', profileUrl: 'https://example.com/profile', groupUrl: 'https://example.com/group' }
+    assert.equal((await fetch(endpoint, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${residentToken}` },
+      body: JSON.stringify(body),
+    })).status, 403)
+    const invalidLinkResponse = await fetch(endpoint, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${adminToken}` },
+      body: JSON.stringify({ ...body, profileUrl: 'javascript:alert(1)' }),
+    })
+    assert.equal(invalidLinkResponse.status, 400)
+    const saveResponse = await fetch(endpoint, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${adminToken}` },
+      body: JSON.stringify(body),
+    })
+    assert.equal(saveResponse.status, 200)
+    const saved = await (await fetch(`${baseUrl}/api/official-profiles`)).json()
+    assert.equal(saved.profiles.find((profile) => profile.role === 'secretary').displayName, 'Secretary Name')
+    assert.equal(saved.profiles.find((profile) => profile.role === 'secretary').profileUrl, body.profileUrl)
+  } finally {
+    await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
   }
 })
 

@@ -94,6 +94,94 @@ export async function saveUser(user) {
   return user
 }
 
+const defaultOfficialProfiles = [
+  { role: 'captain', displayName: '', profileUrl: '', groupUrl: '' },
+  { role: 'secretary', displayName: '', profileUrl: '', groupUrl: '' },
+  { role: 'treasurer', displayName: '', profileUrl: '', groupUrl: '' },
+]
+
+export async function getOfficialProfiles() {
+  const db = await readDb()
+  const profiles = db.officialProfiles || []
+  return defaultOfficialProfiles.map((profile) => {
+    const saved = profiles.find((item) => item.role === profile.role) || {}
+    return {
+      role: profile.role,
+      displayName: saved.displayName ?? profile.displayName,
+      profileUrl: saved.profileUrl || '',
+      groupUrl: saved.groupUrl || '',
+    }
+  })
+}
+
+export async function updateOfficialProfile(role, profile, updatedBy) {
+  const db = await readDb()
+  db.officialProfiles = db.officialProfiles || []
+  const existing = db.officialProfiles.find((item) => item.role === role)
+  const updated = { role, ...profile, updatedBy, updatedAt: new Date().toISOString() }
+  if (existing) Object.assign(existing, updated)
+  else db.officialProfiles.push(updated)
+  await writeDb(db)
+  return updated
+}
+
+export async function createStaffTemporaryAccessGrant(grant) {
+  return serializeProvisioningMutation(async () => {
+    const db = await readDb()
+    const user = db.users.find((item) => item.id === grant.userId)
+    if (!user || user.role !== 'staff' || ['Suspended', 'Disabled'].includes(user.status) || !user.email) {
+      return { status: 'staff_not_available' }
+    }
+
+    db.staffTemporaryAccessGrants = db.staffTemporaryAccessGrants || []
+    const now = Date.now()
+    for (const existing of db.staffTemporaryAccessGrants) {
+      if (
+        existing.userId === grant.userId
+        && !existing.usedAt
+        && !existing.revokedAt
+        && new Date(existing.expiresAt).getTime() > now
+      ) {
+        existing.revokedAt = new Date(now).toISOString()
+      }
+    }
+    db.staffTemporaryAccessGrants.push(grant)
+    await writeDb(db)
+    return { status: 'created' }
+  })
+}
+
+export async function revokeStaffTemporaryAccessGrant(id) {
+  return serializeProvisioningMutation(async () => {
+    const db = await readDb()
+    const grant = (db.staffTemporaryAccessGrants || []).find((item) => item.id === id && !item.usedAt)
+    if (!grant) return false
+    grant.revokedAt = new Date().toISOString()
+    await writeDb(db)
+    return true
+  })
+}
+
+export async function consumeStaffTemporaryAccessGrant(tokenHash) {
+  return serializeProvisioningMutation(async () => {
+    const db = await readDb()
+    const now = Date.now()
+    const grant = (db.staffTemporaryAccessGrants || []).find((item) => (
+      item.tokenHash === tokenHash
+      && !item.usedAt
+      && !item.revokedAt
+      && new Date(item.expiresAt).getTime() > now
+    ))
+    if (!grant) return null
+
+    const user = db.users.find((item) => item.id === grant.userId)
+    if (!user || user.role !== 'staff' || ['Suspended', 'Disabled'].includes(user.status)) return null
+    grant.usedAt = new Date(now).toISOString()
+    await writeDb(db)
+    return { user, expiresAt: grant.expiresAt }
+  })
+}
+
 export async function registerResident(user, auditEntry) {
   return serializeProvisioningMutation(async () => {
     const db = await readDb()
