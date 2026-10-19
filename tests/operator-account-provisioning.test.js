@@ -6,7 +6,12 @@ import { createApp, seedDemoResident } from '../server/app.js'
 import { DB_PATH } from '../server/config.js'
 import * as jsonDb from '../server/db.js'
 import { hashStaffInvitationToken, issueStaffInvitation } from '../server/staff-invitations.js'
-import { hashSuperAdminInvitationToken, issueSuperAdminInvitation } from '../server/super-admin-invitations.js'
+import {
+  deliverSuperAdminInvitation,
+  hashSuperAdminInvitationToken,
+  issueSuperAdminInvitation,
+  validateSuperAdminInvitationDeliveryConfig,
+} from '../server/super-admin-invitations.js'
 
 beforeEach(async () => {
   await fs.mkdir(path.dirname(DB_PATH), { recursive: true })
@@ -202,6 +207,57 @@ test('resident registration cannot claim an email with a pending staff invitatio
   } finally {
     await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
   }
+})
+
+test('Super Admin invitation delivery requires an HTTPS endpoint and bearer token', () => {
+  assert.throws(
+    () => validateSuperAdminInvitationDeliveryConfig({ deliveryUrl: 'http://mail.example.test/invite', deliveryToken: 'token' }),
+    /must use HTTPS/,
+  )
+  assert.throws(
+    () => validateSuperAdminInvitationDeliveryConfig({ deliveryUrl: 'https://user:pass@mail.example.test/invite', deliveryToken: 'token' }),
+    /must use HTTPS/,
+  )
+  assert.throws(
+    () => validateSuperAdminInvitationDeliveryConfig({ deliveryUrl: 'https://mail.example.test/invite', deliveryToken: '' }),
+    /URL and token must be configured/,
+  )
+})
+
+test('Super Admin invitation delivery sends the link privately and rejects failed delivery', async () => {
+  let request
+  await deliverSuperAdminInvitation({
+    deliveryUrl: 'https://mail.example.test/super-admin-invites',
+    deliveryToken: 'delivery-secret',
+    email: 'new.super-admin@example.test',
+    inviteUrl: 'https://barangay-legaspi.vercel.app/super-admin-invite#token=private-token',
+    expiresAt: '2026-10-19T12:00:00.000Z',
+    fetchImpl: async (url, options) => {
+      request = { url: String(url), ...options }
+      return { ok: true, status: 202 }
+    },
+  })
+  assert.equal(request.url, 'https://mail.example.test/super-admin-invites')
+  assert.equal(request.method, 'POST')
+  assert.equal(request.headers.Authorization, 'Bearer delivery-secret')
+  assert.deepEqual(JSON.parse(request.body), {
+    event: 'super_admin_invitation',
+    recipient: 'new.super-admin@example.test',
+    inviteUrl: 'https://barangay-legaspi.vercel.app/super-admin-invite#token=private-token',
+    expiresAt: '2026-10-19T12:00:00.000Z',
+  })
+
+  await assert.rejects(
+    deliverSuperAdminInvitation({
+      deliveryUrl: 'https://mail.example.test/super-admin-invites',
+      deliveryToken: 'delivery-secret',
+      email: 'new.super-admin@example.test',
+      inviteUrl: 'https://barangay-legaspi.vercel.app/super-admin-invite#token=private-token',
+      expiresAt: '2026-10-19T12:00:00.000Z',
+      fetchImpl: async () => ({ ok: false, status: 503 }),
+    }),
+    /failed with status 503/,
+  )
 })
 
 test('protected Super Admin invitation creates a verified administrator account with user-selected credentials', async () => {

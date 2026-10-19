@@ -97,6 +97,8 @@ jobs:
           NODE_ENV: production
           DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
           JWT_SECRET: ${{ secrets.PRODUCTION_JWT_SECRET }}
+          SUPER_ADMIN_INVITATION_DELIVERY_URL: ${{ secrets.SUPER_ADMIN_INVITATION_DELIVERY_URL }}
+          SUPER_ADMIN_INVITATION_DELIVERY_TOKEN: ${{ secrets.SUPER_ADMIN_INVITATION_DELIVERY_TOKEN }}
           CORS_ORIGINS: https://barangay-legaspi.vercel.app
           ACCOUNT_ACTION: ${{ inputs.action }}
           ADMIN_EMAIL: ${{ inputs.email }}
