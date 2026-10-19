@@ -56,7 +56,7 @@ class ApiController extends Controller
         Log::warning('Client-side error reported', [
             'type' => $type,
             'route' => in_array($route, $allowedRoutes, true) ? $route : '/other',
-            'role' => in_array($request->input('role'), ['resident', 'staff', 'admin'], true) ? $request->input('role') : 'unknown',
+            'role' => in_array($request->input('role'), ['resident', 'staff', 'admin', 'super_admin'], true) ? $request->input('role') : 'unknown',
             'language' => in_array($request->input('language'), ['en', 'fil'], true) ? $request->input('language') : 'unknown',
         ]);
 
@@ -159,7 +159,7 @@ class ApiController extends Controller
         if (in_array($user->status, ['Suspended', 'Disabled'], true)) {
             return response()->json(['message' => 'Your account is disabled. Please contact the barangay office for assistance.'], 403);
         }
-        $approved = in_array($role, ['admin', 'staff'], true)
+        $approved = in_array($role, ['admin', 'super_admin', 'staff'], true)
             || in_array($user->status, ['Administrator', 'On Duty', 'Active Resident'], true);
         if ($role === 'resident' && !$approved) {
             return response()->json(['message' => 'Your account is awaiting administrator approval before you can access the web app.'], 403);
@@ -564,6 +564,7 @@ class ApiController extends Controller
             'totalResidents' => $users->where('role', 'resident')->count(),
             'totalStaff' => $users->where('role', 'staff')->count(),
             'totalAdmins' => $users->where('role', 'admin')->count(),
+            'totalSuperAdmins' => $users->where('role', 'super_admin')->count(),
             'totalRequests' => DB::table('requests')->count(),
             'pendingRequests' => DB::table('requests')->where('status', 'Pending')->count(),
         ]]);
@@ -584,6 +585,33 @@ class ApiController extends Controller
         ]);
 
         return response()->json(['logs' => $logs]);
+    }
+
+    public function superAdminMonitoring(): JsonResponse
+    {
+        $users = DB::table('users')->get();
+        $requests = DB::table('requests');
+        $recentActivity = DB::table('audit_logs')
+            ->orderByDesc('created_at')
+            ->limit(10)
+            ->get(['actor_role', 'action', 'created_at'])
+            ->map(fn ($entry) => [
+                'actorRole' => $entry->actor_role ?: 'unknown',
+                'action' => $entry->action,
+                'createdAt' => $entry->created_at,
+            ]);
+
+        return response()->json([
+            'summary' => [
+                'totalResidents' => $users->where('role', 'resident')->count(),
+                'totalStaff' => $users->where('role', 'staff')->count(),
+                'totalAdmins' => $users->where('role', 'admin')->count(),
+                'totalSuperAdmins' => $users->where('role', 'super_admin')->count(),
+                'totalRequests' => (clone $requests)->count(),
+                'pendingRequests' => (clone $requests)->whereIn('status', ['Pending', 'In Review', 'Needs Information'])->count(),
+            ],
+            'recentActivity' => $recentActivity,
+        ]);
     }
 
     public function staffMembers(): JsonResponse
@@ -716,8 +744,14 @@ class ApiController extends Controller
             $validatedHouseholdMembers[] = ['name' => $name, 'relationship' => $relationship];
         }
 
-        if (!in_array($role, ['resident', 'staff', 'admin'], true)) {
+        if (!in_array($role, ['resident', 'staff', 'admin', 'super_admin'], true)) {
             return response()->json(['message' => 'Invalid role.'], 400);
+        }
+        if ($existing->role === 'super_admin' && ($request->attributes->get('actor')->role ?? null) !== 'super_admin') {
+            return response()->json(['message' => 'Only a Super Admin can update a Super Admin account.'], 403);
+        }
+        if ($role !== $existing->role) {
+            return response()->json(['message' => 'Account roles can only be changed by an authorized deployment operator.'], 403);
         }
         if (!$firstName || !$lastName) {
             return response()->json(['message' => 'First name and last name are required.'], 400);
@@ -781,7 +815,7 @@ class ApiController extends Controller
         if (!$target) {
             return response()->json(['message' => 'Staff member not found.'], 404);
         }
-        if ($target->role === 'admin') {
+        if (in_array($target->role, ['admin', 'super_admin'], true)) {
             return response()->json(['message' => 'Administrators cannot be deleted from staff management.'], 403);
         }
         if ($target->role !== 'staff') {
@@ -1108,7 +1142,7 @@ class ApiController extends Controller
     {
         $actor = $request->attributes->get('actor');
         $query = DB::table('archives');
-        if ($actor->role !== 'admin') {
+        if (!$this->isAdminRole($actor->role)) {
             $query->where('category', 'queue-approvals');
         }
         $archives = $query->orderByDesc('created_at')->get()->map(fn ($archive) => [
@@ -1132,7 +1166,7 @@ class ApiController extends Controller
             return $name;
         }
         $actor = $request->attributes->get('actor');
-        if ($actor->role !== 'admin' && !str_starts_with($name, 'queue-approvals-')) {
+        if (!$this->isAdminRole($actor->role) && !str_starts_with($name, 'queue-approvals-')) {
             return response()->json(['message' => 'This archive is not available to staff.'], 403);
         }
 
@@ -1164,7 +1198,7 @@ class ApiController extends Controller
         $keepAdmins = $request->input('keepAdmins', true) !== false;
         DB::transaction(function () use ($keepAdmins) {
             if ($keepAdmins) {
-                DB::table('users')->whereNotIn('role', ['admin', 'staff'])->delete();
+                DB::table('users')->whereNotIn('role', ['admin', 'super_admin', 'staff'])->delete();
                 DB::table('requests')->delete();
                 DB::table('reminders')->delete();
             } else {
@@ -1276,6 +1310,11 @@ class ApiController extends Controller
         unset($safe['password_hash'], $safe['passwordHash'], $safe['mfa_secret'], $safe['mfaSecret'], $safe['mfa_last_step']);
 
         return $safe;
+    }
+
+    private function isAdminRole(?string $role): bool
+    {
+        return in_array($role, ['admin', 'super_admin'], true);
     }
 
     private function isSyntheticUser(object $user): bool

@@ -12,7 +12,11 @@ class RequireRole
     {
         $actor = $request->attributes->get('actor');
 
-        if (!$actor || !in_array($actor->role, $roles, true)) {
+        $roleAllowed = $actor && (
+            in_array($actor->role, $roles, true)
+            || (in_array('admin', $roles, true) && $actor->role === 'super_admin')
+        );
+        if (!$roleAllowed) {
             return response()->json(['message' => 'Access denied for this role.'], 403);
         }
 

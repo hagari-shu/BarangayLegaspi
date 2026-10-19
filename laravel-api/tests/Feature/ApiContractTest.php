@@ -185,6 +185,81 @@ class ApiContractTest extends TestCase
         $this->assertDatabaseCount('announcements', 0);
     }
 
+    public function test_super_admin_monitoring_is_role_restricted_and_admin_access_remains_compatible(): void
+    {
+        foreach ([
+            [
+                'id' => '00000000-0000-4000-8000-000000000101',
+                'first_name' => 'System',
+                'last_name' => 'Oversight',
+                'mobile' => '09170000101',
+                'email' => 'super.admin@example.test',
+                'role' => 'super_admin',
+                'status' => 'Administrator',
+                'password' => 'SuperAdmin!2026',
+            ],
+            [
+                'id' => '00000000-0000-4000-8000-000000000102',
+                'first_name' => 'Daily',
+                'last_name' => 'Admin',
+                'mobile' => '09170000102',
+                'email' => 'daily.admin@example.test',
+                'role' => 'admin',
+                'status' => 'Administrator',
+                'password' => 'RegularAdmin!2026',
+            ],
+        ] as $account) {
+            DB::table('users')->insert([
+                'id' => $account['id'],
+                'first_name' => $account['first_name'],
+                'last_name' => $account['last_name'],
+                'mobile' => $account['mobile'],
+                'email' => $account['email'],
+                'password_hash' => password_hash($account['password'], PASSWORD_BCRYPT),
+                'role' => $account['role'],
+                'household_id' => 'role-test-'.$account['role'],
+                'family_members' => 1,
+                'household_members' => '[]',
+                'status' => $account['status'],
+                'address' => 'Barangay Hall, Legaspi',
+                'zone' => 0,
+                'availability' => 'Available',
+                'mfa_enabled' => false,
+                'mfa_last_step' => 0,
+                'created_at' => now(),
+            ]);
+        }
+
+        $superAdminLogin = $this->postJson('/api/login', [
+            'identifier' => 'super.admin@example.test',
+            'password' => 'SuperAdmin!2026',
+        ])->assertOk()->assertJsonPath('user.role', 'super_admin');
+        $adminLogin = $this->postJson('/api/login', [
+            'identifier' => 'daily.admin@example.test',
+            'password' => 'RegularAdmin!2026',
+        ])->assertOk()->assertJsonPath('user.role', 'admin');
+
+        $this->withToken($superAdminLogin->json('token'))
+            ->getJson('/api/admin/users')
+            ->assertOk();
+        $this->withToken($superAdminLogin->json('token'))
+            ->getJson('/api/super-admin/monitoring')
+            ->assertOk()
+            ->assertJsonPath('summary.totalSuperAdmins', 1);
+
+        $this->withToken($adminLogin->json('token'))
+            ->getJson('/api/admin/users')
+            ->assertOk();
+        $this->withToken($adminLogin->json('token'))
+            ->getJson('/api/super-admin/monitoring')
+            ->assertForbidden();
+        $this->withToken($adminLogin->json('token'))
+            ->patchJson('/api/admin/users/00000000-0000-4000-8000-000000000101', [
+                'status' => 'Disabled',
+            ])
+            ->assertForbidden();
+    }
+
     public function test_quality_assessment_endpoints_are_no_longer_registered(): void
     {
         $this->getJson('/api/quality-assessment')->assertNotFound();

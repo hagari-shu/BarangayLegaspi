@@ -15,6 +15,7 @@
     "test": "node --test tests/api.test.js tests/mau-and-mfa.test.js tests/mfa-key-rotation.test.js tests/meta-social.test.js tests/operator-account-provisioning.test.js tests/payments.test.js tests/postgres-seeding.test.js tests/registry-csv.test.js tests/reminders.test.js tests/request-reporting.test.js tests/translations.test.js",
     "accounts:invite-staff": "node scripts/operator-accounts.js invite-staff",
     "accounts:promote-admin": "node scripts/operator-accounts.js promote-admin",
+    "accounts:promote-super-admin": "node scripts/operator-accounts.js promote-super-admin",
     "mfa:rotate-key": "node scripts/rotate-mfa-encryption.js"
   },
   "dependencies": {

@@ -968,6 +968,48 @@ export async function addAuditLog(entry) {
   }
 }
 
+export async function promoteExistingUserToSuperAdmin({ email, mobile, auditEntry }) {
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+    const result = await client.query(
+      `SELECT id, role, status FROM users
+       WHERE LOWER(email) = $1 AND mobile = $2
+       FOR UPDATE`,
+      [email.toLowerCase(), mobile],
+    )
+    if (result.rows.length !== 1) {
+      await client.query('ROLLBACK')
+      return { status: 'not_found' }
+    }
+
+    const user = result.rows[0]
+    if (user.role === 'super_admin') {
+      await client.query('ROLLBACK')
+      return { status: 'already_super_admin', userId: user.id }
+    }
+    if (user.role !== 'resident') {
+      await client.query('ROLLBACK')
+      return { status: 'role_conflict' }
+    }
+    if (user.status !== 'Active Resident') {
+      await client.query('ROLLBACK')
+      return { status: 'account_unverified' }
+    }
+
+    await client.query("UPDATE users SET role = 'super_admin' WHERE id = $1", [user.id])
+    await writeProvisioningAudit(client, auditEntry(user.id, user.role))
+    await client.query('COMMIT')
+    return { status: 'promoted', userId: user.id }
+  } catch (error) {
+    await client.query('ROLLBACK')
+    console.error('PostgreSQL Super Admin promotion failed', error)
+    throw error
+  } finally {
+    client.release()
+  }
+}
+
 export async function listAuditLogs(limit = 100) {
   try {
     const result = await query('SELECT * FROM audit_logs ORDER BY created_at DESC LIMIT $1', [Math.max(1, Math.min(Number(limit) || 100, 500))])

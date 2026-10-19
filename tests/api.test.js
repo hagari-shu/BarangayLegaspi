@@ -4,7 +4,7 @@ import { createServer } from 'node:http'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { createApp, seedDemoResident } from '../server/app.js'
-import { hashPassword } from '../server/auth.js'
+import { hashPassword, signToken } from '../server/auth.js'
 import * as jsonDb from '../server/db.js'
 import { DB_PATH } from '../server/config.js'
 import { isCaptainPhotoStorageConfigured } from '../server/captain-photo-storage.js'
@@ -42,6 +42,100 @@ beforeEach(async () => {
   await fs.mkdir(path.dirname(testDbPath), { recursive: true })
   await fs.writeFile(testDbPath, JSON.stringify({ users: [], requests: [], announcements: [], reports: [], approvals: [], auditLogs: [] }, null, 2), 'utf8')
   await seedDemoResident()
+})
+
+test('Super Admin has the Admin dashboard access plus isolated monitoring access', async () => {
+  const { server, baseUrl } = await createTestServer()
+  const superAdmin = {
+    id: randomUUID(),
+    firstName: 'System',
+    lastName: 'Oversight',
+    mobile: '09170000111',
+    email: 'super.admin@example.test',
+    passwordHash: await hashPassword('SuperAdminPass123!'),
+    role: 'super_admin',
+    status: 'Administrator',
+  }
+  const admin = {
+    id: randomUUID(),
+    firstName: 'Daily',
+    lastName: 'Admin',
+    mobile: '09170000112',
+    email: 'daily.admin@example.test',
+    passwordHash: await hashPassword('RegularAdminPass123!'),
+    role: 'admin',
+    status: 'Administrator',
+  }
+  const staff = {
+    id: randomUUID(),
+    firstName: 'Portal',
+    lastName: 'Staff',
+    mobile: '09170000113',
+    email: 'portal.staff@example.test',
+    passwordHash: await hashPassword('PortalStaffPass123!'),
+    role: 'staff',
+    status: 'On Duty',
+  }
+
+  try {
+    await jsonDb.saveUser(superAdmin)
+    await jsonDb.saveUser(admin)
+    await jsonDb.saveUser(staff)
+    const tokenFor = (user) => signToken({ sub: user.id })
+    const get = (path, user) => fetch(`${baseUrl}${path}`, {
+      headers: user ? { Authorization: `Bearer ${tokenFor(user)}` } : {},
+    })
+
+    const superAdminLogin = await fetch(`${baseUrl}/api/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ identifier: superAdmin.email, password: 'SuperAdminPass123!' }),
+    })
+    assert.equal(superAdminLogin.status, 200)
+    assert.equal((await superAdminLogin.json()).user.role, 'super_admin')
+    assert.equal((await get('/api/admin/users', superAdmin)).status, 200)
+    assert.equal((await get('/api/admin/users', admin)).status, 200)
+    assert.equal((await get('/api/super-admin/monitoring')).status, 401)
+    assert.equal((await get('/api/super-admin/monitoring', admin)).status, 403)
+    assert.equal((await get('/api/super-admin/monitoring', staff)).status, 403)
+
+    const monitoringResponse = await get('/api/super-admin/monitoring', superAdmin)
+    assert.equal(monitoringResponse.status, 200)
+    const monitoring = await monitoringResponse.json()
+    const users = await jsonDb.listAllUsers()
+    assert.equal(monitoring.summary.totalAdmins, users.filter((user) => user.role === 'admin').length)
+    assert.equal(monitoring.summary.totalSuperAdmins, 1)
+    assert.ok(Array.isArray(monitoring.recentActivity))
+    assert.equal(Object.hasOwn(monitoring.recentActivity[0] || {}, 'metadata'), false)
+
+    const resident = users.find((user) => user.role === 'resident')
+    const attemptedRoleChange = await fetch(`${baseUrl}/api/admin/users/${resident.id}`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${tokenFor(admin)}`,
+      },
+      body: JSON.stringify({ role: 'super_admin' }),
+    })
+    assert.equal(attemptedRoleChange.status, 403)
+
+    const superAdminEditAttempt = await fetch(`${baseUrl}/api/admin/users/${superAdmin.id}`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${tokenFor(admin)}`,
+      },
+      body: JSON.stringify({ status: 'Disabled' }),
+    })
+    assert.equal(superAdminEditAttempt.status, 403)
+
+    await jsonDb.updateUser(superAdmin.id, { status: 'Disabled' })
+    assert.equal((await get('/api/super-admin/monitoring', superAdmin)).status, 401)
+  } finally {
+    await new Promise((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()))
+    })
+  }
 })
 
 const createTestServer = async () => {

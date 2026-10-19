@@ -1,0 +1,96 @@
+name: Production account role assignment
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: Account role assignment
+        type: choice
+        required: true
+        options:
+          - promote-admin
+          - promote-super-admin
+      email:
+        description: Verified account email (must match the existing resident account)
+        type: string
+        required: true
+      mobile:
+        description: Verified Philippine mobile number (must match the existing resident account)
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-account-role-assignment
+  cancel-in-progress: false
+
+jobs:
+  assign-role:
+    name: Assign a production account role
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 10
+    steps:
+      - name: Require explicit workflow enablement
+        env:
+          WORKFLOW_ENABLED: ${{ vars.PRODUCTION_ACCOUNT_WORKFLOW_ENABLED }}
+        run: |
+          set -euo pipefail
+          if [[ "$WORKFLOW_ENABLED" != "true" ]]; then
+            echo "Role assignment is disabled. Review and enable the protected production environment first."
+            exit 1
+          fi
+
+      - name: Mask and validate account identifiers
+        env:
+          ACCOUNT_EMAIL: ${{ inputs.email }}
+          ACCOUNT_MOBILE: ${{ inputs.mobile }}
+        run: |
+          set -euo pipefail
+          echo "::add-mask::$ACCOUNT_EMAIL"
+          echo "::add-mask::$ACCOUNT_MOBILE"
+          if [[ ! "$ACCOUNT_EMAIL" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]]; then
+            echo "Provide a valid account email."
+            exit 1
+          fi
+          if [[ ! "$ACCOUNT_MOBILE" =~ ^09[0-9]{9}$ ]]; then
+            echo "Provide a valid Philippine mobile number."
+            exit 1
+          fi
+
+      - name: Check out approved main branch
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Assign role to the exact verified account
+        env:
+          NODE_ENV: production
+          DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
+          JWT_SECRET: ${{ secrets.PRODUCTION_JWT_SECRET }}
+          CORS_ORIGINS: https://barangay-legaspi.vercel.app
+          ACCOUNT_ACTION: ${{ inputs.action }}
+          ADMIN_EMAIL: ${{ inputs.email }}
+          ADMIN_MOBILE: ${{ inputs.mobile }}
+          SUPER_ADMIN_EMAIL: ${{ inputs.email }}
+          SUPER_ADMIN_MOBILE: ${{ inputs.mobile }}
+        run: |
+          set -euo pipefail
+          case "$ACCOUNT_ACTION" in
+            promote-admin) npm run accounts:promote-admin -- --confirm ;;
+            promote-super-admin) npm run accounts:promote-super-admin -- --confirm ;;
+            *) echo "Unsupported account role assignment."; exit 1 ;;
+          esac
