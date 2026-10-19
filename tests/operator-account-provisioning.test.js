@@ -209,54 +209,51 @@ test('resident registration cannot claim an email with a pending staff invitatio
   }
 })
 
-test('Super Admin invitation delivery requires an HTTPS endpoint and bearer token', () => {
+test('Super Admin invitation delivery requires a Resend API key and valid sender email', () => {
   assert.throws(
-    () => validateSuperAdminInvitationDeliveryConfig({ deliveryUrl: 'http://mail.example.test/invite', deliveryToken: 'token' }),
-    /must use HTTPS/,
+    () => validateSuperAdminInvitationDeliveryConfig({ apiKey: 'key', fromEmail: 'not-an-email' }),
+    /must be a valid sender email/,
   )
   assert.throws(
-    () => validateSuperAdminInvitationDeliveryConfig({ deliveryUrl: 'https://user:pass@mail.example.test/invite', deliveryToken: 'token' }),
-    /must use HTTPS/,
-  )
-  assert.throws(
-    () => validateSuperAdminInvitationDeliveryConfig({ deliveryUrl: 'https://mail.example.test/invite', deliveryToken: '' }),
-    /URL and token must be configured/,
+    () => validateSuperAdminInvitationDeliveryConfig({ apiKey: '', fromEmail: 'admin@example.test' }),
+    /Resend API key and verified Super Admin invitation sender email must be configured/,
   )
 })
 
-test('Super Admin invitation delivery sends the link privately and rejects failed delivery', async () => {
+test('Super Admin invitation delivery emails the link through Resend and rejects failed delivery', async () => {
   let request
   await deliverSuperAdminInvitation({
-    deliveryUrl: 'https://mail.example.test/super-admin-invites',
-    deliveryToken: 'delivery-secret',
+    apiKey: 'resend-secret',
+    fromEmail: 'admin@example.test',
     email: 'new.super-admin@example.test',
     inviteUrl: 'https://barangay-legaspi.vercel.app/super-admin-invite#token=private-token',
     expiresAt: '2026-10-19T12:00:00.000Z',
     fetchImpl: async (url, options) => {
       request = { url: String(url), ...options }
-      return { ok: true, status: 202 }
+      return { ok: true, status: 200 }
     },
   })
-  assert.equal(request.url, 'https://mail.example.test/super-admin-invites')
+  assert.equal(request.url, 'https://api.resend.com/emails')
   assert.equal(request.method, 'POST')
-  assert.equal(request.headers.Authorization, 'Bearer delivery-secret')
+  assert.equal(request.headers.Authorization, 'Bearer resend-secret')
   assert.deepEqual(JSON.parse(request.body), {
-    event: 'super_admin_invitation',
-    recipient: 'new.super-admin@example.test',
-    inviteUrl: 'https://barangay-legaspi.vercel.app/super-admin-invite#token=private-token',
-    expiresAt: '2026-10-19T12:00:00.000Z',
+    from: 'Barangay Legaspi <admin@example.test>',
+    to: ['new.super-admin@example.test'],
+    subject: 'Super Admin account setup invitation',
+    html: '<p>You have been invited to set up a Barangay Legaspi Super Admin account.</p><p><a href="https://barangay-legaspi.vercel.app/super-admin-invite#token=private-token">Set up your account</a></p><p>This single-use link expires at 2026-10-19T12:00:00.000Z.</p><p>If you were not expecting this invitation, you can ignore this email.</p>',
+    text: 'You have been invited to set up a Barangay Legaspi Super Admin account.\n\nSet up your account: https://barangay-legaspi.vercel.app/super-admin-invite#token=private-token\n\nThis single-use link expires at 2026-10-19T12:00:00.000Z.\nIf you were not expecting this invitation, you can ignore this email.',
   })
 
   await assert.rejects(
     deliverSuperAdminInvitation({
-      deliveryUrl: 'https://mail.example.test/super-admin-invites',
-      deliveryToken: 'delivery-secret',
+      apiKey: 'resend-secret',
+      fromEmail: 'admin@example.test',
       email: 'new.super-admin@example.test',
       inviteUrl: 'https://barangay-legaspi.vercel.app/super-admin-invite#token=private-token',
       expiresAt: '2026-10-19T12:00:00.000Z',
       fetchImpl: async () => ({ ok: false, status: 503 }),
     }),
-    /failed with status 503/,
+    /Resend invitation delivery failed with status 503/,
   )
 })
 

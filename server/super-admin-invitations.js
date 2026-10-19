@@ -4,50 +4,53 @@ export const hashSuperAdminInvitationToken = (token) => createHash('sha256').upd
 
 export const isValidSuperAdminInvitationToken = (token) => /^[A-Za-z0-9_-]{43}$/.test(String(token || ''))
 
-export function validateSuperAdminInvitationDeliveryConfig({ deliveryUrl, deliveryToken }) {
-  if (!deliveryUrl || !deliveryToken) {
-    throw new Error('Private Super Admin invitation delivery URL and token must be configured.')
-  }
+const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+const resendApiUrl = 'https://api.resend.com/emails'
+const escapeHtml = (value) => String(value).replace(/[&<>"']/g, (character) => ({
+  '&': '&amp;',
+  '<': '&lt;',
+  '>': '&gt;',
+  '"': '&quot;',
+  "'": '&#39;',
+})[character])
 
-  let parsedUrl
-  try {
-    parsedUrl = new URL(deliveryUrl)
-  } catch {
-    throw new Error('Private Super Admin invitation delivery URL must be a valid HTTPS URL.')
+export function validateSuperAdminInvitationDeliveryConfig({ apiKey, fromEmail }) {
+  if (!apiKey || !fromEmail) {
+    throw new Error('Resend API key and verified Super Admin invitation sender email must be configured.')
   }
-  if (parsedUrl.protocol !== 'https:' || parsedUrl.username || parsedUrl.password || parsedUrl.hash) {
-    throw new Error('Private Super Admin invitation delivery URL must use HTTPS and contain no credentials or fragment.')
+  if (!emailPattern.test(fromEmail) || fromEmail.length > 254) {
+    throw new Error('SUPER_ADMIN_INVITATION_FROM_EMAIL must be a valid sender email address.')
   }
-
-  return parsedUrl
 }
 
 export async function deliverSuperAdminInvitation({
-  deliveryUrl,
-  deliveryToken,
+  apiKey,
+  fromEmail,
   email,
   inviteUrl,
   expiresAt,
   fetchImpl = fetch,
 }) {
-  const parsedUrl = validateSuperAdminInvitationDeliveryConfig({ deliveryUrl, deliveryToken })
-  const response = await fetchImpl(parsedUrl, {
+  validateSuperAdminInvitationDeliveryConfig({ apiKey, fromEmail })
+  const safeInviteUrl = escapeHtml(inviteUrl)
+  const response = await fetchImpl(resendApiUrl, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${deliveryToken}`,
+      Authorization: `Bearer ${apiKey}`,
     },
     body: JSON.stringify({
-      event: 'super_admin_invitation',
-      recipient: email,
-      inviteUrl,
-      expiresAt,
+      from: `Barangay Legaspi <${fromEmail}>`,
+      to: [email],
+      subject: 'Super Admin account setup invitation',
+      html: `<p>You have been invited to set up a Barangay Legaspi Super Admin account.</p><p><a href="${safeInviteUrl}">Set up your account</a></p><p>This single-use link expires at ${escapeHtml(expiresAt)}.</p><p>If you were not expecting this invitation, you can ignore this email.</p>`,
+      text: `You have been invited to set up a Barangay Legaspi Super Admin account.\n\nSet up your account: ${inviteUrl}\n\nThis single-use link expires at ${expiresAt}.\nIf you were not expecting this invitation, you can ignore this email.`,
     }),
     signal: AbortSignal.timeout(10_000),
   })
 
   if (!response.ok) {
-    throw new Error(`Private invitation delivery failed with status ${response.status}.`)
+    throw new Error(`Resend invitation delivery failed with status ${response.status}.`)
   }
 }
 
