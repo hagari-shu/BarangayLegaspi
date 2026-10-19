@@ -1,6 +1,10 @@
 import { randomUUID } from 'node:crypto'
 import { ADMIN_SEED, IS_PRODUCTION } from '../server/config.js'
 import * as postgres from '../server/db-postgres.js'
+import {
+  deliverAccountInvitationEmail,
+  validateAccountInvitationEmailConfig,
+} from '../server/account-invitation-email.js'
 import { issueStaffInvitation } from '../server/staff-invitations.js'
 import {
   deliverSuperAdminInvitation,
@@ -146,6 +150,9 @@ async function run() {
     if (!position || position.length > 120 || hasControlCharacter || position.includes('<') || position.includes('>')) {
       throw new Error('Provide a staff position with 1 to 120 printable characters using --position.')
     }
+    const apiKey = process.env.RESEND_API_KEY || ''
+    const fromEmail = String(process.env.SUPER_ADMIN_INVITATION_FROM_EMAIL || '').trim()
+    validateAccountInvitationEmailConfig({ apiKey, fromEmail })
     if (!publicAppUrl) throw new Error('PUBLIC_APP_URL must be the official HTTPS portal origin.')
     const parsedUrl = new URL(publicAppUrl)
     if (
@@ -163,9 +170,35 @@ async function run() {
       throw new Error('An account already uses that email. No invitation was created.')
     }
     if (result.status !== 'created') throw new Error('Invitation could not be created; no link was issued.')
-    console.log(`Invitation expires at ${result.expiresAt}. Deliver this link securely to the invitee; it is not emailed automatically:`)
-    console.log(result.inviteUrl)
-    console.log('Treat the link as a temporary credential. Do not save it in chat, logs, or tickets.')
+    try {
+      await deliverAccountInvitationEmail({
+        apiKey,
+        fromEmail,
+        email,
+        inviteUrl: result.inviteUrl,
+        expiresAt: result.expiresAt,
+        role: 'staff',
+      })
+    } catch (deliveryError) {
+      const revoked = await postgres.revokeStaffInvitation({
+        invitationId: result.id,
+        revokedAt: new Date().toISOString(),
+        auditEntry: {
+          id: randomUUID(),
+          actorId: null,
+          actorRole: 'deployment_operator',
+          action: 'staff.invitation.delivery_failed',
+          targetType: 'staff_invitation',
+          targetId: result.id,
+          metadata: { role: 'staff' },
+        },
+      })
+      if (revoked.status !== 'revoked') {
+        throw new Error(`Invitation delivery failed and revocation was not confirmed (${revoked.status}).`)
+      }
+      throw new Error(`Invitation email delivery failed; the invitation was revoked and its link was not printed. ${deliveryError.message}`)
+    }
+    console.log(`Staff setup invitation was emailed to the intended account holder. It expires at ${result.expiresAt}. The link was not printed.`)
     return
   }
 
