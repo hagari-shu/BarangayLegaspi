@@ -2898,6 +2898,78 @@ function SettingsPage({ profile, onLogout, onPasswordChanged, language, setLangu
   )
 }
 
+function StaffDirectoryOverview({ staffMembers, language, onManage }) {
+  const t = translations[language] || translations.en
+  const [officialProfiles, setOfficialProfiles] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    let active = true
+    fetch(`${API_BASE}/official-profiles`)
+      .then(async (response) => {
+        const data = await response.json().catch(() => ({}))
+        if (!response.ok || !Array.isArray(data.profiles)) {
+          throw new Error(data.message || t.officialProfilesLoadFailed)
+        }
+        if (active) setOfficialProfiles(data.profiles)
+      })
+      .catch((loadError) => {
+        console.error('load dashboard officer profiles failed', loadError)
+        if (active) setError(t.officialProfilesLoadFailed)
+      })
+      .finally(() => {
+        if (active) setLoading(false)
+      })
+    return () => { active = false }
+  }, [t.officialProfilesLoadFailed])
+
+  const officialRoleLabels = {
+    captain: t.barangayCaptainRole,
+    secretary: t.secretaryRole,
+    treasurer: t.treasurerRole,
+  }
+
+  return (
+    <article className="panel-card staff-directory-overview">
+      <div className="panel-header">
+        <h2>{t.staffDirectoryAndOfficials}</h2>
+        <button type="button" className="secondary-btn small" onClick={onManage}>{t.manageDirectoryAndOfficials}</button>
+      </div>
+      <div className="staff-directory-overview-grid">
+        <section aria-labelledby="staff-directory-overview-title">
+          <h3 id="staff-directory-overview-title">{t.staffDirectory}</h3>
+          <ul>
+            {staffMembers.slice(0, 4).map((member) => (
+              <li key={member.id}>
+                <span>{getDisplayName(member)}</span>
+                <strong>{getStaffPositionLabel(member.position, t)}</strong>
+              </li>
+            ))}
+          </ul>
+          {staffMembers.length === 0 && <p className="soft-label">{t.noStaffAccounts}</p>}
+          {staffMembers.length > 4 && <p className="soft-label">+{staffMembers.length - 4}</p>}
+        </section>
+        <section aria-labelledby="officials-overview-title">
+          <h3 id="officials-overview-title">{t.officialProfilesTitle}</h3>
+          {loading && <p className="soft-label" role="status">{t.loadingRequests}</p>}
+          {error && <p className="status-error" role="alert">{error}</p>}
+          {!loading && !error && (
+            <ul>
+              {officialProfiles.map((profile) => (
+                <li key={profile.role}>
+                  <span>{officialRoleLabels[profile.role] || profile.role}</span>
+                  <strong>{profile.displayName || t.notAvailable}</strong>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      </div>
+    </article>
+  )
+}
+
 function StaffPage({ staffMembers = [], announcements = [], currentUser, userRole = 'staff', onProcessRequest, onLogout, onStaffMemberUpdated, onPortalAccountCreated, onAddAnnouncement, onDeleteAnnouncement, onRetractAnnouncement, onDeleteStaffMember, language, setLanguage }) {
   const t = translations[language] || translations.en
   const [activeTab, setActiveTab] = useState('queue')
@@ -2978,13 +3050,7 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
     socialChannels: [],
   })
   const [showAnnouncementForm, setShowAnnouncementForm] = useState(false)
-  const [archiveFiles, setArchiveFiles] = useState([])
-  const [archiveError, setArchiveError] = useState('')
-  const [archiveStatus, setArchiveStatus] = useState(null)
-  const [archiving, setArchiving] = useState(false)
-  const [activeRecordsPanel, setActiveRecordsPanel] = useState(null)
   const [selectedRequest, setSelectedRequest] = useState(null)
-  const [selectedArchive, setSelectedArchive] = useState(null)
   const [confirmation, setConfirmation] = useState(null)
 
   useEffect(() => {
@@ -3201,69 +3267,6 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
     }
   }
 
-  const loadArchiveFiles = async () => {
-    try {
-      const response = await fetch(`${API_BASE}/staff/archives`)
-      const data = await response.json().catch(() => ({}))
-      if (!response.ok) throw new Error(data.message || t.staffArchivesLoadFailed)
-      if (!Array.isArray(data.archives)) throw new Error(t.staffArchivesLoadFailed)
-      setArchiveFiles(data.archives)
-      setArchiveError('')
-    } catch (error) {
-      console.error('load archive files error', error)
-      setArchiveError(t.staffArchivesLoadFailed)
-    }
-  }
-
-  const handleArchiveFile = async (fileName, download = false) => {
-    try {
-      const response = await fetch(`${API_BASE}/staff/archive-file?name=${encodeURIComponent(fileName)}`)
-      if (!response.ok) throw new Error('Unable to open archive file.')
-      if (download) {
-        const blobUrl = URL.createObjectURL(await response.blob())
-        const link = document.createElement('a')
-        link.href = blobUrl
-        link.download = fileName
-        link.click()
-        window.setTimeout(() => URL.revokeObjectURL(blobUrl), 30_000)
-      } else {
-        setSelectedArchive({ name: fileName, contents: await response.json() })
-      }
-    } catch (error) {
-      alert(error.message || 'Unable to open archive file.')
-    }
-  }
-
-  useEffect(() => {
-    if (activeTab === 'queue' || activeTab === 'approvals') {
-      loadArchiveFiles()
-    }
-  }, [activeTab, t.staffArchivesLoadFailed])
-
-  const handleArchiveQueue = async (days = 30) => {
-    setArchiving(true)
-    setArchiveStatus(null)
-    try {
-      const response = await fetch(`${API_BASE}/staff/archive-requests`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ days }),
-      })
-      const data = await response.json().catch(() => ({}))
-      if (!response.ok) {
-        throw new Error(data.message || t.staffArchiveFailed)
-      }
-      setArchiveStatus(data.archive || null)
-      setDashboardRefreshKey((current) => current + 1)
-      await loadArchiveFiles()
-    } catch (error) {
-      console.error('staff archive error', error)
-      throw new Error(error.message || t.staffArchiveFailed)
-    } finally {
-      setArchiving(false)
-    }
-  }
-
   const toggleAnnouncementChannel = (channelKey) => {
     setAnnouncementForm((prev) => {
       const nextChannels = new Set(prev.socialChannels || [])
@@ -3398,15 +3401,7 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
               aria-current={activeTab === 'staff' ? 'page' : undefined}
               onClick={() => setActiveTab('staff')}
             >
-              <span className="nav-icon">👥</span><span>{t.staffDirectory}</span>
-            </button>
-            <button
-              type="button"
-              className={`nav-item ${activeTab === 'officials' ? 'active' : ''}`}
-              aria-current={activeTab === 'officials' ? 'page' : undefined}
-              onClick={() => setActiveTab('officials')}
-            >
-              <span className="nav-icon">🏛️</span><span>{t.officialProfilesTitle}</span>
+              <span className="nav-icon">👥</span><span>{t.staffDirectoryAndOfficials}</span>
             </button>
           </nav>
         </aside>
@@ -3415,7 +3410,7 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
           <div className="welcome-row">
             <div>
               <p className="eyebrow">{t.operations}</p>
-              <h1>{activeTab === 'queue' ? t.staffDashboardTitle : activeTab === 'reports' ? t.serviceReports : activeTab === 'announcements' ? t.announcements : activeTab === 'staff' ? t.staffDirectory : activeTab === 'officials' ? t.officialProfilesTitle : activeTab === 'residents' ? (language === 'fil' ? 'Talaan ng residente' : 'Resident registry') : t.approvalsManagement}</h1>
+              <h1>{activeTab === 'queue' ? t.staffDashboardTitle : activeTab === 'reports' ? t.serviceReports : activeTab === 'announcements' ? t.announcements : activeTab === 'staff' ? t.staffDirectoryAndOfficials : activeTab === 'residents' ? (language === 'fil' ? 'Talaan ng residente' : 'Resident registry') : t.approvalsManagement}</h1>
               {activeTab === 'queue' && <p className="staff-dashboard-subtitle">{t.staffDashboardSubtitle}</p>}
             </div>
             {activeTab === 'queue' ? (
@@ -3426,10 +3421,10 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
                   {dashboardLoading ? t.loadingRequests : t.refreshRequests}
                 </button>
               </div>
-            ) : !['residents', 'officials'].includes(activeTab) && <span className="counter-pill">{activeTab === 'approvals' ? approvedCount : totalRequests} {activeTab === 'approvals' ? t.processed : t.requests}</span>}
+            ) : !['residents', 'staff'].includes(activeTab) && <span className="counter-pill">{activeTab === 'approvals' ? approvedCount : totalRequests} {activeTab === 'approvals' ? t.processed : t.requests}</span>}
           </div>
 
-          {!['residents', 'officials'].includes(activeTab) && <div className="stats-grid staff-dashboard-metrics" aria-label={t.staffSummaryLabel}>
+          {!['residents', 'staff'].includes(activeTab) && <div className="stats-grid staff-dashboard-metrics" aria-label={t.staffSummaryLabel}>
             <button className="stat-card staff-metric-card accent" type="button" onClick={() => setQueueFilter('Pending')}>
               <span className="label">{t.pendingReviewMetric}</span>
               <span className="stat-number">{pendingCount}</span>
@@ -3455,7 +3450,6 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
           <div className="dashboard-body">
             <div className="main-column">
               {activeTab === 'residents' && <StaffRegistryPanel language={language} />}
-              {activeTab === 'officials' && <OfficialProfileSettings language={language} />}
               {activeTab === 'queue' && (
                 <>
                 <section className="panel-card needs-attention" aria-labelledby="needs-attention-title">
@@ -4006,165 +4000,78 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
               )}
 
               {activeTab === 'staff' && (
-                <article className="panel-card">
-                  <div className="panel-header">
-                    <h2>{t.staffDirectory}</h2>
-                    <span className="soft-label">{staffMembers.length} {t.staffMembersAvailable}</span>
-                  </div>
-                  {userRole === 'staff' && (
-                    <div className="editor-actions">
-                      <p className="field-note">{t.accountCreationPermissionNote}</p>
-                      <button type="button" className="primary-btn small" onClick={() => setShowAccountCreation(true)}>{t.createStaffAccount}</button>
+                <>
+                  <article className="panel-card">
+                    <div className="panel-header">
+                      <h2>{t.staffDirectory}</h2>
+                      <span className="soft-label">{staffMembers.length} {t.staffMembersAvailable}</span>
                     </div>
-                  )}
-                  {showAccountCreation && userRole === 'staff' && (
-                    <AccountCreationModal
-                      allowedRoles={['staff']}
-                      language={language}
-                      onCreated={onPortalAccountCreated}
-                      onClose={() => setShowAccountCreation(false)}
-                    />
-                  )}
-
-                  <div className="staff-grid">
-                    {staffMembers.map((member) => (
-                      <div key={member.id} className="staff-card" onClick={() => setSelectedUser(member)} style={{ cursor: 'pointer' }}>
-                        <div className="staff-avatar">{(member.firstName || 'S').charAt(0)}</div>
-                        <div className="staff-info">
-                          <h4>{member.firstName} {member.lastName}</h4>
-                          <p className="position">{getStaffPositionLabel(member.position, t)}</p>
-                          <p className="availability">
-                            <span className={'availability-badge ' + (member.availability === 'Available' ? 'available' : 'unavailable')}>
-                              {getStaffAvailabilityLabel(member.availability, t)}
-                            </span>
-                          </p>
-                          <p className="contact">{t.status}: {member.status || 'N/A'}</p>
-                          <p className="contact">{member.mobile}</p>
-                          <p className="contact">{member.email}</p>
-                        </div>
-                        {isAdminRole(userRole) && (
-                          <button
-                            type="button"
-                            className="small-action danger"
-                            onClick={(event) => {
-                              event.stopPropagation()
-                              setConfirmation({
-                                title: t.delete,
-                                message: t.deleteStaffConfirm.replace('{name}', `${member.firstName} ${member.lastName}`),
-                                confirmLabel: t.delete,
-                                onConfirm: () => onDeleteStaffMember?.(member.id),
-                              })
-                            }}
-                          >
-                            {t.delete}
-                          </button>
-                        )}
+                    {userRole === 'staff' && (
+                      <div className="editor-actions">
+                        <p className="field-note">{t.accountCreationPermissionNote}</p>
+                        <button type="button" className="primary-btn small" onClick={() => setShowAccountCreation(true)}>{t.createStaffAccount}</button>
                       </div>
-                    ))}
-                  </div>
-                </article>
+                    )}
+                    {showAccountCreation && userRole === 'staff' && (
+                      <AccountCreationModal
+                        allowedRoles={['staff']}
+                        language={language}
+                        onCreated={onPortalAccountCreated}
+                        onClose={() => setShowAccountCreation(false)}
+                      />
+                    )}
+
+                    <div className="staff-grid">
+                      {staffMembers.map((member) => (
+                        <div key={member.id} className="staff-card" onClick={() => setSelectedUser(member)} style={{ cursor: 'pointer' }}>
+                          <div className="staff-avatar">{(member.firstName || 'S').charAt(0)}</div>
+                          <div className="staff-info">
+                            <h4>{member.firstName} {member.lastName}</h4>
+                            <p className="position">{getStaffPositionLabel(member.position, t)}</p>
+                            <p className="availability">
+                              <span className={'availability-badge ' + (member.availability === 'Available' ? 'available' : 'unavailable')}>
+                                {getStaffAvailabilityLabel(member.availability, t)}
+                              </span>
+                            </p>
+                            <p className="contact">{t.status}: {member.status || 'N/A'}</p>
+                            <p className="contact">{member.mobile}</p>
+                            <p className="contact">{member.email}</p>
+                          </div>
+                          {isAdminRole(userRole) && (
+                            <button
+                              type="button"
+                              className="small-action danger"
+                              onClick={(event) => {
+                                event.stopPropagation()
+                                setConfirmation({
+                                  title: t.delete,
+                                  message: t.deleteStaffConfirm.replace('{name}', `${member.firstName} ${member.lastName}`),
+                                  confirmLabel: t.delete,
+                                  onConfirm: () => onDeleteStaffMember?.(member.id),
+                                })
+                              }}
+                            >
+                              {t.delete}
+                            </button>
+                          )}
+                        </div>
+                      ))}
+                      {staffMembers.length === 0 && <p className="empty-state">{t.noStaffAccounts}</p>}
+                    </div>
+                  </article>
+                  <OfficialProfileSettings language={language} />
+                </>
               )}
             </div>
 
             <aside className="side-column">
-              <article className="panel-card stack-card records-panel">
-                <div className="panel-header left-align">
-                  <h2>{t.records}</h2>
-                </div>
-
-                <div className="records-stack">
-                  <button
-                    type="button"
-                    className={`record-panel-card ${activeRecordsPanel === 'queue' ? 'selected' : ''}`}
-                    onClick={() => setActiveRecordsPanel((prev) => prev === 'queue' ? null : 'queue')}
-                  >
-                    <span className="record-panel-title">{t.requestsInQueue}</span>
-                    <span className="record-panel-counts">
-                      <span>{t.pending} <strong>{pendingCount}</strong></span>
-                      <span>{t.approved} <strong>{approvedCount}</strong></span>
-                    </span>
-                  </button>
-
-                  {activeRecordsPanel === 'queue' && (
-                    <div className="record-dedicated-space">
-                      <div className="record-details record-details-compact">
-                        <div className="record-section">
-                          <h4>Queue</h4>
-                          <ul>
-                            {dashboardRequests.slice(0, 6).map((item) => (
-                              <li key={item.id}><span>{item.type}</span><strong>{getRequestStatusLabel(item.status, t)}</strong></li>
-                            ))}
-                            {totalRequests > 6 && <li className="summary-item">+ {totalRequests - 6} {t.moreRequestsWaiting}</li>}
-                            {totalRequests === 0 && <li className="summary-item">{t.queueEmpty}</li>}
-                          </ul>
-                        </div>
-
-                        <div className="record-section">
-                          <h4>{t.approvals}</h4>
-                          <p>{approvedCount} {t.approvedRequests.toLowerCase()}</p>
-                          <button className="secondary-btn small" type="button" onClick={() => { setActiveTab('approvals'); setOpenRequestPanel('approvals'); setQueuePage(1) }}>{t.approvedRequests}</button>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-
-                  <button
-                    type="button"
-                    className={`record-panel-card ${activeRecordsPanel === 'archive' ? 'selected' : ''}`}
-                    onClick={() => setActiveRecordsPanel((prev) => prev === 'archive' ? null : 'archive')}
-                  >
-                    <span className="record-panel-title">{t.archiveQueueApprovals}</span>
-                    <span className="record-panel-count">{archiveError ? '—' : archiveFiles.length}</span>
-                  </button>
-
-                  {activeRecordsPanel === 'archive' && (
-                    <div className="record-dedicated-space">
-                      <div className="record-details archive-record-details">
-                        {archiveStatus && (
-                          <p className="archive-note">{t.archiveSummary.replace('{count}', String(archiveStatus.count || 0)).replace('{date}', new Date(archiveStatus.archivedAt || Date.now()).toLocaleDateString(language === 'fil' ? 'fil-PH' : 'en-PH'))}</p>
-                        )}
-                        <div className="archive-inline-actions">
-                          <button type="button" className="secondary-btn small" onClick={() => setConfirmation({
-                            title: t.processedArchiveConfirmTitle,
-                            message: t.processedArchiveOlderMessage,
-                            confirmLabel: t.archiveOlderThan30Days,
-                            onConfirm: () => handleArchiveQueue(30),
-                          })} disabled={archiving}>{t.archiveOlderThan30Days}</button>
-                          <button type="button" className="primary-btn small" onClick={() => setConfirmation({
-                            title: t.processedArchiveConfirmTitle,
-                            message: t.processedArchiveAllMessage,
-                            confirmLabel: t.archiveAllProcessed,
-                            onConfirm: () => handleArchiveQueue(0),
-                          })} disabled={archiving}>{t.archiveAllProcessed}</button>
-                        </div>
-                        {archiveError && (
-                          <div className="request-dashboard-error" role="alert">
-                            <span>{archiveError}</span>
-                            <button type="button" className="secondary-btn small" onClick={loadArchiveFiles}>{t.retry}</button>
-                          </div>
-                        )}
-                        {!archiveError && <div className="archive-list">
-                          {archiveFiles.length > 0 ? archiveFiles.map((file) => (
-                            <div key={file.name} className="archive-item">
-                              <div className="archive-main">
-                                <strong>{file.name}</strong>
-                                <span className="archive-meta">{new Date(file.mtime).toLocaleDateString()} • {(file.size / 1024).toFixed(1)} KB</span>
-                              </div>
-                              <div className="archive-actions">
-                                  <button type="button" className="small-action secondary" onClick={() => handleArchiveFile(file.name)}>View</button>
-                                  <button type="button" className="small-action success" onClick={() => handleArchiveFile(file.name, true)}>Download</button>
-                              </div>
-                            </div>
-                          )) : (
-                            <p className="soft-label">{t.noArchivedQueueRecords}</p>
-                          )}
-                        </div>}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </article>
-
+              {activeTab === 'queue' && (
+                <StaffDirectoryOverview
+                  staffMembers={staffMembers}
+                  language={language}
+                  onManage={() => setActiveTab('staff')}
+                />
+              )}
               <article className="profile-card">
                 <div className="profile-head">
                   <div className="profile-avatar">{(currentUser?.firstName || currentUser?.first_name || 'S').charAt(0)}</div>
@@ -4235,11 +4142,6 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
             )}
           </section>
         </div>
-      )}
-      {selectedArchive && (
-        <WorkflowModal title={selectedArchive.name} onClose={() => setSelectedArchive(null)} wide>
-          <pre className="archive-preview">{JSON.stringify(selectedArchive.contents, null, 2)}</pre>
-        </WorkflowModal>
       )}
       {selectedUser && <UserDetailModal user={selectedUser} onClose={() => setSelectedUser(null)} allowEdit={isAdminRole(userRole)} onUserUpdated={(updated) => {
         setSelectedUser((prev) => ({ ...(prev || {}), ...updated }))

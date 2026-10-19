@@ -8008,6 +8008,40 @@ button.report-summary-card:focus-visible,
   align-items: start;
 }
 
+.staff-dashboard-main .staff-directory-overview {
+  grid-column: 1 / -1;
+}
+
+.staff-dashboard-main .staff-directory-overview-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+}
+
+.staff-dashboard-main .staff-directory-overview-grid h3 {
+  margin: 0 0 8px;
+  font-size: 0.95rem;
+}
+
+.staff-dashboard-main .staff-directory-overview-grid ul {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.staff-dashboard-main .staff-directory-overview-grid li {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 0.86rem;
+}
+
+.staff-dashboard-main .staff-directory-overview-grid li strong {
+  text-align: right;
+}
+
 .staff-dashboard-main .panel-card {
   border-radius: 16px;
   box-shadow: 0 6px 18px rgba(15, 69, 60, 0.045);
@@ -8312,6 +8346,10 @@ button.report-summary-card:focus-visible,
   }
 
   .staff-dashboard-main .staff-module-queue .side-column {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .staff-dashboard-main .staff-directory-overview-grid {
     grid-template-columns: minmax(0, 1fr);
   }
 
