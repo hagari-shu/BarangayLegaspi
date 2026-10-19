@@ -1,22 +1,27 @@
-name: Production account role assignment
+name: Production account role assignment and invitations
 
 on:
   workflow_dispatch:
     inputs:
       action:
-        description: Account role assignment
+        description: Account role assignment or invitation
         type: choice
         required: true
         options:
           - promote-admin
           - promote-super-admin
           - invite-super-admin
+          - invite-staff
       email:
         description: Account holder email, or existing verified account email for promotion
         type: string
         required: true
       mobile:
-        description: Required for promotion; omitted when issuing a Super Admin setup invitation
+        description: Required for promotion; omitted for account invitations
+        type: string
+        required: false
+      position:
+        description: Optional Staff position (defaults to Staff)
         type: string
         required: false
 
@@ -50,9 +55,11 @@ jobs:
           ACCOUNT_ACTION: ${{ inputs.action }}
           ACCOUNT_EMAIL: ${{ inputs.email }}
           ACCOUNT_MOBILE: ${{ inputs.mobile }}
+          STAFF_POSITION: ${{ inputs.position }}
         run: |
           set -euo pipefail
           echo "::add-mask::$ACCOUNT_EMAIL"
+          echo "::add-mask::$STAFF_POSITION"
           if [[ ! "$ACCOUNT_EMAIL" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]]; then
             echo "Provide a valid account email."
             exit 1
@@ -68,6 +75,12 @@ jobs:
             invite-super-admin)
               if [[ -n "$ACCOUNT_MOBILE" ]]; then
                 echo "Leave mobile empty for a Super Admin setup invitation; the invitee will set it."
+                exit 1
+              fi
+              ;;
+            invite-staff)
+              if [[ -n "$ACCOUNT_MOBILE" ]]; then
+                echo "Leave mobile empty for a Staff setup invitation; the invitee will set it."
                 exit 1
               fi
               ;;
@@ -92,7 +105,7 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Assign role to the exact verified account
+      - name: Assign role or send a setup invitation
         env:
           NODE_ENV: production
           DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
@@ -106,11 +119,14 @@ jobs:
           SUPER_ADMIN_EMAIL: ${{ inputs.email }}
           SUPER_ADMIN_MOBILE: ${{ inputs.mobile }}
           SUPER_ADMIN_INVITATION_EMAIL: ${{ inputs.email }}
+          STAFF_INVITATION_EMAIL: ${{ inputs.email }}
+          STAFF_POSITION: ${{ inputs.position }}
         run: |
           set -euo pipefail
           case "$ACCOUNT_ACTION" in
             promote-admin) npm run accounts:promote-admin -- --confirm ;;
             promote-super-admin) npm run accounts:promote-super-admin -- --confirm ;;
             invite-super-admin) npm run accounts:invite-super-admin -- --confirm ;;
-            *) echo "Unsupported account role assignment."; exit 1 ;;
+            invite-staff) npm run accounts:invite-staff -- --confirm --email "$STAFF_INVITATION_EMAIL" --position "${STAFF_POSITION:-Staff}" ;;
+            *) echo "Unsupported account role or invitation action."; exit 1 ;;
           esac
