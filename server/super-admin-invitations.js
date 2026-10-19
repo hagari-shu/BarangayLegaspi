@@ -4,6 +4,53 @@ export const hashSuperAdminInvitationToken = (token) => createHash('sha256').upd
 
 export const isValidSuperAdminInvitationToken = (token) => /^[A-Za-z0-9_-]{43}$/.test(String(token || ''))
 
+export function validateSuperAdminInvitationDeliveryConfig({ deliveryUrl, deliveryToken }) {
+  if (!deliveryUrl || !deliveryToken) {
+    throw new Error('Private Super Admin invitation delivery URL and token must be configured.')
+  }
+
+  let parsedUrl
+  try {
+    parsedUrl = new URL(deliveryUrl)
+  } catch {
+    throw new Error('Private Super Admin invitation delivery URL must be a valid HTTPS URL.')
+  }
+  if (parsedUrl.protocol !== 'https:' || parsedUrl.username || parsedUrl.password || parsedUrl.hash) {
+    throw new Error('Private Super Admin invitation delivery URL must use HTTPS and contain no credentials or fragment.')
+  }
+
+  return parsedUrl
+}
+
+export async function deliverSuperAdminInvitation({
+  deliveryUrl,
+  deliveryToken,
+  email,
+  inviteUrl,
+  expiresAt,
+  fetchImpl = fetch,
+}) {
+  const parsedUrl = validateSuperAdminInvitationDeliveryConfig({ deliveryUrl, deliveryToken })
+  const response = await fetchImpl(parsedUrl, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${deliveryToken}`,
+    },
+    body: JSON.stringify({
+      event: 'super_admin_invitation',
+      recipient: email,
+      inviteUrl,
+      expiresAt,
+    }),
+    signal: AbortSignal.timeout(10_000),
+  })
+
+  if (!response.ok) {
+    throw new Error(`Private invitation delivery failed with status ${response.status}.`)
+  }
+}
+
 export async function issueSuperAdminInvitation({ email, publicAppUrl, store, now = new Date() }) {
   const token = randomBytes(32).toString('base64url')
   const invitation = {

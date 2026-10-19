@@ -2,7 +2,11 @@ import { randomUUID } from 'node:crypto'
 import { ADMIN_SEED, IS_PRODUCTION } from '../server/config.js'
 import * as postgres from '../server/db-postgres.js'
 import { issueStaffInvitation } from '../server/staff-invitations.js'
-import { issueSuperAdminInvitation } from '../server/super-admin-invitations.js'
+import {
+  deliverSuperAdminInvitation,
+  issueSuperAdminInvitation,
+  validateSuperAdminInvitationDeliveryConfig,
+} from '../server/super-admin-invitations.js'
 
 const emailPattern = /^[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}$/
 const command = process.argv[2]
@@ -93,6 +97,9 @@ async function run() {
     const email = String(process.env.SUPER_ADMIN_INVITATION_EMAIL || '').trim().toLowerCase()
     const publicAppUrl = String(process.env.PUBLIC_APP_URL || 'https://barangay-legaspi.vercel.app').trim()
     if (!emailPattern.test(email)) throw new Error('SUPER_ADMIN_INVITATION_EMAIL must be a valid recipient email.')
+    const deliveryUrl = process.env.SUPER_ADMIN_INVITATION_DELIVERY_URL || ''
+    const deliveryToken = process.env.SUPER_ADMIN_INVITATION_DELIVERY_TOKEN || ''
+    validateSuperAdminInvitationDeliveryConfig({ deliveryUrl, deliveryToken })
     const parsedUrl = new URL(publicAppUrl)
     if (
       parsedUrl.protocol !== 'https:'
@@ -112,9 +119,18 @@ async function run() {
       throw new Error('A staff invitation is already pending for that email. Resolve it before issuing a Super Admin invitation.')
     }
     if (result.status !== 'created') throw new Error('Super Admin invitation could not be created; no link was issued.')
-    console.log(`Invitation expires at ${result.expiresAt}. Deliver this link securely to the intended account holder; it is not emailed automatically:`)
-    console.log(result.inviteUrl)
-    console.log('Treat the link as a temporary credential. Do not save it in chat, logs, or tickets.')
+    try {
+      await deliverSuperAdminInvitation({
+        deliveryUrl,
+        deliveryToken,
+        email,
+        inviteUrl: result.inviteUrl,
+        expiresAt: result.expiresAt,
+      })
+    } catch (error) {
+      throw new Error(`Invitation was created but private delivery failed; the setup link was not printed. Reissue after fixing delivery. ${error.message}`)
+    }
+    console.log(`Super Admin setup invitation was privately delivered to the intended account holder. It expires at ${result.expiresAt}. The link was not printed.`)
     return
   }
 
