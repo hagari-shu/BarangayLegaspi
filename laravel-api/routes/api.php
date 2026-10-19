@@ -6,6 +6,8 @@ use Illuminate\Support\Facades\Route;
 Route::get('/health', [ApiController::class, 'health']);
 Route::post('/client-errors', [ApiController::class, 'reportClientError'])->middleware('throttle:10,15');
 Route::post('/register', [ApiController::class, 'register'])->middleware('throttle:12,1');
+Route::post('/super-admin/invitations/validate', [ApiController::class, 'validateSuperAdminInvitation'])->middleware('throttle:12,1');
+Route::post('/super-admin/invitations/accept', [ApiController::class, 'acceptSuperAdminInvitation'])->middleware('throttle:12,1');
 Route::post('/login', [ApiController::class, 'login'])->middleware('throttle:12,1');
 Route::post('/login/mfa', [ApiController::class, 'loginMfa'])->middleware('throttle:12,1');
 Route::post('/reset-password/request', [ApiController::class, 'requestPasswordReset'])->middleware('throttle:12,1');

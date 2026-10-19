@@ -110,6 +110,11 @@ export async function registerResident(user, auditEntry) {
       && !invitation.acceptedAt
       && !invitation.revokedAt
       && Date.parse(invitation.expiresAt) > Date.parse(user.createdAt)
+    )) || (db.superAdminInvitations || []).some((invitation) => (
+      String(invitation.email || '').toLowerCase() === email
+      && !invitation.acceptedAt
+      && !invitation.revokedAt
+      && Date.parse(invitation.expiresAt) > Date.parse(user.createdAt)
     ))
     if (hasPendingInvitation) return { status: 'invitation_pending' }
 
@@ -482,6 +487,14 @@ export async function issueStaffInvitation(invitation, auditEntry) {
     if (db.users.some((user) => String(user.email || '').toLowerCase() === invitation.email)) {
       return { status: 'account_exists' }
     }
+    if ((db.superAdminInvitations || []).some((entry) => (
+      String(entry.email || '').toLowerCase() === invitation.email
+      && !entry.acceptedAt
+      && !entry.revokedAt
+      && Date.parse(entry.expiresAt) > Date.parse(invitation.issuedAt)
+    ))) {
+      return { status: 'invitation_pending' }
+    }
 
     db.staffInvitations = Array.isArray(db.staffInvitations) ? db.staffInvitations : []
     for (const existing of db.staffInvitations) {
@@ -540,6 +553,88 @@ export async function acceptStaffInvitation({ tokenHash, user, acceptedAt, audit
       address: 'Barangay Hall, Legaspi',
       zone: 0,
       position: invitation.position || 'Staff',
+      availability: 'Available',
+      createdAt: acceptedAt,
+    })
+    invitation.acceptedAt = acceptedAt
+    db.auditLogs = Array.isArray(db.auditLogs) ? db.auditLogs : []
+    db.auditLogs.push(auditEntry)
+    await writeDb(db)
+    return { status: 'created', userId: user.id }
+  })
+}
+
+export async function issueSuperAdminInvitation(invitation, auditEntry) {
+  return serializeProvisioningMutation(async () => {
+    const db = await readDb()
+    if (db.users.some((user) => String(user.email || '').toLowerCase() === invitation.email)) {
+      return { status: 'account_exists' }
+    }
+    if ((db.staffInvitations || []).some((entry) => (
+      String(entry.email || '').toLowerCase() === invitation.email
+      && !entry.acceptedAt
+      && !entry.revokedAt
+      && Date.parse(entry.expiresAt) > Date.parse(invitation.issuedAt)
+    ))) {
+      return { status: 'invitation_pending' }
+    }
+
+    db.superAdminInvitations = Array.isArray(db.superAdminInvitations) ? db.superAdminInvitations : []
+    for (const existing of db.superAdminInvitations) {
+      if (
+        String(existing.email || '').toLowerCase() === invitation.email
+        && !existing.acceptedAt
+        && !existing.revokedAt
+      ) {
+        existing.revokedAt = invitation.issuedAt
+      }
+    }
+    db.superAdminInvitations.push(invitation)
+    db.auditLogs = Array.isArray(db.auditLogs) ? db.auditLogs : []
+    db.auditLogs.push(auditEntry)
+    await writeDb(db)
+    return { status: 'created' }
+  })
+}
+
+export async function getSuperAdminInvitationByTokenHash(tokenHash) {
+  const db = await readDb()
+  return (db.superAdminInvitations || []).find((invitation) => invitation.tokenHash === tokenHash) || null
+}
+
+export async function acceptSuperAdminInvitation({ tokenHash, user, acceptedAt, auditEntry }) {
+  return serializeProvisioningMutation(async () => {
+    const db = await readDb()
+    const invitation = (db.superAdminInvitations || []).find((entry) => entry.tokenHash === tokenHash)
+    if (
+      !invitation
+      || invitation.acceptedAt
+      || invitation.revokedAt
+      || Date.parse(invitation.expiresAt) <= Date.parse(acceptedAt)
+    ) {
+      return { status: 'invalid_invitation' }
+    }
+    if (db.users.some((existing) => (
+      String(existing.email || '').toLowerCase() === invitation.email
+      || String(existing.mobile || '') === user.mobile
+    ))) {
+      return { status: 'account_exists' }
+    }
+
+    db.users.push({
+      id: user.id,
+      firstName: user.firstName,
+      lastName: user.lastName,
+      mobile: user.mobile,
+      email: invitation.email,
+      passwordHash: user.passwordHash,
+      role: 'super_admin',
+      householdId: user.householdId,
+      familyMembers: 1,
+      householdMembers: [],
+      status: 'Administrator',
+      address: 'Barangay Hall, Legaspi',
+      zone: 0,
       availability: 'Available',
       createdAt: acceptedAt,
     })

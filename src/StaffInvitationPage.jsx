@@ -3,14 +3,30 @@ import { Link } from 'react-router-dom'
 
 const API_BASE = (import.meta.env.VITE_API_BASE || (import.meta.env.DEV ? 'http://localhost:3001/api' : '')).replace(/\/$/, '')
 
-export default function StaffInvitationPage({ language = 'en' }) {
+export default function StaffInvitationPage({ language = 'en', accountType = 'staff' }) {
+  const isSuperAdmin = accountType === 'super_admin'
   const [token] = useState(() => new URLSearchParams(window.location.hash.slice(1)).get('token') || '')
   const [invitation, setInvitation] = useState(null)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [created, setCreated] = useState(false)
   const copy = language === 'fil'
-    ? {
+    ? isSuperAdmin
+      ? {
+        title: 'I-set up ang Super Admin account',
+        intro: 'Gamitin ang imbitasyong ito para gumawa ng Super Admin account. Isang beses lang ito magagamit at mawawalan ng bisa pagkalipas ng 12 oras.',
+        firstName: 'Pangalan',
+        lastName: 'Apelyido',
+        mobile: 'Mobile (09XXXXXXXXX)',
+        password: 'Gumawa ng password',
+        confirmPassword: 'Ulitin ang password',
+        submit: 'Gumawa ng account',
+        success: 'Nagawa na ang Super Admin account. Maaari ka nang mag-sign in.',
+        login: 'Pumunta sa sign in',
+        invalid: 'Hindi wasto, paso na, o nagamit na ang imbitasyon.',
+        mismatch: 'Hindi magkapareho ang mga password.',
+      }
+      : {
       title: 'I-set up ang staff account',
       intro: 'Gamitin ang imbitasyong ito para gumawa ng staff account. Isang beses lang ito magagamit at mawawalan ng bisa pagkalipas ng 12 oras.',
       firstName: 'Pangalan',
@@ -24,7 +40,22 @@ export default function StaffInvitationPage({ language = 'en' }) {
       invalid: 'Hindi wasto, paso na, o nagamit na ang imbitasyon.',
       mismatch: 'Hindi magkapareho ang mga password.',
     }
-    : {
+    : isSuperAdmin
+      ? {
+        title: 'Set up your Super Admin account',
+        intro: 'Use this invitation to create your Super Admin account. It can be used once and expires after 12 hours.',
+        firstName: 'First name',
+        lastName: 'Last name',
+        mobile: 'Mobile (09XXXXXXXXX)',
+        password: 'Create password',
+        confirmPassword: 'Confirm password',
+        submit: 'Create account',
+        success: 'Your Super Admin account is ready. You can now sign in.',
+        login: 'Go to sign in',
+        invalid: 'This invitation is invalid, expired, or already used.',
+        mismatch: 'The passwords do not match.',
+      }
+      : {
       title: 'Set up your staff account',
       intro: 'Use this invitation to create your staff account. It can be used once and expires after 12 hours.',
       firstName: 'First name',
@@ -38,6 +69,7 @@ export default function StaffInvitationPage({ language = 'en' }) {
       invalid: 'This invitation is invalid, expired, or already used.',
       mismatch: 'The passwords do not match.',
     }
+  const invitationApiPath = isSuperAdmin ? 'super-admin/invitations' : 'staff/invitations'
 
   useEffect(() => {
     if (token) {
@@ -46,7 +78,7 @@ export default function StaffInvitationPage({ language = 'en' }) {
     if (!token) return undefined
 
     const controller = new AbortController()
-    fetch(`${API_BASE}/staff/invitations/validate`, {
+    fetch(`${API_BASE}/${invitationApiPath}/validate`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ token }),
@@ -62,7 +94,7 @@ export default function StaffInvitationPage({ language = 'en' }) {
       })
 
     return () => controller.abort()
-  }, [token, copy.invalid])
+  }, [token, copy.invalid, invitationApiPath])
 
   const submit = async (event) => {
     event.preventDefault()
@@ -76,7 +108,7 @@ export default function StaffInvitationPage({ language = 'en' }) {
 
     setBusy(true)
     try {
-      const response = await fetch(`${API_BASE}/staff/invitations/accept`, {
+      const response = await fetch(`${API_BASE}/${invitationApiPath}/accept`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -91,7 +123,7 @@ export default function StaffInvitationPage({ language = 'en' }) {
       if (!response.ok) throw new Error(data.message || copy.invalid)
       setCreated(true)
     } catch (requestError) {
-      setError(requestError.message || 'Unable to create the staff account.')
+      setError(requestError.message || (isSuperAdmin ? 'Unable to create the Super Admin account.' : 'Unable to create the staff account.'))
     } finally {
       setBusy(false)
     }

@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { ADMIN_SEED, IS_PRODUCTION } from '../server/config.js'
 import * as postgres from '../server/db-postgres.js'
 import { issueStaffInvitation } from '../server/staff-invitations.js'
+import { issueSuperAdminInvitation } from '../server/super-admin-invitations.js'
 
 const emailPattern = /^[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}$/
 const command = process.argv[2]
@@ -88,6 +89,35 @@ async function run() {
     throw new Error(messages[result.status] || 'Super Admin promotion did not complete.')
   }
 
+  if (command === 'invite-super-admin') {
+    const email = String(process.env.SUPER_ADMIN_INVITATION_EMAIL || '').trim().toLowerCase()
+    const publicAppUrl = String(process.env.PUBLIC_APP_URL || 'https://barangay-legaspi.vercel.app').trim()
+    if (!emailPattern.test(email)) throw new Error('SUPER_ADMIN_INVITATION_EMAIL must be a valid recipient email.')
+    const parsedUrl = new URL(publicAppUrl)
+    if (
+      parsedUrl.protocol !== 'https:'
+      || parsedUrl.username
+      || parsedUrl.password
+      || parsedUrl.pathname !== '/'
+      || parsedUrl.search
+      || parsedUrl.hash
+    ) {
+      throw new Error('PUBLIC_APP_URL must be an HTTPS origin without credentials.')
+    }
+    const result = await issueSuperAdminInvitation({ email, publicAppUrl: parsedUrl.origin, store: postgres })
+    if (result.status === 'account_exists') {
+      throw new Error('An account already uses that email. Promote the existing verified resident instead.')
+    }
+    if (result.status === 'invitation_pending') {
+      throw new Error('A staff invitation is already pending for that email. Resolve it before issuing a Super Admin invitation.')
+    }
+    if (result.status !== 'created') throw new Error('Super Admin invitation could not be created; no link was issued.')
+    console.log(`Invitation expires at ${result.expiresAt}. Deliver this link securely to the intended account holder; it is not emailed automatically:`)
+    console.log(result.inviteUrl)
+    console.log('Treat the link as a temporary credential. Do not save it in chat, logs, or tickets.')
+    return
+  }
+
   if (command === 'invite-staff') {
     const email = String(getOption('--email') || '').trim().toLowerCase()
     const position = String(getOption('--position') || 'Staff').trim()
@@ -123,7 +153,7 @@ async function run() {
     return
   }
 
-  throw new Error('Usage: node scripts/operator-accounts.js <promote-admin|promote-super-admin|invite-staff> --confirm [--email recipient] [--position title]')
+  throw new Error('Usage: node scripts/operator-accounts.js <promote-admin|promote-super-admin|invite-super-admin|invite-staff> --confirm [--email recipient] [--position title]')
 }
 
 try {

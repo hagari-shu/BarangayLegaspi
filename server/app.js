@@ -32,6 +32,11 @@ import {
   hashStaffInvitationToken,
   isValidStaffInvitationToken,
 } from './staff-invitations.js'
+import {
+  createSuperAdminInvitationAcceptanceAudit,
+  hashSuperAdminInvitationToken,
+  isValidSuperAdminInvitationToken,
+} from './super-admin-invitations.js'
 import { isAdminRole, isStaffOrAdminRole, isSuperAdminRole } from './rbac.js'
 
 let store = process.env.DATABASE_URL && !IS_TEST_RUN ? pgDb : jsonDb
@@ -666,6 +671,95 @@ export function createApp() {
     } catch (error) {
       console.error('staff invitation acceptance failed', error)
       return res.status(500).json({ message: 'Unable to create the staff account.' })
+    }
+  })
+
+  app.post('/api/super-admin/invitations/validate', authRateLimit, async (req, res) => {
+    res.set('Cache-Control', 'no-store')
+    const token = String(req.body?.token || '')
+    if (!isValidSuperAdminInvitationToken(token) || typeof store.getSuperAdminInvitationByTokenHash !== 'function') {
+      return res.status(410).json({ message: 'This Super Admin invitation is invalid, expired, or already used.' })
+    }
+
+    try {
+      const invitation = await store.getSuperAdminInvitationByTokenHash(hashSuperAdminInvitationToken(token))
+      if (
+        !invitation
+        || invitation.acceptedAt
+        || invitation.revokedAt
+        || Date.parse(invitation.expiresAt) <= Date.now()
+      ) {
+        return res.status(410).json({ message: 'This Super Admin invitation is invalid, expired, or already used.' })
+      }
+      return res.json({ email: invitation.email, expiresAt: invitation.expiresAt })
+    } catch (error) {
+      console.error('Super Admin invitation lookup failed', error)
+      return res.status(500).json({ message: 'Unable to verify this Super Admin invitation.' })
+    }
+  })
+
+  app.post('/api/super-admin/invitations/accept', authRateLimit, async (req, res) => {
+    res.set('Cache-Control', 'no-store')
+    const token = String(req.body?.token || '')
+    const firstName = sanitizeText(req.body?.firstName)
+    const lastName = sanitizeText(req.body?.lastName)
+    const mobile = sanitizeText(req.body?.mobile)
+    const password = String(req.body?.password || '')
+    if (!isValidSuperAdminInvitationToken(token)) {
+      return res.status(410).json({ message: 'This Super Admin invitation is invalid, expired, or already used.' })
+    }
+    if (
+      !firstName || firstName.length > 100
+      || !lastName || lastName.length > 100
+      || !isValidMobile(mobile)
+      || !isValidPassword(password)
+    ) {
+      return res.status(400).json({
+        message: `Please provide a first and last name, a valid mobile number, and a password with ${passwordRequirements}.`,
+      })
+    }
+    if (typeof store.acceptSuperAdminInvitation !== 'function') {
+      return res.status(503).json({ message: 'Super Admin invitation acceptance is unavailable.' })
+    }
+
+    try {
+      const tokenHash = hashSuperAdminInvitationToken(token)
+      const invitation = await store.getSuperAdminInvitationByTokenHash(tokenHash)
+      if (
+        !invitation
+        || invitation.acceptedAt
+        || invitation.revokedAt
+        || Date.parse(invitation.expiresAt) <= Date.now()
+      ) {
+        return res.status(410).json({ message: 'This Super Admin invitation is invalid, expired, or already used.' })
+      }
+
+      const acceptedAt = new Date().toISOString()
+      const user = {
+        id: randomUUID(),
+        firstName,
+        lastName,
+        mobile,
+        passwordHash: await hashPassword(password),
+        householdId: `ADMIN-${randomUUID().slice(0, 12)}`,
+      }
+      const result = await store.acceptSuperAdminInvitation({
+        tokenHash,
+        user,
+        acceptedAt,
+        auditEntry: createSuperAdminInvitationAcceptanceAudit(user.id, invitation.id),
+      })
+      if (result.status === 'invalid_invitation') {
+        return res.status(410).json({ message: 'This Super Admin invitation is invalid, expired, or already used.' })
+      }
+      if (result.status === 'account_exists') {
+        return res.status(409).json({ message: 'An account already uses these details. Contact the barangay office.' })
+      }
+
+      return res.status(201).json({ message: 'Super Admin account created. You can now sign in.' })
+    } catch (error) {
+      console.error('Super Admin invitation acceptance failed', error)
+      return res.status(500).json({ message: 'Unable to create the Super Admin account.' })
     }
   })
 

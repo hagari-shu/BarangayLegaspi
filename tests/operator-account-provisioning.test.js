@@ -6,6 +6,7 @@ import { createApp, seedDemoResident } from '../server/app.js'
 import { DB_PATH } from '../server/config.js'
 import * as jsonDb from '../server/db.js'
 import { hashStaffInvitationToken, issueStaffInvitation } from '../server/staff-invitations.js'
+import { hashSuperAdminInvitationToken, issueSuperAdminInvitation } from '../server/super-admin-invitations.js'
 
 beforeEach(async () => {
   await fs.mkdir(path.dirname(DB_PATH), { recursive: true })
@@ -202,6 +203,155 @@ test('resident registration cannot claim an email with a pending staff invitatio
     await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
   }
 })
+
+test('protected Super Admin invitation creates a verified administrator account with user-selected credentials', async () => {
+      const invitation = await issueSuperAdminInvitation({
+        email: 'new.super-admin@example.test',
+        publicAppUrl: 'https://barangay-legaspi.vercel.app',
+        store: jsonDb,
+      })
+      assert.equal(invitation.status, 'created')
+      assert.equal(new URL(invitation.inviteUrl).pathname, '/super-admin-invite')
+      assert.equal(new URL(invitation.inviteUrl).search, '')
+      const token = new URLSearchParams(new URL(invitation.inviteUrl).hash.slice(1)).get('token')
+      const storedBeforeAcceptance = await jsonDb.readDb()
+      assert.equal(storedBeforeAcceptance.superAdminInvitations[0].tokenHash, hashSuperAdminInvitationToken(token))
+      assert.equal(storedBeforeAcceptance.superAdminInvitations[0].tokenHash.includes(token), false)
+      assert.equal(storedBeforeAcceptance.auditLogs.at(-1).action, 'super_admin.invitation.issued')
+
+      const { server, baseUrl } = await startTestServer()
+      try {
+        const validation = await fetch(`${baseUrl}/api/super-admin/invitations/validate`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token }),
+        })
+        assert.equal(validation.status, 200)
+        assert.equal(validation.headers.get('cache-control'), 'no-store')
+        assert.equal((await validation.json()).email, 'new.super-admin@example.test')
+
+        const accepted = await fetch(`${baseUrl}/api/super-admin/invitations/accept`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            token,
+            firstName: 'Morgan',
+            lastName: 'Oversight',
+            mobile: '09170000201',
+            password: 'MyChosen!Password2026',
+          }),
+        })
+        assert.equal(accepted.status, 201)
+        assert.deepEqual(await accepted.json(), { message: 'Super Admin account created. You can now sign in.' })
+
+        const login = await fetch(`${baseUrl}/api/login`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            identifier: 'new.super-admin@example.test',
+            password: 'MyChosen!Password2026',
+          }),
+        })
+        assert.equal(login.status, 200)
+        assert.equal((await login.json()).user.role, 'super_admin')
+
+        const replay = await fetch(`${baseUrl}/api/super-admin/invitations/accept`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            token,
+            firstName: 'Morgan',
+            lastName: 'Oversight',
+            mobile: '09170000201',
+            password: 'MyChosen!Password2026',
+          }),
+        })
+        assert.equal(replay.status, 410)
+
+        const storedAfterAcceptance = await jsonDb.readDb()
+        const account = storedAfterAcceptance.users.find((user) => user.email === 'new.super-admin@example.test')
+        assert.equal(account.role, 'super_admin')
+        assert.equal(account.status, 'Administrator')
+        assert.notEqual(account.passwordHash, 'MyChosen!Password2026')
+        assert.equal(account.password, undefined)
+        assert.ok(storedAfterAcceptance.superAdminInvitations[0].acceptedAt)
+        assert.equal(storedAfterAcceptance.auditLogs.at(-1).action, 'super_admin.invitation.accepted')
+      } finally {
+        await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
+      }
+    })
+
+    test('Super Admin invitations reject existing accounts and expire after twelve hours', async () => {
+      const existing = await issueSuperAdminInvitation({
+        email: 'maria.delacruz@email.com',
+        publicAppUrl: 'https://barangay-legaspi.vercel.app',
+        store: jsonDb,
+      })
+      assert.equal(existing.status, 'account_exists')
+
+      const invitation = await issueSuperAdminInvitation({
+        email: 'expired.super-admin@example.test',
+        publicAppUrl: 'https://barangay-legaspi.vercel.app',
+        store: jsonDb,
+        now: new Date(Date.now() - 13 * 60 * 60 * 1000),
+      })
+      assert.equal(invitation.status, 'created')
+      const token = new URLSearchParams(new URL(invitation.inviteUrl).hash.slice(1)).get('token')
+      const expired = await jsonDb.getSuperAdminInvitationByTokenHash(hashSuperAdminInvitationToken(token))
+      assert.ok(Date.parse(expired.expiresAt) < Date.now())
+    })
+
+    test('Super Admin invitations do not conflict with staff invitations or resident registration', async () => {
+      const staffInvitation = await createInvitation('already.staff-invited@example.test')
+      const conflictingSuperAdmin = await issueSuperAdminInvitation({
+        email: 'already.staff-invited@example.test',
+        publicAppUrl: 'https://barangay-legaspi.vercel.app',
+        store: jsonDb,
+      })
+      assert.equal(conflictingSuperAdmin.status, 'invitation_pending')
+      assert.ok(staffInvitation.token)
+
+      const superAdminInvitation = await issueSuperAdminInvitation({
+        email: 'reserved.super-admin@example.test',
+        publicAppUrl: 'https://barangay-legaspi.vercel.app',
+        store: jsonDb,
+      })
+      assert.equal(superAdminInvitation.status, 'created')
+      const staffConflict = await issueStaffInvitation({
+        email: 'reserved.super-admin@example.test',
+        publicAppUrl: 'https://barangay-legaspi.vercel.app',
+        store: jsonDb,
+      })
+      assert.equal(staffConflict.status, 'invitation_pending')
+
+      const registration = await jsonDb.registerResident({
+        id: '00000000-0000-4000-8000-000000000151',
+        firstName: 'Unauthorized',
+        lastName: 'Registrant',
+        mobile: '09170000151',
+        email: 'reserved.super-admin@example.test',
+        passwordHash: 'hashed-password',
+        role: 'resident',
+        householdId: 'REG-151',
+        familyMembers: 1,
+        householdMembers: [],
+        status: 'Pending Verification',
+        address: 'Legaspi',
+        zone: 1,
+        createdAt: new Date().toISOString(),
+      }, { id: 'audit-resident-attempt', action: 'user.registered' })
+      assert.equal(registration.status, 'invitation_pending')
+
+      const replacement = await issueSuperAdminInvitation({
+        email: 'reserved.super-admin@example.test',
+        publicAppUrl: 'https://barangay-legaspi.vercel.app',
+        store: jsonDb,
+      })
+      assert.equal(replacement.status, 'created')
+      const stored = await jsonDb.readDb()
+      assert.ok(stored.superAdminInvitations[0].revokedAt)
+      assert.equal(stored.superAdminInvitations.filter((entry) => !entry.acceptedAt && !entry.revokedAt).length, 1)
+    })
 
 test('resident registration and staff invitation issuance serialize on email', async () => {
   const now = new Date().toISOString()

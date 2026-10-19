@@ -183,6 +183,19 @@ export async function initDatabase() {
   await query("ALTER TABLE staff_invitations ADD COLUMN IF NOT EXISTS position VARCHAR(120) NOT NULL DEFAULT 'Staff'")
   await query(`CREATE UNIQUE INDEX IF NOT EXISTS staff_invitations_pending_email_idx
     ON staff_invitations (LOWER(email)) WHERE accepted_at IS NULL AND revoked_at IS NULL`)
+  await query(`
+    CREATE TABLE IF NOT EXISTS super_admin_invitations (
+      id UUID PRIMARY KEY,
+      email VARCHAR(255) NOT NULL,
+      token_hash CHAR(64) NOT NULL UNIQUE,
+      issued_at TIMESTAMPTZ NOT NULL,
+      expires_at TIMESTAMPTZ NOT NULL,
+      accepted_at TIMESTAMPTZ,
+      revoked_at TIMESTAMPTZ
+    );
+  `)
+  await query(`CREATE UNIQUE INDEX IF NOT EXISTS super_admin_invitations_pending_email_idx
+    ON super_admin_invitations (LOWER(email)) WHERE accepted_at IS NULL AND revoked_at IS NULL`)
 
   await query(`
     CREATE TABLE IF NOT EXISTS resident_registry (
@@ -359,6 +372,9 @@ export async function registerResident(user, auditEntry) {
     const pendingInvitation = await client.query(
       `SELECT id FROM staff_invitations
        WHERE LOWER(email) = $1 AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > NOW()
+       UNION ALL
+       SELECT id FROM super_admin_invitations
+       WHERE LOWER(email) = $1 AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > NOW()
        LIMIT 1`,
       [user.email.toLowerCase()],
     )
@@ -411,6 +427,17 @@ export async function issueStaffInvitation(invitation, auditEntry) {
     if (existingUser.rows.length) {
       await client.query('ROLLBACK')
       return { status: 'account_exists' }
+    }
+
+    const pendingSuperAdminInvitation = await client.query(
+      `SELECT id FROM super_admin_invitations
+       WHERE LOWER(email) = $1 AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > $2
+       LIMIT 1`,
+      [invitation.email, invitation.issuedAt],
+    )
+    if (pendingSuperAdminInvitation.rows.length) {
+      await client.query('ROLLBACK')
+      return { status: 'invitation_pending' }
     }
 
     await client.query(
@@ -499,6 +526,122 @@ export async function acceptStaffInvitation({ tokenHash, user, acceptedAt, audit
     await client.query('ROLLBACK')
     if (error.code === '23505') return { status: 'account_exists' }
     console.error('PostgreSQL staff invitation acceptance failed', error)
+    throw error
+  } finally {
+    client.release()
+  }
+}
+
+export async function issueSuperAdminInvitation(invitation, auditEntry) {
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+    await lockAccountEmail(client, invitation.email)
+    const existingUser = await client.query(
+      'SELECT id FROM users WHERE LOWER(email) = $1 LIMIT 1',
+      [invitation.email],
+    )
+    if (existingUser.rows.length) {
+      await client.query('ROLLBACK')
+      return { status: 'account_exists' }
+    }
+    const pendingStaffInvitation = await client.query(
+      `SELECT id FROM staff_invitations
+       WHERE LOWER(email) = $1 AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > $2
+       LIMIT 1`,
+      [invitation.email, invitation.issuedAt],
+    )
+    if (pendingStaffInvitation.rows.length) {
+      await client.query('ROLLBACK')
+      return { status: 'invitation_pending' }
+    }
+
+    await client.query(
+      `UPDATE super_admin_invitations SET revoked_at = $2
+       WHERE LOWER(email) = $1 AND accepted_at IS NULL AND revoked_at IS NULL`,
+      [invitation.email, invitation.issuedAt],
+    )
+    await client.query(
+      `INSERT INTO super_admin_invitations (id, email, token_hash, issued_at, expires_at)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [invitation.id, invitation.email, invitation.tokenHash, invitation.issuedAt, invitation.expiresAt],
+    )
+    await writeProvisioningAudit(client, auditEntry)
+    await client.query('COMMIT')
+    return { status: 'created' }
+  } catch (error) {
+    await client.query('ROLLBACK')
+    if (error.code === '23505') return { status: 'invitation_conflict' }
+    console.error('PostgreSQL Super Admin invitation issuance failed', error)
+    throw error
+  } finally {
+    client.release()
+  }
+}
+
+export async function getSuperAdminInvitationByTokenHash(tokenHash) {
+  const result = await query(
+    `SELECT id, email, expires_at AS "expiresAt", accepted_at AS "acceptedAt", revoked_at AS "revokedAt"
+     FROM super_admin_invitations WHERE token_hash = $1 LIMIT 1`,
+    [tokenHash],
+  )
+  return result.rows[0] || null
+}
+
+export async function acceptSuperAdminInvitation({ tokenHash, user, acceptedAt, auditEntry }) {
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+    const invitationLookup = await client.query(
+      'SELECT email FROM super_admin_invitations WHERE token_hash = $1 LIMIT 1',
+      [tokenHash],
+    )
+    if (!invitationLookup.rows[0]) {
+      await client.query('ROLLBACK')
+      return { status: 'invalid_invitation' }
+    }
+    await lockAccountEmail(client, invitationLookup.rows[0].email)
+    const invitationResult = await client.query(
+      `SELECT id, email, expires_at AS "expiresAt", accepted_at AS "acceptedAt", revoked_at AS "revokedAt"
+       FROM super_admin_invitations WHERE token_hash = $1 FOR UPDATE`,
+      [tokenHash],
+    )
+    const invitation = invitationResult.rows[0]
+    if (
+      !invitation
+      || invitation.acceptedAt
+      || invitation.revokedAt
+      || Date.parse(invitation.expiresAt) <= Date.parse(acceptedAt)
+    ) {
+      await client.query('ROLLBACK')
+      return { status: 'invalid_invitation' }
+    }
+
+    const existingUser = await client.query(
+      'SELECT id FROM users WHERE LOWER(email) = $1 OR mobile = $2 LIMIT 1 FOR UPDATE',
+      [invitation.email.toLowerCase(), user.mobile],
+    )
+    if (existingUser.rows.length) {
+      await client.query('ROLLBACK')
+      return { status: 'account_exists' }
+    }
+
+    await client.query(
+      `INSERT INTO users (id, first_name, last_name, mobile, email, password_hash, role, household_id, family_members, household_members, status, address, zone, availability, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, 'super_admin', $7, 1, '[]'::jsonb, 'Administrator', 'Barangay Hall, Legaspi', 0, 'Available', $8)`,
+      [user.id, user.firstName, user.lastName, user.mobile, invitation.email, user.passwordHash, user.householdId, acceptedAt],
+    )
+    await client.query(
+      'UPDATE super_admin_invitations SET accepted_at = $2 WHERE id = $1',
+      [invitation.id, acceptedAt],
+    )
+    await writeProvisioningAudit(client, auditEntry)
+    await client.query('COMMIT')
+    return { status: 'created', userId: user.id }
+  } catch (error) {
+    await client.query('ROLLBACK')
+    if (error.code === '23505') return { status: 'account_exists' }
+    console.error('PostgreSQL Super Admin invitation acceptance failed', error)
     throw error
   } finally {
     client.release()

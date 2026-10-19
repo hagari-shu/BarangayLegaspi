@@ -100,6 +100,14 @@ class ApiController extends Controller
         if (DB::table('users')->whereRaw('LOWER(email) = ?', [$email])->exists()) {
             return response()->json(['message' => 'A resident with this email already exists.'], 409);
         }
+        if (DB::table('super_admin_invitations')
+            ->whereRaw('LOWER(email) = ?', [$email])
+            ->whereNull('accepted_at')
+            ->whereNull('revoked_at')
+            ->where('expires_at', '>', now())
+            ->exists()) {
+            return response()->json(['message' => 'An account invitation is pending for this email.'], 409);
+        }
 
         $id = (string) Str::uuid();
         $createdAt = now();
@@ -139,6 +147,130 @@ class ApiController extends Controller
             'user' => $this->publicUser($user),
             'deliveryStatus' => $delivery['deliveryStatus'],
         ], 201);
+    }
+
+    public function validateSuperAdminInvitation(Request $request): JsonResponse
+    {
+        $token = (string) $request->input('token', '');
+        if (!preg_match('/^[A-Za-z0-9_-]{43}$/', $token)) {
+            return response()->json(['message' => 'This Super Admin invitation is invalid, expired, or already used.'], 410)
+                ->header('Cache-Control', 'no-store');
+        }
+
+        $invitation = DB::table('super_admin_invitations')
+            ->where('token_hash', hash('sha256', $token))
+            ->first();
+        if (
+            !$invitation
+            || $invitation->accepted_at
+            || $invitation->revoked_at
+            || now()->parse($invitation->expires_at)->isPast()
+        ) {
+            return response()->json(['message' => 'This Super Admin invitation is invalid, expired, or already used.'], 410)
+                ->header('Cache-Control', 'no-store');
+        }
+
+        return response()->json([
+            'email' => $invitation->email,
+            'expiresAt' => $invitation->expires_at,
+        ])->header('Cache-Control', 'no-store');
+    }
+
+    public function acceptSuperAdminInvitation(Request $request): JsonResponse
+    {
+        $token = (string) $request->input('token', '');
+        $firstName = $this->clean($request->input('firstName'));
+        $lastName = $this->clean($request->input('lastName'));
+        $mobile = $this->clean($request->input('mobile'));
+        $password = (string) $request->input('password', '');
+        if (!preg_match('/^[A-Za-z0-9_-]{43}$/', $token)) {
+            return response()->json(['message' => 'This Super Admin invitation is invalid, expired, or already used.'], 410)
+                ->header('Cache-Control', 'no-store');
+        }
+        if (
+            !$firstName || mb_strlen($firstName) > 100
+            || !$lastName || mb_strlen($lastName) > 100
+            || !preg_match('/^09\d{9}$/', $mobile)
+            || !$this->validPassword($password)
+        ) {
+            return response()->json([
+                'message' => 'Please provide a first and last name, a valid mobile number, and a password with '.self::PASSWORD_REQUIREMENTS.'.',
+            ], 400)->header('Cache-Control', 'no-store');
+        }
+
+        $tokenHash = hash('sha256', $token);
+        $acceptedAt = now();
+        try {
+            $result = DB::transaction(function () use ($tokenHash, $firstName, $lastName, $mobile, $password, $acceptedAt) {
+                $invitation = DB::table('super_admin_invitations')
+                    ->where('token_hash', $tokenHash)
+                    ->lockForUpdate()
+                    ->first();
+                if (
+                    !$invitation
+                    || $invitation->accepted_at
+                    || $invitation->revoked_at
+                    || now()->parse($invitation->expires_at)->isPast()
+                ) {
+                    return 'invalid_invitation';
+                }
+                if (DB::table('users')
+                    ->where(function ($query) use ($invitation, $mobile) {
+                        $query->whereRaw('LOWER(email) = ?', [strtolower($invitation->email)])
+                            ->orWhere('mobile', $mobile);
+                    })
+                    ->lockForUpdate()
+                    ->exists()) {
+                    return 'account_exists';
+                }
+
+                $userId = (string) Str::uuid();
+                DB::table('users')->insert([
+                    'id' => $userId,
+                    'first_name' => $firstName,
+                    'last_name' => $lastName,
+                    'mobile' => $mobile,
+                    'email' => strtolower($invitation->email),
+                    'password_hash' => password_hash($password, PASSWORD_BCRYPT),
+                    'role' => 'super_admin',
+                    'household_id' => 'ADMIN-'.substr(str_replace('-', '', $userId), 0, 12),
+                    'family_members' => 1,
+                    'household_members' => '[]',
+                    'status' => 'Administrator',
+                    'address' => 'Barangay Hall, Legaspi',
+                    'zone' => 0,
+                    'availability' => 'Available',
+                    'created_at' => $acceptedAt,
+                ]);
+                DB::table('super_admin_invitations')->where('id', $invitation->id)->update(['accepted_at' => $acceptedAt]);
+                $this->writeAudit(
+                    (object) ['id' => $userId, 'role' => 'super_admin'],
+                    'super_admin.invitation.accepted',
+                    'user',
+                    $userId,
+                    ['invitationId' => $invitation->id],
+                );
+
+                return 'created';
+            });
+        } catch (Throwable $error) {
+            Log::error('Super Admin invitation acceptance failed', ['message' => $error->getMessage()]);
+
+            return response()->json(['message' => 'Unable to create the Super Admin account.'], 500)
+                ->header('Cache-Control', 'no-store');
+        }
+
+        if ($result === 'invalid_invitation') {
+            return response()->json(['message' => 'This Super Admin invitation is invalid, expired, or already used.'], 410)
+                ->header('Cache-Control', 'no-store');
+        }
+        if ($result === 'account_exists') {
+            return response()->json(['message' => 'An account already uses these details. Contact the barangay office.'], 409)
+                ->header('Cache-Control', 'no-store');
+        }
+
+        return response()->json(['message' => 'Super Admin account created. You can now sign in.'], 201)
+            ->header('Cache-Control', 'no-store');
     }
 
     public function login(Request $request): JsonResponse
