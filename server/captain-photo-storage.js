@@ -13,7 +13,12 @@ import { randomUUID } from 'node:crypto'
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024
 const CONTENT_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp'])
 export const CAPTAIN_PHOTO_KEY = 'official/captain-portrait'
-const PENDING_PHOTO_PREFIX = `${CAPTAIN_PHOTO_KEY}/pending/`
+export const OFFICIAL_PHOTO_KEYS = Object.freeze({
+  captain: CAPTAIN_PHOTO_KEY,
+  secretary: 'official/secretary-portrait',
+  treasurer: 'official/treasurer-portrait',
+})
+export const OFFICIAL_PHOTO_ROLES = Object.keys(OFFICIAL_PHOTO_KEYS)
 const bucket = process.env.OBJECT_STORAGE_BUCKET
 const client = bucket && process.env.OBJECT_STORAGE_ACCESS_KEY_ID && process.env.OBJECT_STORAGE_SECRET_ACCESS_KEY
   ? new S3Client({
@@ -27,13 +32,16 @@ const client = bucket && process.env.OBJECT_STORAGE_ACCESS_KEY_ID && process.env
     })
   : null
 
-export const isCaptainPhotoStorageConfigured = () => Boolean(client && bucket)
+export const isOfficialPhotoStorageConfigured = () => Boolean(client && bucket)
+export const isCaptainPhotoStorageConfigured = isOfficialPhotoStorageConfigured
+const isOfficialPhotoRole = (role) => Object.hasOwn(OFFICIAL_PHOTO_KEYS, role)
 
-export async function createCaptainPhotoUpload(contentType) {
-  if (!isCaptainPhotoStorageConfigured()) throw new Error('Object storage is not configured.')
+export async function createOfficialPhotoUpload(role, contentType) {
+  if (!isOfficialPhotoStorageConfigured()) throw new Error('Object storage is not configured.')
+  if (!isOfficialPhotoRole(role)) throw new Error('Invalid official profile.')
   if (!CONTENT_TYPES.has(contentType)) throw new Error('Unsupported image type.')
 
-  const key = `${PENDING_PHOTO_PREFIX}${randomUUID()}`
+  const key = `${OFFICIAL_PHOTO_KEYS[role]}/pending/${randomUUID()}`
   const upload = await createPresignedPost(client, {
     Bucket: bucket,
     Key: key,
@@ -46,6 +54,10 @@ export async function createCaptainPhotoUpload(contentType) {
   return { ...upload, key }
 }
 
+export async function createCaptainPhotoUpload(contentType) {
+  return createOfficialPhotoUpload('captain', contentType)
+}
+
 const hasImageSignature = (bytes, contentType) => {
   if (contentType === 'image/jpeg') return bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff
   if (contentType === 'image/png') return bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))
@@ -53,13 +65,16 @@ const hasImageSignature = (bytes, contentType) => {
   return false
 }
 
-export async function finalizeCaptainPhotoUpload(key) {
-  if (!isCaptainPhotoStorageConfigured()) throw new Error('Object storage is not configured.')
-  const uploadId = typeof key === 'string' && key.startsWith(PENDING_PHOTO_PREFIX)
-    ? key.slice(PENDING_PHOTO_PREFIX.length)
+export async function finalizeOfficialPhotoUpload(role, key) {
+  if (!isOfficialPhotoStorageConfigured()) throw new Error('Object storage is not configured.')
+  if (!isOfficialPhotoRole(role)) throw new Error('Invalid official profile.')
+  const photoKey = OFFICIAL_PHOTO_KEYS[role]
+  const pendingPhotoPrefix = `${photoKey}/pending/`
+  const uploadId = typeof key === 'string' && key.startsWith(pendingPhotoPrefix)
+    ? key.slice(pendingPhotoPrefix.length)
     : ''
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(uploadId)) {
-    throw new Error('Invalid captain photo upload.')
+    throw new Error('Invalid official photo upload.')
   }
 
   const metadata = await client.send(new HeadObjectCommand({ Bucket: bucket, Key: key }))
@@ -78,33 +93,47 @@ export async function finalizeCaptainPhotoUpload(key) {
 
   await client.send(new CopyObjectCommand({
     Bucket: bucket,
-    Key: CAPTAIN_PHOTO_KEY,
+    Key: photoKey,
     CopySource: `/${bucket}/${key.split('/').map(encodeURIComponent).join('/')}`,
     ContentType: metadata.ContentType,
     MetadataDirective: 'REPLACE',
   }))
   await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }))
-  return getSignedUrl(client, new GetObjectCommand({ Bucket: bucket, Key: CAPTAIN_PHOTO_KEY }), { expiresIn: 900 })
+  return getSignedUrl(client, new GetObjectCommand({ Bucket: bucket, Key: photoKey }), { expiresIn: 900 })
 }
 
-export async function getCaptainPhotoUrl() {
-  if (!isCaptainPhotoStorageConfigured()) return null
+export async function finalizeCaptainPhotoUpload(key) {
+  return finalizeOfficialPhotoUpload('captain', key)
+}
+
+export async function getOfficialPhotoUrl(role) {
+  if (!isOfficialPhotoStorageConfigured()) return null
+  if (!isOfficialPhotoRole(role)) throw new Error('Invalid official profile.')
+  const photoKey = OFFICIAL_PHOTO_KEYS[role]
   try {
-    await client.send(new HeadObjectCommand({ Bucket: bucket, Key: CAPTAIN_PHOTO_KEY }))
+    await client.send(new HeadObjectCommand({ Bucket: bucket, Key: photoKey }))
   } catch (error) {
     if (error?.name === 'NotFound' || error?.$metadata?.httpStatusCode === 404) return null
     throw error
   }
-  return getSignedUrl(client, new GetObjectCommand({ Bucket: bucket, Key: CAPTAIN_PHOTO_KEY }), { expiresIn: 900 })
+  return getSignedUrl(client, new GetObjectCommand({ Bucket: bucket, Key: photoKey }), { expiresIn: 900 })
 }
 
-export async function deleteCaptainPhoto(key) {
-  if (!isCaptainPhotoStorageConfigured()) throw new Error('Object storage is not configured.')
-  if (key !== CAPTAIN_PHOTO_KEY) {
-    throw new Error('Invalid captain photo.')
+export async function getCaptainPhotoUrl() {
+  return getOfficialPhotoUrl('captain')
+}
+
+export async function deleteOfficialPhoto(role, key = OFFICIAL_PHOTO_KEYS[role]) {
+  if (!isOfficialPhotoStorageConfigured()) throw new Error('Object storage is not configured.')
+  if (!isOfficialPhotoRole(role) || key !== OFFICIAL_PHOTO_KEYS[role]) {
+    throw new Error('Invalid official photo.')
   }
 
   await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }))
+}
+
+export async function deleteCaptainPhoto(key) {
+  return deleteOfficialPhoto('captain', key)
 }
 
 export const CAPTAIN_PHOTO_MAX_BYTES = MAX_IMAGE_BYTES

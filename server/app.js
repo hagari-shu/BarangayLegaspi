@@ -11,11 +11,18 @@ import * as pgDb from './db-postgres.js'
 import {
   CAPTAIN_PHOTO_CONTENT_TYPES,
   CAPTAIN_PHOTO_KEY,
+  OFFICIAL_PHOTO_KEYS,
+  OFFICIAL_PHOTO_ROLES,
   createCaptainPhotoUpload,
+  createOfficialPhotoUpload,
   deleteCaptainPhoto,
+  deleteOfficialPhoto,
   finalizeCaptainPhotoUpload,
+  finalizeOfficialPhotoUpload,
   getCaptainPhotoUrl,
+  getOfficialPhotoUrl,
   isCaptainPhotoStorageConfigured,
+  isOfficialPhotoStorageConfigured,
 } from './captain-photo-storage.js'
 import {
   deleteFacebookPost,
@@ -298,6 +305,11 @@ export function createApp() {
     return Boolean(roleAllowed && !['Suspended', 'Disabled'].includes(actor.user.status))
   }
 
+  const canManageOfficialProfiles = (actor) => Boolean(
+    actor && ['staff', 'admin'].includes(actor.user.role)
+      && !['Suspended', 'Disabled'].includes(actor.user.status),
+  )
+
   const deliverAnnouncementChannels = async (announcement, channels, options = {}) => {
     const delivery = {}
     if (channels.includes('facebook')) {
@@ -562,13 +574,15 @@ export function createApp() {
         return res.status(403).json({ message: 'Admin access required.' })
       }
       if (!isCaptainPhotoStorageConfigured()) return res.status(503).json({ message: 'Image storage is not configured.' })
-      if (req.body?.key !== CAPTAIN_PHOTO_KEY) return res.status(400).json({ message: 'Invalid image upload.' })
+      if (typeof req.body?.key !== 'string' || !req.body.key.startsWith(`${CAPTAIN_PHOTO_KEY}/pending/`)) {
+        return res.status(400).json({ message: 'Invalid image upload.' })
+      }
 
       await finalizeCaptainPhotoUpload(req.body.key)
       await writeAudit(actor.user, 'captain-photo.updated', 'image', CAPTAIN_PHOTO_KEY)
       return res.json({ ok: true })
     } catch (error) {
-      if (error.message?.startsWith('Invalid captain photo upload')
+      if (error.message?.startsWith('Invalid official photo upload')
         || error.message?.startsWith('Upload must be')
         || error.message?.startsWith('Uploaded file is not')) {
         return res.status(400).json({ message: error.message })
@@ -595,6 +609,170 @@ export function createApp() {
     } catch (error) {
       console.error('delete captain photo failed', error)
       return res.status(502).json({ message: 'Unable to remove the captain photo.' })
+    }
+  })
+
+  app.get('/api/official-profiles', async (_req, res) => {
+    res.setHeader('Cache-Control', 'no-store')
+    try {
+      const profiles = await store.getOfficialProfiles?.()
+      if (!profiles) throw new Error('Official profile storage is unavailable.')
+      const result = await Promise.all(profiles.map(async (profile) => ({
+        ...profile,
+        photoUrl: await getOfficialPhotoUrl(profile.role),
+      })))
+      return res.json({ profiles: result })
+    } catch (error) {
+      console.error('load official profiles failed', error)
+      return res.status(500).json({ message: 'Unable to load official profiles.' })
+    }
+  })
+
+  app.get('/api/official-profiles/:role/photo', async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store')
+    if (!OFFICIAL_PHOTO_ROLES.includes(req.params.role)) return res.sendStatus(404)
+    try {
+      const photoUrl = await getOfficialPhotoUrl(req.params.role)
+      if (!photoUrl) return res.status(204).end()
+      return res.redirect(302, photoUrl)
+    } catch (error) {
+      console.error('load official profile photo failed', error)
+      return res.status(502).json({ message: 'Unable to load the official photo.' })
+    }
+  })
+
+  app.put('/api/admin/official-profiles/:role', async (req, res) => {
+    const authHeader = req.headers.authorization || ''
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : ''
+    if (!token) return res.status(401).json({ message: 'Authentication required.' })
+    if (!OFFICIAL_PHOTO_ROLES.includes(req.params.role)) return res.status(404).json({ message: 'Official profile not found.' })
+
+    let actor
+    try {
+      actor = await getCurrentActor(token)
+    } catch {
+      return res.status(401).json({ message: 'Invalid or expired token.' })
+    }
+    if (!actor) return res.status(401).json({ message: 'Authentication required.' })
+    if (!canManageOfficialProfiles(actor)) return res.status(403).json({ message: 'Staff or Admin access required.' })
+
+    try {
+      const displayName = sanitizeText(req.body?.displayName || '')
+      const profileUrl = String(req.body?.profileUrl || '').trim()
+      const groupUrl = String(req.body?.groupUrl || '').trim()
+      const isValidProfileUrl = (value) => {
+        if (!value) return true
+        if (value.length > 2048) return false
+        try {
+          const url = new URL(value)
+          return url.protocol === 'https:' && !url.username && !url.password
+        } catch {
+          return false
+        }
+      }
+      if (displayName.length > 120 || !isValidProfileUrl(profileUrl) || !isValidProfileUrl(groupUrl)) {
+        return res.status(400).json({ message: 'Enter a name up to 120 characters and valid HTTPS profile and group links.' })
+      }
+
+      const profile = await store.updateOfficialProfile?.(
+        req.params.role,
+        { displayName, profileUrl, groupUrl },
+        actor.user.id,
+      )
+      if (!profile) throw new Error('Official profile storage is unavailable.')
+      await writeAudit(actor.user, 'official-profile.updated', 'official_profile', req.params.role)
+      return res.json({ profile })
+    } catch (error) {
+      console.error('update official profile failed', error)
+      return res.status(500).json({ message: 'Unable to update official profile.' })
+    }
+  })
+
+  app.post('/api/admin/official-profiles/:role/photo/upload-url', async (req, res) => {
+    const authHeader = req.headers.authorization || ''
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : ''
+    if (!token) return res.status(401).json({ message: 'Authentication required.' })
+    if (!OFFICIAL_PHOTO_ROLES.includes(req.params.role)) return res.status(404).json({ message: 'Official profile not found.' })
+
+    let actor
+    try {
+      actor = await getCurrentActor(token)
+    } catch {
+      return res.status(401).json({ message: 'Invalid or expired token.' })
+    }
+    if (!actor) return res.status(401).json({ message: 'Authentication required.' })
+    if (!canManageOfficialProfiles(actor)) return res.status(403).json({ message: 'Staff or Admin access required.' })
+
+    try {
+      if (!CAPTAIN_PHOTO_CONTENT_TYPES.includes(req.body?.contentType)) {
+        return res.status(400).json({ message: 'Choose a JPEG, PNG, or WebP image.' })
+      }
+      if (!isOfficialPhotoStorageConfigured()) return res.status(503).json({ message: 'Image storage is not configured.' })
+      return res.json(await createOfficialPhotoUpload(req.params.role, req.body.contentType))
+    } catch (error) {
+      console.error('create official photo upload failed', error)
+      return res.status(502).json({ message: 'Unable to prepare the image upload.' })
+    }
+  })
+
+  app.post('/api/admin/official-profiles/:role/photo', async (req, res) => {
+    const authHeader = req.headers.authorization || ''
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : ''
+    if (!token) return res.status(401).json({ message: 'Authentication required.' })
+    if (!OFFICIAL_PHOTO_ROLES.includes(req.params.role)) return res.status(404).json({ message: 'Official profile not found.' })
+
+    let actor
+    try {
+      actor = await getCurrentActor(token)
+    } catch {
+      return res.status(401).json({ message: 'Invalid or expired token.' })
+    }
+    if (!actor) return res.status(401).json({ message: 'Authentication required.' })
+    if (!canManageOfficialProfiles(actor)) return res.status(403).json({ message: 'Staff or Admin access required.' })
+
+    try {
+      if (!isOfficialPhotoStorageConfigured()) return res.status(503).json({ message: 'Image storage is not configured.' })
+      const expectedPendingPrefix = `${OFFICIAL_PHOTO_KEYS[req.params.role]}/pending/`
+      if (typeof req.body?.key !== 'string' || !req.body.key.startsWith(expectedPendingPrefix)) {
+        return res.status(400).json({ message: 'Invalid image upload.' })
+      }
+      await finalizeOfficialPhotoUpload(req.params.role, req.body.key)
+      await writeAudit(actor.user, 'official-profile.photo_updated', 'official_profile', req.params.role)
+      return res.json({ ok: true })
+    } catch (error) {
+      if (error.message?.startsWith('Invalid official photo upload')
+        || error.message?.startsWith('Upload must be')
+        || error.message?.startsWith('Uploaded file is not')) {
+        return res.status(400).json({ message: error.message })
+      }
+      console.error('verify official photo upload failed', error)
+      return res.status(502).json({ message: 'Unable to verify the uploaded image.' })
+    }
+  })
+
+  app.delete('/api/admin/official-profiles/:role/photo', async (req, res) => {
+    const authHeader = req.headers.authorization || ''
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : ''
+    if (!token) return res.status(401).json({ message: 'Authentication required.' })
+    if (!OFFICIAL_PHOTO_ROLES.includes(req.params.role)) return res.status(404).json({ message: 'Official profile not found.' })
+
+    let actor
+    try {
+      actor = await getCurrentActor(token)
+    } catch {
+      return res.status(401).json({ message: 'Invalid or expired token.' })
+    }
+    if (!actor) return res.status(401).json({ message: 'Authentication required.' })
+    if (!canManageOfficialProfiles(actor)) return res.status(403).json({ message: 'Staff or Admin access required.' })
+
+    try {
+      if (!isOfficialPhotoStorageConfigured()) return res.status(503).json({ message: 'Image storage is not configured.' })
+      await deleteOfficialPhoto(req.params.role)
+      await writeAudit(actor.user, 'official-profile.photo_deleted', 'official_profile', req.params.role)
+      return res.json({ ok: true })
+    } catch (error) {
+      console.error('delete official profile photo failed', error)
+      return res.status(502).json({ message: 'Unable to remove the official photo.' })
     }
   })
 
@@ -1017,7 +1195,8 @@ export function createApp() {
       const user = await store.findUserById?.(challenge.userId)
       const mfaEnabled = Boolean(user?.mfaEnabled ?? user?.mfa_enabled)
       const mfaSecret = user?.mfaSecret || user?.mfa_secret
-      if (!user || !mfaEnabled || !mfaSecret || ['Suspended', 'Disabled'].includes(user.status)) {
+      if (!user || !mfaEnabled || !mfaSecret || ['Suspended', 'Disabled'].includes(user.status)
+        || (challenge.temporaryAccess && user.role !== 'staff')) {
         return res.status(401).json({ message: 'MFA challenge is no longer valid.' })
       }
 
@@ -1032,11 +1211,61 @@ export function createApp() {
       await store.updateUser?.(user.id, { mfaLastStep: matchedStep })
       const role = String(user.role || 'resident').toLowerCase()
       const mustChangePassword = Boolean(user.mustChangePassword ?? user.must_change_password)
-      const token = signToken({ sub: user.id, role, mustChangePassword })
+      const tokenOptions = Number.isFinite(challenge.sessionExpiresAt)
+        ? { expiresIn: Math.max(1, Math.ceil((challenge.sessionExpiresAt - Date.now()) / 1000)) }
+        : {}
+      const token = signToken({ sub: user.id, role, mustChangePassword }, tokenOptions)
       return res.json({ message: 'Login successful.', token, user: sanitizeUserRecord({ ...user, role }) })
     } catch (error) {
       console.error('MFA login error:', error)
       return res.status(500).json({ message: 'Unable to verify authenticator code.' })
+    }
+  })
+
+  app.post('/api/staff/temporary-access/redeem', authRateLimit, async (req, res) => {
+    const accessToken = String(req.body?.token || '')
+    if (!/^[0-9a-f]{64}$/i.test(accessToken)) {
+      return res.status(400).json({ message: 'A valid temporary access link is required.' })
+    }
+
+    try {
+      const tokenHash = createHash('sha256').update(accessToken).digest('hex')
+      const grant = await store.consumeStaffTemporaryAccessGrant?.(tokenHash)
+      if (!grant) return res.status(401).json({ message: 'This temporary access link is invalid, expired, or already used.' })
+
+      const user = grant.user
+      const expiresAt = new Date(grant.expiresAt).getTime()
+      if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
+        return res.status(401).json({ message: 'This temporary access link has expired.' })
+      }
+      await writeAudit(user, 'staff.temporary_access.redeemed', 'user', user.id)
+
+      const mfaEnabled = Boolean(user.mfaEnabled ?? user.mfa_enabled)
+      const mfaSecret = user.mfaSecret || user.mfa_secret
+      if (mfaEnabled && !mfaSecret) {
+        await writeAudit(user, 'staff.temporary_access.mfa_unavailable', 'user', user.id)
+        return res.status(503).json({ message: 'Authenticator verification is unavailable. Ask an administrator to issue a new link.' })
+      }
+
+      if (mfaEnabled) {
+        const challengeToken = randomBytes(32).toString('hex')
+        mfaChallenges.set(createHash('sha256').update(challengeToken).digest('hex'), {
+          userId: user.id,
+          expiresAt: Math.min(Date.now() + 5 * 60 * 1000, expiresAt),
+          sessionExpiresAt: expiresAt,
+          temporaryAccess: true,
+        })
+        return res.json({ requiresMfa: true, challengeToken })
+      }
+
+      const token = signToken(
+        { sub: user.id, role: 'staff' },
+        { expiresIn: Math.max(1, Math.ceil((expiresAt - Date.now()) / 1000)) },
+      )
+      return res.json({ token, user: sanitizeUserRecord({ ...user, role: 'staff' }) })
+    } catch (error) {
+      console.error('redeem staff temporary access failed', error)
+      return res.status(500).json({ message: 'Unable to redeem temporary access.' })
     }
   })
 
@@ -2103,6 +2332,114 @@ export function createApp() {
     } catch (error) {
       console.error('failed to reset staff password', error)
       return res.status(500).json({ message: 'Unable to reset staff password.' })
+    }
+  })
+
+  app.post('/api/admin/staff/:id/temporary-access', authRateLimit, async (req, res) => {
+    const authHeader = req.headers.authorization || ''
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : ''
+    if (!token) return res.status(401).json({ message: 'Authentication required.' })
+
+    let actor
+    try {
+      actor = await getCurrentActor(token)
+    } catch {
+      return res.status(401).json({ message: 'Invalid or expired token.' })
+    }
+    if (!actor) return res.status(401).json({ message: 'Authentication required.' })
+    if (actor.user.role !== 'admin') return res.status(403).json({ message: 'Admin access required.' })
+
+    const deliveryUrl = process.env.RESET_DELIVERY_URL || process.env.NOTIFICATION_WEBHOOK_URL
+    if (!deliveryUrl) {
+      return res.status(503).json({ message: 'Temporary access email delivery is not configured.' })
+    }
+
+    let publicAppUrl
+    try {
+      const parsedUrl = new URL(process.env.PUBLIC_APP_URL || 'https://barangay-legaspi.vercel.app')
+      if (
+        parsedUrl.protocol !== 'https:'
+        || parsedUrl.username
+        || parsedUrl.password
+        || parsedUrl.pathname !== '/'
+        || parsedUrl.search
+        || parsedUrl.hash
+      ) {
+        return res.status(503).json({ message: 'The official portal URL is not configured correctly.' })
+      }
+      publicAppUrl = parsedUrl.origin
+    } catch {
+      return res.status(503).json({ message: 'The official portal URL is not configured correctly.' })
+    }
+
+    let targetUser
+    try {
+      targetUser = await store.findUserById?.(req.params.id)
+    } catch (error) {
+      console.error('load staff temporary-access target failed', error)
+      return res.status(500).json({ message: 'Unable to load the staff account.' })
+    }
+    if (!targetUser || targetUser.role !== 'staff' || ['Suspended', 'Disabled'].includes(targetUser.status)) {
+      return res.status(404).json({ message: 'Active staff account not found.' })
+    }
+    if (!isValidEmail(targetUser.email)) {
+      return res.status(409).json({ message: 'The staff account does not have a valid email address.' })
+    }
+
+    const accessToken = randomBytes(32).toString('hex')
+    const now = Date.now()
+    const expiresAt = new Date(now + 15 * 60 * 1000).toISOString()
+    const grantId = randomUUID()
+    let grantCreated = false
+    try {
+      const result = await store.createStaffTemporaryAccessGrant?.({
+        id: grantId,
+        userId: targetUser.id,
+        tokenHash: createHash('sha256').update(accessToken).digest('hex'),
+        issuedBy: actor.user.id,
+        issuedAt: new Date(now).toISOString(),
+        expiresAt,
+      })
+      if (result?.status !== 'created') {
+        return res.status(409).json({ message: 'The staff account is no longer eligible for temporary access.' })
+      }
+      grantCreated = true
+
+      const delivery = await sendDeliveryWebhook({
+        event: 'staff_temporary_access',
+        recipient: targetUser.email,
+        token: accessToken,
+        expiresAt,
+        user: targetUser,
+        title: 'Temporary staff portal access',
+        message: 'Use the secure link to sign in to the staff portal. It can be used once and expires in 15 minutes.',
+        metadata: {
+          actionUrl: `${publicAppUrl}/staff-access#${accessToken}`,
+          expiresInMinutes: 15,
+        },
+      })
+      if (!delivery.queued) {
+        await store.revokeStaffTemporaryAccessGrant?.(grantId)
+        grantCreated = false
+        return res.status(503).json({ message: 'Temporary access email delivery is unavailable.' })
+      }
+
+      await writeAudit(actor.user, 'staff.temporary_access.issued', 'user', targetUser.id, {
+        recipient: targetUser.email,
+        expiresAt,
+        deliveryStatus: delivery.deliveryStatus,
+      })
+      return res.status(202).json({ message: 'Temporary access email queued.', expiresAt })
+    } catch (error) {
+      if (grantCreated) {
+        try {
+          await store.revokeStaffTemporaryAccessGrant?.(grantId)
+        } catch (revokeError) {
+          console.error('revoke undelivered staff temporary-access grant failed', revokeError)
+        }
+      }
+      console.error('issue staff temporary access failed', error)
+      return res.status(502).json({ message: 'Unable to deliver temporary access. No access link was activated.' })
     }
   })
 

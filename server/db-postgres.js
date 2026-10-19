@@ -67,6 +67,124 @@ export async function query(text, params = []) {
   }
 }
 
+export async function getOfficialProfiles() {
+  const result = await query(
+    'SELECT role, display_name, profile_url, group_url FROM official_profiles ORDER BY CASE role WHEN \'captain\' THEN 1 WHEN \'secretary\' THEN 2 ELSE 3 END',
+  )
+  return result.rows.map((row) => ({
+    role: row.role,
+    displayName: row.display_name,
+    profileUrl: row.profile_url || '',
+    groupUrl: row.group_url || '',
+  }))
+}
+
+export async function updateOfficialProfile(role, profile, updatedBy) {
+  if (!['captain', 'secretary', 'treasurer'].includes(role)) throw new Error('Invalid official profile role.')
+  const result = await query(
+    `INSERT INTO official_profiles (role, display_name, profile_url, group_url, updated_by, updated_at)
+     VALUES ($1, $2, $3, $4, $5, NOW())
+     ON CONFLICT (role) DO UPDATE SET
+       display_name = EXCLUDED.display_name,
+       profile_url = EXCLUDED.profile_url,
+       group_url = EXCLUDED.group_url,
+       updated_by = EXCLUDED.updated_by,
+       updated_at = NOW()
+     RETURNING role, display_name, profile_url, group_url`,
+    [role, profile.displayName, profile.profileUrl, profile.groupUrl, updatedBy],
+  )
+  const row = result.rows[0]
+  return {
+    role: row.role,
+    displayName: row.display_name,
+    profileUrl: row.profile_url || '',
+    groupUrl: row.group_url || '',
+  }
+}
+
+export async function createStaffTemporaryAccessGrant(grant) {
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+    const staffResult = await client.query(
+      `SELECT id, email FROM users
+       WHERE id = $1 AND role = 'staff' AND status NOT IN ('Suspended', 'Disabled')
+       FOR UPDATE`,
+      [grant.userId],
+    )
+    if (!staffResult.rows[0]?.email) {
+      await client.query('ROLLBACK')
+      return { status: 'staff_not_available' }
+    }
+
+    await client.query(
+      `UPDATE staff_temporary_access_grants
+       SET revoked_at = NOW()
+       WHERE user_id = $1 AND used_at IS NULL AND revoked_at IS NULL AND expires_at > NOW()`,
+      [grant.userId],
+    )
+    await client.query(
+      `INSERT INTO staff_temporary_access_grants
+        (id, user_id, token_hash, issued_by, issued_at, expires_at)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [grant.id, grant.userId, grant.tokenHash, grant.issuedBy, grant.issuedAt, grant.expiresAt],
+    )
+    await client.query('COMMIT')
+    return { status: 'created' }
+  } catch (error) {
+    await client.query('ROLLBACK')
+    throw error
+  } finally {
+    client.release()
+  }
+}
+
+export async function revokeStaffTemporaryAccessGrant(id) {
+  const result = await query(
+    `UPDATE staff_temporary_access_grants
+     SET revoked_at = NOW()
+     WHERE id = $1 AND used_at IS NULL AND revoked_at IS NULL`,
+    [id],
+  )
+  return result.rowCount > 0
+}
+
+export async function consumeStaffTemporaryAccessGrant(tokenHash) {
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+    const result = await client.query(
+      `SELECT grants.expires_at, users.*
+       FROM staff_temporary_access_grants AS grants
+       JOIN users ON users.id = grants.user_id
+       WHERE grants.token_hash = $1
+         AND grants.used_at IS NULL
+         AND grants.revoked_at IS NULL
+         AND grants.expires_at > NOW()
+         AND users.role = 'staff'
+         AND users.status NOT IN ('Suspended', 'Disabled')
+       FOR UPDATE OF grants`,
+      [tokenHash],
+    )
+    const row = result.rows[0]
+    if (!row) {
+      await client.query('ROLLBACK')
+      return null
+    }
+    await client.query(
+      'UPDATE staff_temporary_access_grants SET used_at = NOW() WHERE token_hash = $1',
+      [tokenHash],
+    )
+    await client.query('COMMIT')
+    return { user: normalizeUser(row), expiresAt: row.expires_at }
+  } catch (error) {
+    await client.query('ROLLBACK')
+    throw error
+  } finally {
+    client.release()
+  }
+}
+
 export async function closeDatabase() {
   await pool.end()
 }
@@ -100,6 +218,37 @@ export async function initDatabase() {
   await query('ALTER TABLE users ADD COLUMN IF NOT EXISTS mfa_enabled BOOLEAN NOT NULL DEFAULT false')
   await query('ALTER TABLE users ADD COLUMN IF NOT EXISTS mfa_last_step BIGINT NOT NULL DEFAULT 0')
   await query('ALTER TABLE users ADD COLUMN IF NOT EXISTS last_seen TIMESTAMPTZ')
+
+  await query(`
+    CREATE TABLE IF NOT EXISTS staff_temporary_access_grants (
+      id UUID PRIMARY KEY,
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      token_hash CHAR(64) NOT NULL UNIQUE,
+      issued_by UUID REFERENCES users(id) ON DELETE SET NULL,
+      issued_at TIMESTAMPTZ NOT NULL,
+      expires_at TIMESTAMPTZ NOT NULL,
+      used_at TIMESTAMPTZ,
+      revoked_at TIMESTAMPTZ
+    );
+  `)
+  await query(`CREATE INDEX IF NOT EXISTS staff_temporary_access_grants_user_idx
+    ON staff_temporary_access_grants (user_id, expires_at)`)
+
+  await query(`
+    CREATE TABLE IF NOT EXISTS official_profiles (
+      role VARCHAR(20) PRIMARY KEY CHECK (role IN ('captain', 'secretary', 'treasurer')),
+      display_name VARCHAR(120) NOT NULL DEFAULT '',
+      profile_url TEXT NOT NULL DEFAULT '',
+      group_url TEXT NOT NULL DEFAULT '',
+      updated_by UUID REFERENCES users(id) ON DELETE SET NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `)
+  await query(
+    `INSERT INTO official_profiles (role, display_name)
+     VALUES ('captain', ''), ('secretary', ''), ('treasurer', '')
+     ON CONFLICT (role) DO NOTHING`,
+  )
 
   await query(`
     CREATE TABLE IF NOT EXISTS requests (
