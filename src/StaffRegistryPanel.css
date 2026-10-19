@@ -329,6 +329,238 @@
   padding: 0.7rem;
 }
 
+.registry-zone-directory {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.registry-zone-directory h3,
+.registry-zone-directory p {
+  margin: 0;
+}
+
+.registry-zone-directory > div:first-child p {
+  margin-top: 0.3rem;
+  color: var(--muted, #52616b);
+}
+
+.registry-zone-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(8.5rem, 1fr));
+  gap: 0.75rem;
+}
+
+.registry-zone-card {
+  display: grid;
+  gap: 0.25rem;
+  padding: 1rem;
+  border: 1px solid #cbd9df;
+  border-radius: 0.75rem;
+  background: #fff;
+  color: #173746;
+  text-align: left;
+  cursor: pointer;
+}
+
+.registry-zone-card:hover,
+.registry-zone-card:focus-visible {
+  border-color: #245b78;
+  box-shadow: 0 0 0 3px rgba(36, 91, 120, 0.14);
+}
+
+.registry-zone-card span {
+  font-weight: 700;
+}
+
+.registry-zone-card strong {
+  font-size: 1.6rem;
+}
+
+.registry-zone-card small {
+  color: #52616b;
+}
+
+.registry-search-match {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  padding: 0.75rem;
+  border: 1px solid #cbd9df;
+  border-radius: 0.65rem;
+  background: #f8fafb;
+}
+
+.registry-search-match-list {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.registry-search-match-list > p {
+  margin: 0;
+}
+
+.registry-search-match-list button {
+  width: 100%;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.registry-modal-backdrop {
+  position: fixed;
+  z-index: 1200;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  background: rgba(13, 29, 37, 0.58);
+}
+
+.registry-edit-backdrop {
+  z-index: 1210;
+}
+
+.registry-modal {
+  display: grid;
+  gap: 1rem;
+  width: min(100%, 64rem);
+  max-height: min(92vh, 56rem);
+  overflow: auto;
+  padding: 1.25rem;
+  border-radius: 1rem;
+  background: #fff;
+  box-shadow: 0 1.5rem 4rem rgba(0, 0, 0, 0.24);
+}
+
+.registry-zone-modal {
+  width: min(100%, 80rem);
+}
+
+.registry-edit-modal {
+  width: min(100%, 54rem);
+}
+
+.registry-modal-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.registry-modal-header h2,
+.registry-modal-header p {
+  margin: 0;
+}
+
+.registry-modal-header p {
+  margin-top: 0.25rem;
+  color: #52616b;
+}
+
+.registry-step-label {
+  margin: 0 0 0.25rem;
+  color: #52616b;
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+
+.registry-wizard-help {
+  margin: 0;
+  padding: 0.7rem 0.85rem;
+  border-radius: 0.5rem;
+  background: #f0f6f8;
+}
+
+.registry-entry-form > h3,
+.registry-family-members > h3,
+.registry-family-review h3 {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+
+.registry-required,
+.registry-optional {
+  margin-left: 0.25rem;
+  color: #52616b;
+  font-size: 0.78rem;
+  font-weight: 400;
+}
+
+.registry-family-members {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.registry-family-member {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+  padding: 1rem;
+  border: 1px solid #d8e2e8;
+  border-radius: 0.75rem;
+}
+
+.registry-family-member legend {
+  padding: 0 0.4rem;
+  font-weight: 700;
+}
+
+.registry-family-member > button {
+  justify-self: end;
+}
+
+.registry-family-member label,
+.registry-entry-form label {
+  min-width: 0;
+}
+
+.registry-family-review {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.registry-family-review p {
+  margin: 0;
+}
+
+.registry-family-review > ul {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.registry-family-review > ul li {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr));
+  gap: 0.5rem;
+  padding: 0.7rem;
+  border: 1px solid #d8e2e8;
+  border-radius: 0.5rem;
+}
+
+.registry-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  grid-column: 1 / -1;
+}
+
+.registry-family-actions {
+  justify-content: space-between;
+}
+
+.registry-edit-modal .registry-entry-form {
+  border: 0;
+  padding: 0;
+  background: transparent;
+}
+
 @media (max-width: 640px) {
   .registry-panel-header {
     align-items: flex-start;
@@ -338,5 +570,17 @@
   .registry-pagination {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .registry-family-member {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .registry-modal {
+    padding: 0.9rem;
+  }
+
+  .registry-family-actions {
+    justify-content: flex-end;
   }
 }

@@ -2514,9 +2514,9 @@ test('resident registry imports are staff-only, duplicate-reviewed, pending, and
     const importBody = {
       filename: 'family-sheet.csv',
       residents: [
-        { firstName: 'Ana', lastName: 'Reyes', birthDate: '2000-01-02', sex: 'Female', zone: '2', purok: 'Purok 2' },
-        { firstName: 'Ana', lastName: 'Reyes', birthDate: '2000-01-02', sex: 'Female', zone: '2', purok: 'Purok 2' },
-        { firstName: 'Ana', lastName: 'Reyes', birthDate: '2001-01-02', sex: 'Female', zone: '2', purok: 'Purok 2' },
+        { firstName: 'Ana', lastName: 'Reyes', birthDate: '2000-01-02', sex: 'Female', maritalStatus: 'Married', occupation: 'Teacher', zone: '2', purok: 'Purok 2' },
+        { firstName: 'Ana', lastName: 'Reyes', birthDate: '2000-01-02', sex: 'Female', maritalStatus: 'Married', occupation: 'Teacher', zone: '2', purok: 'Purok 2' },
+        { firstName: 'Ana', lastName: 'Reyes', birthDate: '2001-01-02', sex: 'Female', maritalStatus: 'Single', occupation: 'Student', zone: '2', purok: 'Purok 2' },
         { firstName: 'Ana', lastName: 'Reyes', birthDate: '', sex: 'Female', zone: '2', purok: 'Purok 2' },
       ],
     }
@@ -2583,6 +2583,8 @@ test('resident registry imports are staff-only, duplicate-reviewed, pending, and
     const residentsData = await residentsResponse.json()
     assert.equal(residentsData.total, 3)
     assert.ok(residentsData.residents.every((resident) => resident.verificationStatus === 'pending'))
+    assert.equal(residentsData.residents.find((resident) => resident.birthDate === '2000-01-02').maritalStatus, 'Married')
+    assert.equal(residentsData.residents.find((resident) => resident.birthDate === '2000-01-02').occupation, 'Teacher')
     assert.ok(residentsData.residents.every((resident) => !Object.hasOwn(resident, 'address')))
     assert.ok(residentsData.residents.every((resident) => !Object.hasOwn(resident, 'sourceReference')))
     assert.ok(residentsData.residents.every((resident) => !Object.hasOwn(resident, 'sourceFilename')))
@@ -2807,6 +2809,10 @@ test('staff can add a manual resident with duplicate review and privacy safeguar
       lastName: 'Santos',
       birthDate: '1980-02-03',
       sex: 'Female',
+      maritalStatus: 'Single',
+      occupation: 'Student',
+      zone: 3,
+      householdId: 'HH-LUZ-SANTOS',
       address: 'Sensitive address',
       sourceFilename: 'confidential-source-sheet.csv',
     }
@@ -2832,6 +2838,15 @@ test('staff can add a manual resident with duplicate review and privacy safeguar
     assert.equal(Object.hasOwn(created.resident, 'birthDate'), false)
     assert.equal(Object.hasOwn(created.resident, 'address'), false)
     assert.equal(JSON.stringify(created).includes('confidential-source-sheet.csv'), false)
+    const detailResponse = await fetch(`${baseUrl}/api/staff/residents/${created.resident.id}`, { headers })
+    assert.equal(detailResponse.status, 200)
+    assert.equal((await detailResponse.json()).resident.address, 'Sensitive address')
+    const fullNameSearch = await fetch(`${baseUrl}/api/staff/residents?search=Luz%20Santos`, { headers })
+    assert.equal(fullNameSearch.status, 200)
+    const fullNameSearchData = await fullNameSearch.json()
+    assert.equal(fullNameSearchData.residents.length, 1)
+    assert.equal(fullNameSearchData.residents[0].birthDate, '1980-02-03')
+    assert.equal(fullNameSearchData.residents[0].zone, 3)
 
     const duplicateResponse = await fetch(`${baseUrl}/api/staff/residents`, {
       method: 'POST',
@@ -2899,6 +2914,48 @@ test('staff can add a manual resident with duplicate review and privacy safeguar
     assert.ok(records.residents.every((record) => !Object.hasOwn(record, 'address')))
     assert.ok(records.residents.every((record) => !Object.hasOwn(record, 'sourceFilename')))
 
+    const updateResponse = await fetch(`${baseUrl}/api/staff/residents/${created.resident.id}`, {
+      method: 'PATCH',
+      headers,
+      body: JSON.stringify({ maritalStatus: 'Married', occupation: 'Fish vendor', zone: 4 }),
+    })
+    assert.equal(updateResponse.status, 200)
+    const updatedResident = (await updateResponse.json()).resident
+    assert.equal(updatedResident.maritalStatus, 'Married')
+    assert.equal(updatedResident.occupation, 'Fish vendor')
+    assert.equal(updatedResident.zone, 4)
+    const invalidSexResponse = await fetch(`${baseUrl}/api/staff/residents/${created.resident.id}`, {
+      method: 'PATCH',
+      headers,
+      body: JSON.stringify({ sex: 'Unclassified' }),
+    })
+    assert.equal(invalidSexResponse.status, 400)
+    const zoneCountsResponse = await fetch(`${baseUrl}/api/staff/residents/zones`, { headers })
+    assert.equal(zoneCountsResponse.status, 200)
+    const zoneCounts = await zoneCountsResponse.json()
+    assert.equal(zoneCounts.zones.length, 7)
+    assert.equal(zoneCounts.zones.find((item) => item.zone === 4).total, 1)
+
+    const familyResponse = await fetch(`${baseUrl}/api/staff/residents/import`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        filename: 'family-intake.csv',
+        familyBatch: true,
+        residents: [
+          { firstName: 'Mia', lastName: 'Rivera', zone: '4', householdId: 'HH-RIVERA', maritalStatus: 'Married', occupation: 'Nurse' },
+          { firstName: 'Noah', lastName: 'Rivera', zone: '4', householdId: 'HH-RIVERA', occupation: 'Student' },
+        ],
+      }),
+    })
+    assert.equal(familyResponse.status, 201)
+    assert.equal((await familyResponse.json()).imported, 2)
+    const familyRecords = await jsonDb.listResidentRegistry({ search: 'Mia Rivera', page: 1, pageSize: 5 })
+    assert.equal(familyRecords.residents[0].maritalStatus, 'Married')
+    assert.equal(familyRecords.residents[0].occupation, 'Nurse')
+    assert.equal(familyRecords.residents[0].sourceFilename, null)
+    assert.ok((await jsonDb.listAuditLogs()).some((entry) => entry.action === 'resident_registry.family_added'))
+
     const concurrentEntries = ['ConcurrentOne', 'ConcurrentTwo'].map((firstName) => fetch(`${baseUrl}/api/staff/residents`, {
       method: 'POST',
       headers,
@@ -2907,7 +2964,7 @@ test('staff can add a manual resident with duplicate review and privacy safeguar
     const concurrentResponses = await Promise.all(concurrentEntries)
     assert.ok(concurrentResponses.every((response) => response.status === 201))
     const afterConcurrentWrites = await jsonDb.listResidentRegistry({ page: 1, pageSize: 25 })
-    assert.equal(afterConcurrentWrites.total, 10)
+    assert.equal(afterConcurrentWrites.total, 12)
 
     const auditLogs = await jsonDb.listAuditLogs()
     const createAudits = auditLogs.filter((entry) => entry.action === 'resident_registry.created')

@@ -876,6 +876,7 @@ const normalizeRegistryResident = (record) => ({
   lastName: record.lastName ?? record.last_name ?? '',
   birthDate: record.birthDate ?? record.birth_date ?? null,
   householdId: record.householdId ?? record.household_id ?? null,
+  maritalStatus: record.maritalStatus ?? record.marital_status ?? null,
   verificationStatus: record.verificationStatus ?? record.verification_status ?? 'pending',
   sourceReference: record.sourceReference ?? record.source_reference ?? null,
   sourceFilename: record.sourceFilename ?? record.source_filename ?? null,
@@ -892,7 +893,9 @@ export async function listResidentRegistry(filters = {}) {
     const nameParts = String(filters.search || '').toLowerCase().split(/\s+/).filter(Boolean)
     const firstName = resident.firstName.toLocaleLowerCase()
     const lastName = resident.lastName.toLocaleLowerCase()
-    if (nameParts.some((part) => !firstName.startsWith(part) && !lastName.startsWith(part))) return false
+    const fullName = `${firstName} ${lastName}`
+    if (filters.search && !fullName.startsWith(String(filters.search).trim().toLowerCase())
+      && nameParts.some((part) => !firstName.startsWith(part) && !lastName.startsWith(part))) return false
     if (filters.birthDate && resident.birthDate !== filters.birthDate) return false
     if (filters.ageStart && filters.ageEnd && (!resident.birthDate || resident.birthDate < filters.ageStart || resident.birthDate > filters.ageEnd)) return false
     if (filters.zone && Number(resident.zone) !== Number(filters.zone)) return false
@@ -907,6 +910,12 @@ export async function listResidentRegistry(filters = {}) {
   ))
   const offset = (filters.page - 1) * filters.pageSize
   return { residents: matches.slice(offset, offset + filters.pageSize), total: matches.length }
+}
+
+export async function getResidentRegistryById(id) {
+  const db = await readDb()
+  const resident = (db.residentRegistry || []).find((record) => record.id === id)
+  return resident ? normalizeRegistryResident(resident) : null
 }
 
 export async function getResidentDemographics(filters = {}) {

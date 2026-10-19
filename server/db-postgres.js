@@ -358,6 +358,8 @@ export async function initDatabase() {
       last_name VARCHAR(100) NOT NULL,
       birth_date DATE,
       sex VARCHAR(20),
+      marital_status VARCHAR(30),
+      occupation VARCHAR(120),
       household_id VARCHAR(100),
       purok VARCHAR(100),
       zone SMALLINT,
@@ -374,6 +376,8 @@ export async function initDatabase() {
       updated_at TIMESTAMPTZ
     );
   `)
+  await query('ALTER TABLE resident_registry ADD COLUMN IF NOT EXISTS marital_status VARCHAR(30)')
+  await query('ALTER TABLE resident_registry ADD COLUMN IF NOT EXISTS occupation VARCHAR(120)')
   await query('CREATE INDEX IF NOT EXISTS resident_registry_location_status_idx ON resident_registry (zone, purok, record_status, verification_status)')
   await query('CREATE INDEX IF NOT EXISTS resident_registry_household_location_idx ON resident_registry (household_id, zone, purok)')
   await query('CREATE INDEX IF NOT EXISTS resident_registry_first_name_prefix_idx ON resident_registry (LOWER(first_name) text_pattern_ops)')
@@ -1451,6 +1455,7 @@ const normalizeRegistryResident = (record) => ({
     return value instanceof Date ? value.toISOString().slice(0, 10) : value ? String(value).slice(0, 10) : null
   })(),
   householdId: record.householdId ?? record.household_id ?? null,
+  maritalStatus: record.maritalStatus ?? record.marital_status ?? null,
   verificationStatus: record.verificationStatus ?? record.verification_status ?? 'pending',
   sourceReference: record.sourceReference ?? record.source_reference ?? null,
   sourceFilename: record.sourceFilename ?? record.source_filename ?? null,
@@ -1469,11 +1474,16 @@ const registryWhere = (filters = {}) => {
     clauses.push(sql.replace('?', `$${params.length}`))
   }
   if (filters.search) {
-    for (const term of String(filters.search).toLowerCase().split(/\s+/).filter(Boolean)) {
+    const fullName = String(filters.search).trim().toLowerCase()
+    params.push(`${fullName.replace(/[\\%_]/g, '\\$&')}%`)
+    const fullNamePlaceholder = `$${params.length}`
+    const termClauses = []
+    for (const term of fullName.split(/\s+/).filter(Boolean)) {
       params.push(`${term.replace(/[\\%_]/g, '\\$&')}%`)
       const placeholder = `$${params.length}`
-      clauses.push(`(LOWER(first_name) LIKE ${placeholder} ESCAPE '\\' OR LOWER(last_name) LIKE ${placeholder} ESCAPE '\\')`)
+      termClauses.push(`(LOWER(first_name) LIKE ${placeholder} ESCAPE '\\' OR LOWER(last_name) LIKE ${placeholder} ESCAPE '\\')`)
     }
+    clauses.push(`(LOWER(first_name || ' ' || last_name) LIKE ${fullNamePlaceholder} ESCAPE '\\' OR (${termClauses.join(' AND ')}))`)
   }
   if (filters.birthDate) add('birth_date = ?', filters.birthDate)
   if (filters.ageStart && filters.ageEnd) {
@@ -1507,6 +1517,11 @@ export async function listResidentRegistry(filters = {}) {
   } finally {
     client.release()
   }
+}
+
+export async function getResidentRegistryById(id) {
+  const result = await query('SELECT * FROM resident_registry WHERE id = $1', [id])
+  return result.rows[0] ? normalizeRegistryResident(result.rows[0]) : null
 }
 
 export async function getResidentDemographics(filters = {}) {
@@ -1680,7 +1695,7 @@ export async function insertRegistryResidents(residents, auditEntry, options = {
     }
 
     const columns = [
-      'id', 'first_name', 'last_name', 'birth_date', 'sex', 'household_id', 'purok', 'zone', 'address',
+      'id', 'first_name', 'last_name', 'birth_date', 'sex', 'marital_status', 'occupation', 'household_id', 'purok', 'zone', 'address',
       'record_status', 'verification_status', 'source_reference', 'source_filename', 'source_fingerprint',
       'created_by', 'created_at', 'updated_at',
     ]
@@ -1688,6 +1703,7 @@ export async function insertRegistryResidents(residents, auditEntry, options = {
     const tuples = residents.map((resident, index) => {
       const row = [
         resident.id, resident.firstName, resident.lastName, resident.birthDate, resident.sex,
+        resident.maritalStatus, resident.occupation,
         resident.householdId, resident.purok, resident.zone, resident.address, 'active', 'pending',
         resident.sourceReference, resident.sourceFilename, resident.sourceFingerprint, resident.createdBy,
         resident.createdAt, resident.updatedAt || resident.createdAt,
@@ -1740,6 +1756,15 @@ export async function updateRegistryResidentWithAudit(id, updates, auditEntry) {
     verifiedBy: 'verified_by',
     verifiedAt: 'verified_at',
     status: 'record_status',
+    firstName: 'first_name',
+    lastName: 'last_name',
+    birthDate: 'birth_date',
+    sex: 'sex',
+    maritalStatus: 'marital_status',
+    occupation: 'occupation',
+    householdId: 'household_id',
+    zone: 'zone',
+    address: 'address',
   }
   const entries = Object.entries(updates).filter(([key]) => columns[key])
   if (!entries.length) return null

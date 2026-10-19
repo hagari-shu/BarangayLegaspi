@@ -50,6 +50,8 @@ const residentFingerprint = (resident) => createHash('sha256').update(JSON.strin
   resident.lastName.trim().toLocaleLowerCase(),
   resident.birthDate || null,
   resident.sex || null,
+  resident.maritalStatus || null,
+  resident.occupation || null,
   resident.householdId || null,
   resident.purok || null,
   resident.zone ?? null,
@@ -252,7 +254,9 @@ export function registerResidentRegistryRoutes(app, { store }) {
         lastName: resident.lastName || resident.last_name,
         birthDate: resident.birthDate || resident.birth_date || null,
         age: calculateAge(resident.birthDate || resident.birth_date, today),
-        sex: resident.sex || 'Unclassified',
+        sex: resident.sex || null,
+        maritalStatus: resident.maritalStatus || resident.marital_status || null,
+        occupation: resident.occupation || null,
         householdId: resident.householdId || resident.household_id || null,
         purok: resident.purok || null,
         zone: resident.zone === null || resident.zone === undefined ? null : Number(resident.zone),
@@ -263,6 +267,49 @@ export function registerResidentRegistryRoutes(app, { store }) {
     } catch (error) {
       console.error('staff resident registry query failed', error)
       return res.status(500).json({ message: 'Unable to load the resident registry.' })
+    }
+  })
+
+  app.get('/api/staff/residents/zones', async (req, res) => {
+    if (!await authorizeStaff(req, res)) return
+    try {
+      requireStorage('listResidentRegistry')
+      const zones = await Promise.all(Array.from({ length: 7 }, async (_, index) => {
+        const zone = index + 1
+        const result = await store.listResidentRegistry({ zone, page: 1, pageSize: 1 })
+        return { zone, total: result.total }
+      }))
+      return res.json({ zones })
+    } catch (error) {
+      console.error('staff resident zone counts query failed', error)
+      return res.status(500).json({ message: 'Unable to load resident zone totals.' })
+    }
+  })
+
+  app.get('/api/staff/residents/:id', async (req, res) => {
+    if (!await authorizeStaff(req, res)) return
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(req.params.id)) {
+      return res.status(400).json({ message: 'Choose a valid resident record.' })
+    }
+    try {
+      requireStorage('getResidentRegistryById')
+      const resident = await store.getResidentRegistryById(req.params.id)
+      if (!resident) return res.status(404).json({ message: 'Resident record not found.' })
+      return res.json({ resident: {
+        id: resident.id,
+        firstName: resident.firstName,
+        lastName: resident.lastName,
+        birthDate: resident.birthDate,
+        sex: resident.sex || null,
+        maritalStatus: resident.maritalStatus || null,
+        occupation: resident.occupation || null,
+        householdId: resident.householdId || null,
+        zone: resident.zone === null || resident.zone === undefined ? null : Number(resident.zone),
+        address: resident.address || null,
+      } })
+    } catch (error) {
+      console.error('resident registry record lookup failed', error)
+      return res.status(500).json({ message: 'Unable to load resident information.' })
     }
   })
 
@@ -289,6 +336,8 @@ export function registerResidentRegistryRoutes(app, { store }) {
     const lastName = cleanText(req.body?.lastName)
     const birthDate = req.body?.birthDate || null
     const sex = req.body?.sex || null
+    const maritalStatus = cleanText(req.body?.maritalStatus || '')
+    const occupation = cleanText(req.body?.occupation || '')
     const householdId = cleanText(req.body?.householdId || '')
     const purok = cleanText(req.body?.purok || '')
     const address = cleanText(req.body?.address || '')
@@ -304,8 +353,14 @@ export function registerResidentRegistryRoutes(app, { store }) {
     if (birthDate && (typeof birthDate !== 'string' || !validDateKey(birthDate) || birthDate > today)) {
       return res.status(400).json({ message: 'Enter a valid birthdate that is not in the future.' })
     }
-    if (sex !== null && !['Male', 'Female', 'Unclassified'].includes(sex)) {
-      return res.status(400).json({ message: 'Choose Male, Female, or Unclassified for sex.' })
+    if (sex !== null && !['Male', 'Female'].includes(sex)) {
+      return res.status(400).json({ message: 'Choose Male or Female, or leave sex blank.' })
+    }
+    if (maritalStatus && !['Single', 'Married', 'Widowed', 'Legally Separated', 'Annulled'].includes(maritalStatus)) {
+      return res.status(400).json({ message: 'Choose a valid marital status or leave it blank.' })
+    }
+    if (occupation.length > 120) {
+      return res.status(400).json({ message: 'Occupation must be 120 characters or fewer.' })
     }
     if (zone !== null && (!Number.isInteger(zone) || zone < 1 || zone > 7)) {
       return res.status(400).json({ message: 'Choose a valid zone from 1 to 7.' })
@@ -340,6 +395,8 @@ export function registerResidentRegistryRoutes(app, { store }) {
         lastName,
         birthDate,
         sex,
+        maritalStatus: maritalStatus || null,
+        occupation: occupation || null,
         householdId: householdId || null,
         purok: purok || null,
         zone,
@@ -394,6 +451,9 @@ export function registerResidentRegistryRoutes(app, { store }) {
     if (typeof filename !== 'string' || !filename.trim() || filename.trim().length > 255) {
       return res.status(400).json({ message: 'A source filename of up to 255 characters is required.' })
     }
+    if (req.body?.familyBatch !== undefined && typeof req.body.familyBatch !== 'boolean') {
+      return res.status(400).json({ message: 'Family batch mode must be true or false.' })
+    }
     if (confirmPotentialMatches !== undefined && typeof confirmPotentialMatches !== 'boolean') {
       return res.status(400).json({ message: 'Duplicate confirmation must be true or false.' })
     }
@@ -420,6 +480,8 @@ export function registerResidentRegistryRoutes(app, { store }) {
       const lastName = rawString('lastName')
       const birthDate = rawString('birthDate')
       const sex = rawString('sex')
+      const maritalStatus = rawString('maritalStatus')
+      const occupation = rawString('occupation')
       const householdId = rawString('householdId')
       const purok = rawString('purok')
       const address = rawString('address')
@@ -433,8 +495,14 @@ export function registerResidentRegistryRoutes(app, { store }) {
       if (birthDate && (!validDateKey(birthDate) || birthDate > today)) {
         validationErrors.push({ row: index + 2, field: 'birthDate', message: 'Birthdate must be a valid date no later than today.' })
       }
-      if (sex && !['Male', 'Female', 'Unclassified'].includes(sex)) {
-        validationErrors.push({ row: index + 2, field: 'sex', message: 'Use Male, Female, or Unclassified.' })
+      if (sex && !['Male', 'Female'].includes(sex)) {
+        validationErrors.push({ row: index + 2, field: 'sex', message: 'Use Male or Female, or leave blank.' })
+      }
+      if (maritalStatus && !['Single', 'Married', 'Widowed', 'Legally Separated', 'Annulled'].includes(maritalStatus)) {
+        validationErrors.push({ row: index + 2, field: 'maritalStatus', message: 'Choose a valid marital status or leave it blank.' })
+      }
+      if (occupation.length > 120) {
+        validationErrors.push({ row: index + 2, field: 'occupation', message: 'Occupation must be 120 characters or fewer.' })
       }
       if (zoneText && (!Number.isInteger(zone) || zone < 1 || zone > 7)) {
         validationErrors.push({ row: index + 2, field: 'zone', message: 'Zone must be a whole number from 1 to 7.' })
@@ -447,6 +515,8 @@ export function registerResidentRegistryRoutes(app, { store }) {
         lastName,
         birthDate: birthDate || null,
         sex: sex || null,
+        maritalStatus: maritalStatus || null,
+        occupation: occupation || null,
         householdId: householdId || null,
         purok: purok || null,
         zone,
@@ -478,7 +548,7 @@ export function registerResidentRegistryRoutes(app, { store }) {
         status: 'active',
         recordStatus: 'active',
         verificationStatus: 'pending',
-        sourceFilename: filename.trim(),
+        sourceFilename: req.body?.familyBatch === true ? null : filename.trim(),
         sourceFingerprint: residentFingerprint(resident),
         createdBy: actor.id,
         verifiedBy: null,
@@ -486,11 +556,12 @@ export function registerResidentRegistryRoutes(app, { store }) {
         createdAt,
         updatedAt: createdAt,
       }))
-      const auditEntry = makeAuditEntry(actor, 'resident_registry.bulk_imported', 'resident_registry_batch', null, {
+      const auditEntry = makeAuditEntry(actor, req.body?.familyBatch === true ? 'resident_registry.family_added' : 'resident_registry.bulk_imported', 'resident_registry_batch', null, {
         count: records.length,
-        hasFilename: Boolean(filename.trim()),
+        hasFilename: req.body?.familyBatch === true ? false : Boolean(filename.trim()),
         potentialMatchCount: potentialMatches.length,
       })
+
       const outcome = await store.insertRegistryResidents(records, auditEntry, {
         confirmPotentialMatches: confirmPotentialMatches === true,
         reviewedMatches: currentReviewedMatches,
@@ -510,6 +581,97 @@ export function registerResidentRegistryRoutes(app, { store }) {
     } catch (error) {
       console.error('staff resident registry import failed', error)
       return res.status(500).json({ message: 'Unable to import resident records.' })
+    }
+  })
+
+  app.patch('/api/staff/residents/:id', async (req, res) => {
+    const actor = await authorizeStaff(req, res)
+    if (!actor) return
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(req.params.id)) {
+      return res.status(400).json({ message: 'Choose a valid resident record.' })
+    }
+    const allowedFields = ['firstName', 'lastName', 'birthDate', 'sex', 'maritalStatus', 'occupation', 'householdId', 'zone', 'address']
+    if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)
+      || Object.keys(req.body).some((key) => !allowedFields.includes(key))) {
+      return res.status(400).json({ message: 'The resident information contains unsupported fields.' })
+    }
+    const updates = {}
+    const has = (key) => Object.hasOwn(req.body, key)
+    for (const key of ['firstName', 'lastName']) {
+      if (!has(key)) continue
+      if (typeof req.body[key] !== 'string' || !cleanText(req.body[key]) || cleanText(req.body[key]).length > 100) {
+        return res.status(400).json({ message: 'First and last names are required and must be 100 characters or fewer.' })
+      }
+      updates[key] = cleanText(req.body[key])
+    }
+    if (has('birthDate')) {
+      const value = req.body.birthDate
+      if (value !== null && (typeof value !== 'string' || !validDateKey(value) || value > manilaDateKey())) {
+        return res.status(400).json({ message: 'Enter a valid birthdate that is not in the future.' })
+      }
+      updates.birthDate = value
+    }
+    if (has('sex')) {
+      const value = req.body.sex || null
+      if (value !== null && !['Male', 'Female'].includes(value)) return res.status(400).json({ message: 'Choose Male or Female, or leave sex blank.' })
+      updates.sex = value
+    }
+    if (has('maritalStatus')) {
+      const value = cleanText(req.body.maritalStatus || '')
+      if (value && !['Single', 'Married', 'Widowed', 'Legally Separated', 'Annulled'].includes(value)) {
+        return res.status(400).json({ message: 'Choose a valid marital status or leave it blank.' })
+      }
+      updates.maritalStatus = value || null
+    }
+    if (has('occupation')) {
+      if (typeof req.body.occupation !== 'string' || cleanText(req.body.occupation).length > 120) {
+        return res.status(400).json({ message: 'Occupation must be text up to 120 characters.' })
+      }
+      updates.occupation = cleanText(req.body.occupation) || null
+    }
+    for (const [key, limit] of [['householdId', 100], ['address', 255]]) {
+      if (!has(key)) continue
+      if (req.body[key] !== null && typeof req.body[key] !== 'string') {
+        return res.status(400).json({ message: 'Household and address fields must be text.' })
+      }
+      const value = cleanText(req.body[key] || '')
+      if (value.length > limit) return res.status(400).json({ message: 'A resident field exceeds its maximum length.' })
+      updates[key] = value || null
+    }
+    if (has('zone')) {
+      const zone = req.body.zone === '' || req.body.zone === null ? null : Number(req.body.zone)
+      if (zone !== null && (!Number.isInteger(zone) || zone < 1 || zone > 7)) {
+        return res.status(400).json({ message: 'Choose a valid zone from 1 to 7.' })
+      }
+      updates.zone = zone
+    }
+    if (!Object.keys(updates).length) return res.status(400).json({ message: 'Provide at least one resident field to update.' })
+
+    try {
+      requireStorage('updateRegistryResidentWithAudit')
+      const resident = await store.updateRegistryResidentWithAudit(req.params.id, updates, makeAuditEntry(
+        actor,
+        'resident_registry.details_updated',
+        'resident_registry',
+        req.params.id,
+        { fields: Object.keys(updates) }
+      ))
+      if (!resident) return res.status(404).json({ message: 'Resident record not found.' })
+      return res.json({ resident: {
+        id: resident.id,
+        firstName: resident.firstName,
+        lastName: resident.lastName,
+        birthDate: resident.birthDate,
+        sex: resident.sex || null,
+        maritalStatus: resident.maritalStatus || null,
+        occupation: resident.occupation || null,
+        householdId: resident.householdId || null,
+        zone: resident.zone === null || resident.zone === undefined ? null : Number(resident.zone),
+        address: resident.address || null,
+      } })
+    } catch (error) {
+      console.error('resident registry details update failed', error)
+      return res.status(500).json({ message: 'Unable to update resident information.' })
     }
   })
 
