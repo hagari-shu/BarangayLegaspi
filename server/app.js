@@ -31,7 +31,12 @@ import {
   createStaffInvitationAcceptanceAudit,
   hashStaffInvitationToken,
   isValidStaffInvitationToken,
+  issueStaffInvitation,
 } from './staff-invitations.js'
+import {
+  deliverAccountInvitationEmail,
+  validateAccountInvitationEmailConfig,
+} from './account-invitation-email.js'
 import {
   createSuperAdminInvitationAcceptanceAudit,
   hashSuperAdminInvitationToken,
@@ -602,10 +607,146 @@ export function createApp() {
         return res.status(410).json({ message: 'This staff invitation is invalid, expired, or already used.' })
       }
 
-      return res.json({ email: invitation.email, expiresAt: invitation.expiresAt })
+      return res.json({
+        email: invitation.email,
+        role: invitation.role === 'admin' ? 'admin' : 'staff',
+        expiresAt: invitation.expiresAt,
+      })
     } catch (error) {
       console.error('staff invitation lookup failed', error)
       return res.status(500).json({ message: 'Unable to verify this staff invitation.' })
+    }
+  })
+
+  app.post('/api/staff/invitations', authRateLimit, async (req, res) => {
+    const authHeader = req.headers.authorization || ''
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null
+    if (!token) return res.status(401).json({ message: 'Authentication required.' })
+
+    let actor
+    try {
+      actor = await getCurrentActor(token)
+    } catch {
+      return res.status(401).json({ message: 'Invalid or expired token.' })
+    }
+    if (!actor || !['admin', 'staff'].includes(actor.user.role)) {
+      return res.status(403).json({ message: 'Only Admin and Staff accounts can issue permitted account invitations.' })
+    }
+
+    const role = String(req.body?.role || 'staff').trim().toLowerCase()
+    const email = sanitizeText(req.body?.email).toLowerCase()
+    const position = sanitizeText(req.body?.position || 'Staff')
+    const hasControlCharacter = [...position].some((character) => {
+      const codePoint = character.codePointAt(0)
+      return codePoint < 32 || (codePoint >= 127 && codePoint <= 159)
+    })
+    if (!['admin', 'staff'].includes(role) || (role === 'admin' && actor.user.role !== 'admin')) {
+      return res.status(403).json({ message: 'Staff may invite Staff only. Only an Admin may invite Admin accounts.' })
+    }
+    if (!isValidEmail(email) || email.length > 255) {
+      return res.status(400).json({ message: 'Provide a valid account email address.' })
+    }
+    if (role === 'staff' && (
+      !position
+      || position.length > 120
+      || hasControlCharacter
+      || position.includes('<')
+      || position.includes('>')
+    )) {
+      return res.status(400).json({ message: 'Provide a valid staff position with 1 to 120 printable characters.' })
+    }
+
+    const apiKey = String(process.env.RESEND_API_KEY || '')
+    const fromEmail = String(process.env.SUPER_ADMIN_INVITATION_FROM_EMAIL || '').trim()
+    try {
+      validateAccountInvitationEmailConfig({ apiKey, fromEmail })
+    } catch (error) {
+      console.error('account invitation email configuration is unavailable', error.message)
+      return res.status(503).json({ message: 'Account invitation email is not configured. Contact the system operator.' })
+    }
+
+    const publicAppUrl = String(process.env.PUBLIC_APP_URL || 'https://barangay-legaspi.vercel.app').trim()
+    let publicAppOrigin
+    try {
+      const parsedUrl = new URL(publicAppUrl)
+      if (
+        parsedUrl.protocol !== 'https:'
+        || parsedUrl.username
+        || parsedUrl.password
+        || parsedUrl.pathname !== '/'
+        || parsedUrl.search
+        || parsedUrl.hash
+      ) {
+        throw new Error('Invalid application origin.')
+      }
+      publicAppOrigin = parsedUrl.origin
+    } catch (error) {
+      console.error('account invitation portal URL configuration is invalid', error.message)
+      return res.status(503).json({ message: 'Account invitation portal URL is not configured. Contact the system operator.' })
+    }
+
+    let invitation
+    try {
+      invitation = await issueStaffInvitation({
+        email,
+        publicAppUrl: publicAppOrigin,
+        role,
+        position: role === 'admin' ? 'Administrator' : position,
+        actor: actor.user,
+        store,
+      })
+      if (invitation.status === 'account_exists') {
+        return res.status(409).json({ message: 'An account already uses this email. No invitation was sent.' })
+      }
+      if (invitation.status === 'invitation_pending') {
+        return res.status(409).json({ message: 'A Super Admin invitation is already pending for this email. Resolve it before continuing.' })
+      }
+      if (invitation.status === 'invitation_conflict') {
+        return res.status(409).json({ message: 'An invitation for this email is already being processed. Try again shortly.' })
+      }
+      if (invitation.status !== 'created') {
+        throw new Error(`Account invitation issuance returned ${invitation.status}.`)
+      }
+    } catch (error) {
+      console.error('account invitation issuance failed', error)
+      return res.status(500).json({ message: 'Unable to issue this account invitation.' })
+    }
+
+    try {
+      await deliverAccountInvitationEmail({
+        apiKey,
+        fromEmail,
+        email,
+        inviteUrl: invitation.inviteUrl,
+        expiresAt: invitation.expiresAt,
+        role,
+      })
+      return res.status(202).json({
+        message: `${role === 'admin' ? 'Administrator' : 'Staff'} setup invitation sent to the account email.`,
+        expiresAt: invitation.expiresAt,
+      })
+    } catch (error) {
+      console.error('account invitation email delivery failed', error)
+      try {
+        const revoked = await store.revokeStaffInvitation?.({
+          invitationId: invitation.id,
+          revokedAt: new Date().toISOString(),
+          auditEntry: {
+            id: randomUUID(),
+            actorId: actor.user.id,
+            actorRole: actor.user.role,
+            action: `${role}.invitation.delivery_failed`,
+            targetType: `${role}_invitation`,
+            targetId: invitation.id,
+            metadata: { role },
+          },
+        })
+        if (revoked?.status !== 'revoked') throw new Error('The undelivered invitation could not be revoked.')
+      } catch (revocationError) {
+        console.error('undelivered account invitation revocation failed', revocationError)
+        return res.status(500).json({ message: 'Email delivery failed and the pending invitation could not be revoked. Contact the system operator before retrying.' })
+      }
+      return res.status(502).json({ message: 'Email delivery failed. The invitation was revoked; correct the email service settings and try again.' })
     }
   })
 
@@ -658,7 +799,11 @@ export function createApp() {
         tokenHash,
         user,
         acceptedAt,
-        auditEntry: createStaffInvitationAcceptanceAudit(user.id, invitation.id),
+        auditEntry: createStaffInvitationAcceptanceAudit(
+          user.id,
+          invitation.id,
+          invitation.role === 'admin' ? 'admin' : 'staff',
+        ),
       })
       if (result.status === 'invalid_invitation') {
         return res.status(410).json({ message: 'This staff invitation is invalid, expired, or already used.' })
@@ -667,7 +812,10 @@ export function createApp() {
         return res.status(409).json({ message: 'An account already uses these details. Contact the barangay office.' })
       }
 
-      return res.status(201).json({ message: 'Staff account created. You can now sign in.' })
+      return res.status(201).json({
+        message: `${invitation.role === 'admin' ? 'Administrator' : 'Staff'} account created. You can now sign in.`,
+        role: invitation.role === 'admin' ? 'admin' : 'staff',
+      })
     } catch (error) {
       console.error('staff invitation acceptance failed', error)
       return res.status(500).json({ message: 'Unable to create the staff account.' })

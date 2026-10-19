@@ -1,26 +1,15 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
+import {
+  deliverAccountInvitationEmail,
+  validateAccountInvitationEmailConfig,
+} from './account-invitation-email.js'
 
 export const hashSuperAdminInvitationToken = (token) => createHash('sha256').update(token).digest('hex')
 
 export const isValidSuperAdminInvitationToken = (token) => /^[A-Za-z0-9_-]{43}$/.test(String(token || ''))
 
-const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
-const resendApiUrl = 'https://api.resend.com/emails'
-const escapeHtml = (value) => String(value).replace(/[&<>"']/g, (character) => ({
-  '&': '&amp;',
-  '<': '&lt;',
-  '>': '&gt;',
-  '"': '&quot;',
-  "'": '&#39;',
-})[character])
-
 export function validateSuperAdminInvitationDeliveryConfig({ apiKey, fromEmail }) {
-  if (!apiKey || !fromEmail) {
-    throw new Error('Resend API key and verified Super Admin invitation sender email must be configured.')
-  }
-  if (!emailPattern.test(fromEmail) || fromEmail.length > 254) {
-    throw new Error('SUPER_ADMIN_INVITATION_FROM_EMAIL must be a valid sender email address.')
-  }
+  return validateAccountInvitationEmailConfig({ apiKey, fromEmail })
 }
 
 export async function deliverSuperAdminInvitation({
@@ -31,27 +20,15 @@ export async function deliverSuperAdminInvitation({
   expiresAt,
   fetchImpl = fetch,
 }) {
-  validateSuperAdminInvitationDeliveryConfig({ apiKey, fromEmail })
-  const safeInviteUrl = escapeHtml(inviteUrl)
-  const response = await fetchImpl(resendApiUrl, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      from: `Barangay Legaspi <${fromEmail}>`,
-      to: [email],
-      subject: 'Super Admin account setup invitation',
-      html: `<p>You have been invited to set up a Barangay Legaspi Super Admin account.</p><p><a href="${safeInviteUrl}">Set up your account</a></p><p>This single-use link expires at ${escapeHtml(expiresAt)}.</p><p>If you were not expecting this invitation, you can ignore this email.</p>`,
-      text: `You have been invited to set up a Barangay Legaspi Super Admin account.\n\nSet up your account: ${inviteUrl}\n\nThis single-use link expires at ${expiresAt}.\nIf you were not expecting this invitation, you can ignore this email.`,
-    }),
-    signal: AbortSignal.timeout(10_000),
+  await deliverAccountInvitationEmail({
+    apiKey,
+    fromEmail,
+    email,
+    inviteUrl,
+    expiresAt,
+    role: 'super_admin',
+    fetchImpl,
   })
-
-  if (!response.ok) {
-    throw new Error(`Resend invitation delivery failed with status ${response.status}.`)
-  }
 }
 
 export async function issueSuperAdminInvitation({ email, publicAppUrl, store, now = new Date() }) {

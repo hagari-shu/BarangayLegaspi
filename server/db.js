@@ -506,7 +506,11 @@ export async function issueStaffInvitation(invitation, auditEntry) {
         existing.revokedAt = invitation.issuedAt
       }
     }
-    db.staffInvitations.push({ ...invitation, position: invitation.position || 'Staff' })
+    db.staffInvitations.push({
+      ...invitation,
+      role: invitation.role === 'admin' ? 'admin' : 'staff',
+      position: invitation.role === 'admin' ? 'Administrator' : (invitation.position || 'Staff'),
+    })
     db.auditLogs = Array.isArray(db.auditLogs) ? db.auditLogs : []
     db.auditLogs.push(auditEntry)
     await writeDb(db)
@@ -517,6 +521,19 @@ export async function issueStaffInvitation(invitation, auditEntry) {
 export async function getStaffInvitationByTokenHash(tokenHash) {
   const db = await readDb()
   return (db.staffInvitations || []).find((invitation) => invitation.tokenHash === tokenHash) || null
+}
+
+export async function revokeStaffInvitation({ invitationId, revokedAt, auditEntry }) {
+  return serializeProvisioningMutation(async () => {
+    const db = await readDb()
+    const invitation = (db.staffInvitations || []).find((entry) => entry.id === invitationId)
+    if (!invitation || invitation.acceptedAt || invitation.revokedAt) return { status: 'not_pending' }
+    invitation.revokedAt = revokedAt
+    db.auditLogs = Array.isArray(db.auditLogs) ? db.auditLogs : []
+    db.auditLogs.push(auditEntry)
+    await writeDb(db)
+    return { status: 'revoked' }
+  })
 }
 
 export async function acceptStaffInvitation({ tokenHash, user, acceptedAt, auditEntry }) {
@@ -538,6 +555,7 @@ export async function acceptStaffInvitation({ tokenHash, user, acceptedAt, audit
       return { status: 'account_exists' }
     }
 
+    const role = invitation.role === 'admin' ? 'admin' : 'staff'
     db.users.push({
       id: user.id,
       firstName: user.firstName,
@@ -545,14 +563,14 @@ export async function acceptStaffInvitation({ tokenHash, user, acceptedAt, audit
       mobile: user.mobile,
       email: invitation.email,
       passwordHash: user.passwordHash,
-      role: 'staff',
+      role,
       householdId: user.householdId,
       familyMembers: 1,
       householdMembers: [],
-      status: 'On Duty',
+      status: role === 'admin' ? 'Administrator' : 'On Duty',
       address: 'Barangay Hall, Legaspi',
       zone: 0,
-      position: invitation.position || 'Staff',
+      position: role === 'admin' ? 'Administrator' : (invitation.position || 'Staff'),
       availability: 'Available',
       createdAt: acceptedAt,
     })

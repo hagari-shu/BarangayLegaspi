@@ -279,6 +279,91 @@ function WorkflowModal({ title, onClose, children, wide = false, className = '',
   )
 }
 
+function AccountInvitationModal({ allowedRoles, language, onClose }) {
+  const t = translations[language] || translations.en
+  const [role, setRole] = useState(allowedRoles.includes('admin') ? 'staff' : allowedRoles[0])
+  const [email, setEmail] = useState('')
+  const [position, setPosition] = useState('Staff')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const [success, setSuccess] = useState('')
+
+  const submit = async (event) => {
+    event.preventDefault()
+    setBusy(true)
+    setError('')
+    setSuccess('')
+    try {
+      const response = await fetch(`${API_BASE}/staff/invitations`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ role, email: email.trim(), position }),
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(data.message || t.accountInvitationUnavailable)
+      const roleLabel = role === 'admin' ? t.administrator : t.staffRole
+      setSuccess(t.accountInvitationSent
+        .replace('{role}', roleLabel)
+        .replace('{email}', email.trim()))
+    } catch (requestError) {
+      setError(requestError.message || t.accountInvitationUnavailable)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <WorkflowModal title={t.accountInvitationTitle} onClose={onClose} wide disableClose={busy}>
+      <form className="editor-panel workflow-modal-form" onSubmit={submit}>
+        <p>{t.accountInvitationIntro}</p>
+        <p className="report-metric-note">{t.accountInvitationPermissionNote}</p>
+        <div className="editor-grid">
+          {allowedRoles.length > 1 && (
+            <div className="input-block">
+              <label htmlFor="account-invitation-role">{t.accountInvitationRole}</label>
+              <select id="account-invitation-role" value={role} onChange={(event) => setRole(event.target.value)}>
+                {allowedRoles.map((option) => (
+                  <option key={option} value={option}>{option === 'admin' ? t.administrator : t.staffRole}</option>
+                ))}
+              </select>
+            </div>
+          )}
+          <div className="input-block">
+            <label htmlFor="account-invitation-email">{t.accountInvitationEmail}</label>
+            <input
+              id="account-invitation-email"
+              type="email"
+              autoComplete="email"
+              maxLength={255}
+              value={email}
+              onChange={(event) => setEmail(event.target.value)}
+              required
+            />
+          </div>
+          {role === 'staff' && (
+            <div className="input-block">
+              <label htmlFor="account-invitation-position">{t.accountInvitationPosition}</label>
+              <select id="account-invitation-position" value={position} onChange={(event) => setPosition(event.target.value)}>
+                <option value="Staff">{t.staffRole}</option>
+                <option value="Secretary">{t.secretaryRole}</option>
+                <option value="Barangay Captain">{t.barangayCaptainRole}</option>
+                <option value="Treasurer">{t.treasurerRole}</option>
+                <option value="Utility Worker">{t.utilityWorkerRole}</option>
+              </select>
+            </div>
+          )}
+        </div>
+        {error && <p className="inline-error" role="alert">{error}</p>}
+        {success && <p className="request-staff-note" role="status">{success}</p>}
+        <div className="editor-actions">
+          <button type="button" className="secondary-btn small" onClick={onClose} disabled={busy}>{t.cancel}</button>
+          {!success && <button type="submit" className="primary-btn small" disabled={busy}>{busy ? t.working : t.accountInvitationSend}</button>}
+        </div>
+      </form>
+    </WorkflowModal>
+  )
+}
+
 function ConfirmationModal({ title, message, onClose, onConfirm, confirmLabel = 'Confirm', cancelLabel = 'Cancel' }) {
   const [busy, setBusy] = useState(false)
   const [errorMessage, setErrorMessage] = useState('')
@@ -2496,6 +2581,7 @@ function SettingsPage({ profile, onLogout, language, setLanguage }) {
 function StaffPage({ staffMembers = [], announcements = [], currentUser, userRole = 'staff', onProcessRequest, onLogout, onStaffMemberUpdated, onAddAnnouncement, onDeleteAnnouncement, onRetractAnnouncement, onDeleteStaffMember, language, setLanguage }) {
   const t = translations[language] || translations.en
   const [activeTab, setActiveTab] = useState('queue')
+  const [showAccountInvitation, setShowAccountInvitation] = useState(false)
   const [openRequestPanel, setOpenRequestPanel] = useState('queue')
   const [queueSearch, setQueueSearch] = useState('')
   const [debouncedQueueSearch, setDebouncedQueueSearch] = useState('')
@@ -3596,7 +3682,19 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
                     <h2>{t.staffDirectory}</h2>
                     <span className="soft-label">{staffMembers.length} {t.staffMembersAvailable}</span>
                   </div>
-                  {isAdminRole(userRole) && <p className="field-note">{t.operatorOnlyAccounts}</p>}
+                  {userRole === 'staff' && (
+                    <div className="editor-actions">
+                      <p className="field-note">{t.accountInvitationPermissionNote}</p>
+                      <button type="button" className="primary-btn small" onClick={() => setShowAccountInvitation(true)}>{t.inviteStaffAccount}</button>
+                    </div>
+                  )}
+                  {showAccountInvitation && userRole === 'staff' && (
+                    <AccountInvitationModal
+                      allowedRoles={['staff']}
+                      language={language}
+                      onClose={() => setShowAccountInvitation(false)}
+                    />
+                  )}
 
                   <div className="staff-grid">
                     {staffMembers.map((member) => (
@@ -3885,6 +3983,7 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
   const zoneNumbers = [1, 2, 3, 4, 5, 6, 7]
   const [managedUsers, setManagedUsers] = useState(users)
   const [activeTab, setActiveTab] = useState('overview')
+  const [showAccountInvitation, setShowAccountInvitation] = useState(false)
   const [healthRefreshKey, setHealthRefreshKey] = useState(0)
   const [apiHealth, setApiHealth] = useState({ status: 'checking', storage: null, checkedAt: null })
   const [searchQuery, setSearchQuery] = useState('')
@@ -4679,9 +4778,22 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
                 <article className="panel-card">
                   <div className="panel-header">
                     <h2>User Access Management</h2>
-                    <span className="soft-label">{managedUsers.length} total users</span>
+                    <div className="editor-actions">
+                      <span className="soft-label">{managedUsers.length} total users</span>
+                      {currentUser?.role === 'admin' && (
+                        <button type="button" className="primary-btn small" onClick={() => setShowAccountInvitation(true)}>{t.accountInvitationTitle}</button>
+                      )}
+                    </div>
                   </div>
-                  <p className="field-note">{t.operatorOnlyAccounts}</p>
+                  {currentUser?.role === 'admin' && <p className="field-note">{t.accountInvitationPermissionNote}</p>}
+                  {currentUser?.role === 'super_admin' && <p className="field-note">{t.superAdminInvitationOperatorOnly}</p>}
+                  {showAccountInvitation && currentUser?.role === 'admin' && (
+                    <AccountInvitationModal
+                      allowedRoles={['staff', 'admin']}
+                      language={language}
+                      onClose={() => setShowAccountInvitation(false)}
+                    />
+                  )}
 
                   {staffPasswordResetTarget && (
                     <WorkflowModal
