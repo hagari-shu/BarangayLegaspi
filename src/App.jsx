@@ -90,7 +90,7 @@ const isValidPassword = (value) => {
 }
 const passwordRequirements = 'at least 8 characters, one uppercase letter, one lowercase letter, one number, and one special character'
 
-const LanguageToggle = ({ language, setLanguage }) => {
+const LanguageToggle = ({ language, setLanguage, className = '' }) => {
   const [largeText, setLargeText] = useState(() => {
     try {
       return localStorage.getItem(readableTextStorageKey) === 'true'
@@ -112,13 +112,13 @@ const LanguageToggle = ({ language, setLanguage }) => {
 
   return (
     <>
-      <div className="language-toggle" role="group" aria-label={t.languageSelectionLabel}>
+      <div className={`language-toggle ${className}`} role="group" aria-label={t.languageSelectionLabel}>
         <button type="button" className={language === 'en' ? 'active' : ''} aria-pressed={language === 'en'} onClick={() => setLanguage('en')}>EN</button>
         <button type="button" className={language === 'fil' ? 'active' : ''} aria-pressed={language === 'fil'} onClick={() => setLanguage('fil')}>FIL</button>
       </div>
       <button
         type="button"
-        className={`text-size-toggle${largeText ? ' active' : ''}`}
+        className={`text-size-toggle${largeText ? ' active' : ''}${className ? ` ${className}-text-size` : ''}`}
         aria-label={largeText ? t.standardText : t.largerText}
         aria-pressed={largeText}
         title={largeText ? t.standardText : t.largerText}
@@ -4931,7 +4931,7 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
   }
 
   return (
-    <div className="dashboard-shell">
+    <div className="dashboard-shell admin-dashboard">
       <header className="dashboard-topbar admin-topbar">
         <div className="brand-wrap">
           <SystemLogo className="seal-logo tiny" alt="Barangay Legaspi official seal" />
@@ -4942,8 +4942,8 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
         </div>
 
         <div className="topbar-actions">
-          <LanguageToggle language={language} setLanguage={setLanguage} />
-          <Link to="/settings" className="secondary-btn small">{t.settings}</Link>
+          <LanguageToggle language={language} setLanguage={setLanguage} className="admin-language-control" />
+          <Link to="/settings" className="secondary-btn small admin-settings-link">{t.settings}</Link>
           <div className="admin-identity" aria-label={`${t.signedInAs} ${getDisplayName(currentUser)}`}>
             <small>{t.signedInAs}</small>
             <strong>{getDisplayName(currentUser)}</strong>
