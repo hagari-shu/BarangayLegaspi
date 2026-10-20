@@ -334,7 +334,6 @@ class ApiContractTest extends TestCase
             'app.key' => 'base64:'.base64_encode(str_repeat('a', 32)),
             'app.jwt_secret' => 'laravel-contract-test-jwt-secret-32-characters',
             'app.debug' => true,
-            'database.default' => 'pgsql',
             'cors.allowed_origins' => ['https://portal.example.test'],
         ]);
         $this->app->detectEnvironment(fn () => 'production');
@@ -368,10 +367,17 @@ class ApiContractTest extends TestCase
             'cors.allowed_origins' => [],
         ]);
 
-        $this->expectException(RuntimeException::class);
-        $this->expectExceptionMessage('CORS_ORIGINS must contain the deployed frontend origin');
-
-        (new \App\Providers\AppServiceProvider($this->app))->boot();
+        try {
+            (new \App\Providers\AppServiceProvider($this->app))->boot();
+            $this->fail('Production must require an explicit CORS origin.');
+        } catch (RuntimeException $error) {
+            $this->assertStringContainsString(
+                'CORS_ORIGINS must contain the deployed frontend origin',
+                $error->getMessage()
+            );
+        } finally {
+            config(['database.default' => 'sqlite']);
+        }
     }
 
     public function test_production_cors_rejects_non_https_or_non_origin_values(): void
@@ -385,10 +391,17 @@ class ApiContractTest extends TestCase
         ]);
         $this->app->detectEnvironment(fn () => 'production');
 
-        $this->expectException(RuntimeException::class);
-        $this->expectExceptionMessage('Every production CORS_ORIGINS entry must be an exact HTTPS origin.');
-
-        (new \App\Providers\AppServiceProvider($this->app))->boot();
+        try {
+            (new \App\Providers\AppServiceProvider($this->app))->boot();
+            $this->fail('Production must reject non-HTTPS CORS origins.');
+        } catch (RuntimeException $error) {
+            $this->assertSame(
+                'Every production CORS_ORIGINS entry must be an exact HTTPS origin.',
+                $error->getMessage()
+            );
+        } finally {
+            config(['database.default' => 'sqlite']);
+        }
     }
 
     public function test_super_admin_monitoring_is_role_restricted_and_admin_access_remains_compatible(): void
