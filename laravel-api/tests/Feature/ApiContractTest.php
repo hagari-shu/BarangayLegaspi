@@ -150,6 +150,50 @@ class ApiContractTest extends TestCase
         $this->assertDatabaseHas('users', ['email' => 'maria@example.test', 'zone' => 2]);
     }
 
+    public function test_login_does_not_create_a_bootstrap_admin_from_environment(): void
+    {
+        $bootstrapEnvironment = [
+            'ADMIN_EMAIL' => 'bootstrap@example.test',
+            'ADMIN_MOBILE' => '09170000001',
+            'ADMIN_PASSWORD' => 'Bootstrap!2026',
+            'ADMIN_FIRST_NAME' => 'Bootstrap',
+            'ADMIN_LAST_NAME' => 'Administrator',
+        ];
+        $previousEnvironment = [];
+        foreach ($bootstrapEnvironment as $key => $value) {
+            $previousEnvironment[$key] = [
+                'envExists' => array_key_exists($key, $_ENV),
+                'envValue' => $_ENV[$key] ?? null,
+                'serverExists' => array_key_exists($key, $_SERVER),
+                'serverValue' => $_SERVER[$key] ?? null,
+            ];
+            $_ENV[$key] = $value;
+            $_SERVER[$key] = $value;
+        }
+
+        try {
+            $this->postJson('/api/login', [
+                'identifier' => 'bootstrap@example.test',
+                'password' => 'Bootstrap!2026',
+            ])->assertUnauthorized();
+
+            $this->assertDatabaseMissing('users', ['email' => 'bootstrap@example.test']);
+        } finally {
+            foreach ($previousEnvironment as $key => $previous) {
+                if ($previous['envExists']) {
+                    $_ENV[$key] = $previous['envValue'];
+                } else {
+                    unset($_ENV[$key]);
+                }
+                if ($previous['serverExists']) {
+                    $_SERVER[$key] = $previous['serverValue'];
+                } else {
+                    unset($_SERVER[$key]);
+                }
+            }
+        }
+    }
+
     public function test_login_issues_a_bearer_token_and_protected_dashboard_accepts_it(): void
     {
         DB::table('users')->insert([

@@ -281,7 +281,6 @@ class ApiController extends Controller
             return response()->json(['message' => 'Identifier and password are required.'], 400);
         }
 
-        $this->seedBootstrapAdmin($identifier);
         $user = $this->findUser($identifier);
         if (!$user || !password_verify($password, $user->password_hash)) {
             return response()->json(['message' => 'Invalid credentials.'], 401);
@@ -1399,33 +1398,6 @@ class ApiController extends Controller
         ]);
 
         return $id;
-    }
-
-    private function seedBootstrapAdmin(string $identifier): void
-    {
-        $email = strtolower((string) env('ADMIN_EMAIL', 'admin@barangay.gov.ph'));
-        $mobile = (string) env('ADMIN_MOBILE', '09999999999');
-        if (!in_array(strtolower($identifier), [$email, strtolower($mobile)], true) || $this->findUser($email)) {
-            return;
-        }
-        $password = (string) env('ADMIN_PASSWORD', app()->environment('local') ? 'AdminPass123' : '');
-        if ($password === '') {
-            return;
-        }
-        $this->insertUser([
-            'firstName' => (string) env('ADMIN_FIRST_NAME', 'Carmen'),
-            'lastName' => (string) env('ADMIN_LAST_NAME', 'Santos'),
-            'email' => $email,
-            'mobile' => $mobile,
-            'password' => $password,
-            'role' => 'admin',
-            'status' => 'Administrator',
-            'position' => 'Administrator',
-            'householdId' => (string) env('ADMIN_HOUSEHOLD_ID', '2024-ADMIN'),
-            'familyMembers' => (int) env('ADMIN_FAMILY_MEMBERS', 1),
-            'address' => (string) env('ADMIN_ADDRESS', 'Barangay Hall, Legaspi'),
-            'zone' => (int) env('ADMIN_ZONE', 0),
-        ]);
     }
 
     private function createToken(string $userId): string

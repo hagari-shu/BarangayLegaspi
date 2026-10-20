@@ -6,10 +6,16 @@ on:
       - '**'
     paths:
       - 'laravel-api/**'
+      - 'server/**'
+      - 'scripts/check-laravel-api-parity.js'
+      - 'package.json'
       - '.github/workflows/laravel-tests.yml'
   pull_request:
     paths:
       - 'laravel-api/**'
+      - 'server/**'
+      - 'scripts/check-laravel-api-parity.js'
+      - 'package.json'
       - '.github/workflows/laravel-tests.yml'
   workflow_dispatch:
 
@@ -29,6 +35,15 @@ jobs:
         uses: actions/checkout@v4
         with:
           persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Prevent Laravel API parity regressions
+        working-directory: .
+        run: node scripts/check-laravel-api-parity.js --max-missing=42
 
       - name: Set up PHP
         uses: shivammathur/setup-php@v2

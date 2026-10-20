@@ -57,6 +57,8 @@ The staged Laravel API preserves the `/api` routes and PostgreSQL data model, an
 
 For the active Node/Express API, automatic administrator seeding is only for a genuinely new database. If either configured seed identifier (`ADMIN_EMAIL` or `ADMIN_MOBILE`) already belongs to an account, seeding is skipped; it never promotes or overwrites an existing user.
 
+The Laravel API does not create an administrator during login or from `ADMIN_*` environment variables. Its current Super Admin invitation endpoints only accept invitations; the protected operator workflow in this repository provisions accounts through the active Node API and must not be treated as a Laravel provisioning workflow. Do not replace the live API with Laravel until an audited Laravel invitation-issuance path and the complete API/workflow parity are implemented and verified.
+
 #### Operator account provisioning
 
 Admins can create Admin or Staff accounts directly in the authenticated portal; Staff members can create Staff accounts only. Portal users cannot create or promote Super Admin accounts. The API generates a strong temporary password, displays it once to the creator, and requires the account holder to change it before accessing any other portal features. The account holder can change their password later from Settings. Share temporary passwords only with the account holder through a secure channel.
