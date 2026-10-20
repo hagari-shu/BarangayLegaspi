@@ -1202,7 +1202,7 @@ export function createApp() {
   app.post('/api/login', authRateLimit, async (req, res) => {
     try {
       const identifier = sanitizeText(req.body?.identifier)
-      const password = sanitizeText(req.body?.password)
+      const password = String(req.body?.password || '')
 
       if (!identifier || !password) {
         return res.status(400).json({ message: 'Identifier and password are required.' })

@@ -2137,7 +2137,7 @@ test('admin-visible resident lists exclude generated test accounts', async () =>
 test('password reset uses a one-time token', async () => {
   const { server, baseUrl } = await createTestServer()
   const originalPassword = 'SecurePass123!'
-  const resetPassword = 'ResetPass123!'
+  const resetPassword = 'Reset<Pass123!'
 
   try {
     const email = `reset.${Date.now()}@example.com`
@@ -2169,6 +2169,14 @@ test('password reset uses a one-time token', async () => {
       body: JSON.stringify({ token: requestData.resetToken, newPassword: resetPassword }),
     })
     assert.equal(resetResponse.status, 200)
+
+    const loginResponse = await fetch(`${baseUrl}/api/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ identifier: email, password: resetPassword }),
+    })
+    assert.equal(loginResponse.status, 403)
+    assert.match((await loginResponse.json()).message, /awaiting administrator approval/)
 
     const reusedResponse = await fetch(`${baseUrl}/api/reset-password`, {
       method: 'POST',
