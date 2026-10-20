@@ -27,7 +27,7 @@ const createTestServer = async () => {
 
 test('resident can schedule and fetch due reminders', async () => {
   const { server, baseUrl } = await createTestServer()
-  const testEmail = `reminder.${Date.now()}@example.com`
+  const testEmail = `reminder.${Date.now()}@gmail.com`
   const testMobile = `091${Math.floor(10000000 + Math.random() * 90000000)}`
 
   try {

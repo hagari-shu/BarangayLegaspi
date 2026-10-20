@@ -78,7 +78,7 @@ export async function findUserByIdentifier(identifier) {
   const db = await readDb()
   const target = String(identifier).trim()
   return db.users.find(
-    (user) => user.mobile === target || user.email.toLowerCase() === target.toLowerCase()
+    (user) => user.mobile === target || String(user.email || '').toLowerCase() === target.toLowerCase()
   ) || null
 }
 
@@ -99,7 +99,7 @@ export async function createUser(user) {
     const db = await readDb()
     const email = String(user.email || '').toLowerCase()
     if (db.users.some((existing) => (
-      String(existing.email || '').toLowerCase() === email
+      (email && String(existing.email || '').toLowerCase() === email)
       || String(existing.mobile || '') === user.mobile
     ))) {
       return { status: 'account_exists' }
@@ -217,13 +217,13 @@ export async function registerResident(user, auditEntry) {
     const db = await readDb()
     const email = String(user.email || '').toLowerCase()
     if (db.users.some((existing) => (
-      String(existing.email || '').toLowerCase() === email
+      (email && String(existing.email || '').toLowerCase() === email)
       || String(existing.mobile || '') === user.mobile
     ))) {
       return { status: 'account_exists' }
     }
 
-    const hasPendingInvitation = (db.staffInvitations || []).some((invitation) => (
+    const hasPendingInvitation = email && ((db.staffInvitations || []).some((invitation) => (
       String(invitation.email || '').toLowerCase() === email
       && !invitation.acceptedAt
       && !invitation.revokedAt
@@ -233,7 +233,7 @@ export async function registerResident(user, auditEntry) {
       && !invitation.acceptedAt
       && !invitation.revokedAt
       && Date.parse(invitation.expiresAt) > Date.parse(user.createdAt)
-    ))
+    )))
     if (hasPendingInvitation) return { status: 'invitation_pending' }
 
     db.users.push(user)

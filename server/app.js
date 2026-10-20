@@ -2,7 +2,7 @@ import express from 'express'
 import cors from 'cors'
 import helmet from 'helmet'
 import rateLimit from 'express-rate-limit'
-import { createHash, randomBytes, randomUUID } from 'node:crypto'
+import { createHash, randomBytes, randomInt, randomUUID, timingSafeEqual } from 'node:crypto'
 import { comparePassword, hashPassword, signToken, verifyToken } from './auth.js'
 import { createTotpSecret, createTotpUri, decryptTotpSecret, encryptTotpSecret, verifyTotp } from './mfa.js'
 import { createRequestReportCsv, filterStaffReportRequests, getStaffRequestReport, isValidReportDate } from './request-reporting.js'
@@ -52,6 +52,7 @@ import {
 } from './super-admin-invitations.js'
 import { isAdminRole, isStaffOrAdminRole, isSuperAdminRole } from './rbac.js'
 import { deliverPasswordResetEmail } from './password-reset-email.js'
+import { deliverProfileEmailVerification } from './profile-email.js'
 
 let store = process.env.DATABASE_URL && !IS_TEST_RUN ? pgDb : jsonDb
 
@@ -97,6 +98,7 @@ const isSyntheticTestAccount = (user = {}) => {
 const filterVisibleUsers = (users = []) => (Array.isArray(users) ? users.filter((user) => !isSyntheticTestAccount(user)) : [])
 
 const isValidEmail = (value) => /^[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}$/.test(String(value).trim())
+const isValidGmail = (value) => isValidEmail(value) && String(value).trim().toLowerCase().endsWith('@gmail.com')
 const isValidMobile = (value) => /^09\d{9}$/.test(String(value).trim())
 const isValidPassword = (value) => {
   const password = String(value).trim()
@@ -181,7 +183,7 @@ export async function seedDemoResident() {
     return
   }
 
-  const missingSeeds = requiredSeeds.filter((seed) => !db.users.some((user) => user.mobile === seed.mobile || user.email.toLowerCase() === seed.email.toLowerCase()))
+  const missingSeeds = requiredSeeds.filter((seed) => !db.users.some((user) => user.mobile === seed.mobile || String(user.email || '').toLowerCase() === seed.email.toLowerCase()))
 
   if (missingSeeds.length > 0) {
     for (const seed of missingSeeds) {
@@ -355,15 +357,15 @@ export function createApp() {
   const createPortalAccount = async (actor, role, req, res) => {
     const firstName = sanitizeText(req.body?.firstName)
     const lastName = sanitizeText(req.body?.lastName)
-    const email = sanitizeText(req.body?.email).toLowerCase()
+    const email = sanitizeText(req.body?.email || '').toLowerCase()
     const mobile = sanitizeText(req.body?.mobile)
     const position = role === 'staff' ? sanitizeText(req.body?.position || 'Staff') : 'Administrator'
 
     if (!firstName || firstName.length > 100 || !lastName || lastName.length > 100) {
       return res.status(400).json({ message: 'First and last names are required and must be 100 characters or fewer.' })
     }
-    if (!isValidEmail(email) || email.length > 255) {
-      return res.status(400).json({ message: 'Provide a valid account email address.' })
+    if (email && (!isValidGmail(email) || email.length > 255)) {
+      return res.status(400).json({ message: 'Provide a valid Gmail address or leave email blank for a mobile-only account.' })
     }
     if (!isValidMobile(mobile)) {
       return res.status(400).json({ message: 'Provide a valid 11-digit Philippine mobile number starting with 09.' })
@@ -389,7 +391,7 @@ export function createApp() {
         id: randomUUID(),
         firstName,
         lastName,
-        email,
+        email: email || null,
         mobile,
         passwordHash: await hashPassword(temporaryPassword),
         mustChangePassword: true,
@@ -409,7 +411,7 @@ export function createApp() {
       }
       const createdUser = result?.user || result
       try {
-        await writeAudit(actor.user, 'account.created', 'user', user.id, { role, email })
+        await writeAudit(actor.user, 'account.created', 'user', user.id, { role, email: email || null })
       } catch (error) {
         console.error('failed to record portal account creation audit entry', error)
       }
@@ -432,6 +434,7 @@ export function createApp() {
   const authAttempts = new Map()
   const resetTokens = new Map()
   const mfaChallenges = new Map()
+  const profileEmailVerifications = new Map()
 
   const ensureSeededAccounts = async () => {
     if (process.env.DATABASE_URL) return
@@ -892,7 +895,7 @@ export function createApp() {
       const firstName = sanitizeText(req.body?.firstName)
       const lastName = sanitizeText(req.body?.lastName)
       const mobile = sanitizeText(req.body?.mobile)
-      const email = sanitizeText(req.body?.email).toLowerCase()
+      const email = sanitizeText(req.body?.email || '').toLowerCase()
       const password = sanitizeText(req.body?.password)
       const address = sanitizeText(req.body?.address || 'Barangay Legaspi, Tayug, Pangasinan')
       const zone = req.body?.zone === undefined ? 1 : Number(req.body.zone)
@@ -903,12 +906,12 @@ export function createApp() {
         })).filter((member) => member.name)
         : []
 
-      if (!firstName || !lastName || !mobile || !email || !password) {
+      if (!firstName || !lastName || !mobile || !password) {
         return res.status(400).json({ message: 'Please complete all required fields.' })
       }
 
-      if (!isValidMobile(mobile) || !isValidEmail(email) || !isValidPassword(password)) {
-        return res.status(400).json({ message: `Please enter a valid mobile number, email, and password with ${passwordRequirements}.` })
+      if (!isValidMobile(mobile) || (email && !isValidGmail(email)) || !isValidPassword(password)) {
+        return res.status(400).json({ message: `Please enter a valid Philippine mobile number, a Gmail address if provided, and a password with ${passwordRequirements}.` })
       }
 
       if (!address || !Number.isInteger(zone) || zone < 1 || zone > 7) {
@@ -920,7 +923,7 @@ export function createApp() {
         return res.status(409).json({ message: 'A resident with this mobile number already exists.' })
       }
 
-      const existingEmail = await store.findUserByIdentifier(email)
+      const existingEmail = email ? await store.findUserByIdentifier(email) : null
       if (existingEmail) {
         return res.status(409).json({ message: 'A resident with this email already exists.' })
       }
@@ -930,7 +933,7 @@ export function createApp() {
         firstName,
         lastName,
         mobile,
-        email,
+        email: email || null,
         passwordHash: await hashPassword(password),
         role: 'resident',
         householdId: `2024-${String(Date.now()).slice(-4)}`,
@@ -1473,6 +1476,9 @@ export function createApp() {
       const user = await store.findUserByIdentifier(identifier)
       const genericMessage = 'If the account exists, reset instructions have been sent.'
       if (!user) return res.json({ message: genericMessage })
+      if (!user.email) {
+        return res.json({ message: genericMessage, deliveryStatus: 'helpdesk' })
+      }
 
       const token = randomBytes(32).toString('hex')
       const expiresAt = Date.now() + 15 * 60 * 1000
@@ -1652,6 +1658,98 @@ export function createApp() {
     }
   })
 
+  app.post('/api/profile/email/request', authRateLimit, async (req, res) => {
+    const authHeader = req.headers.authorization || ''
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : ''
+    if (!token) return res.status(401).json({ message: 'Authentication required.' })
+
+    const email = sanitizeText(req.body?.email || '').toLowerCase()
+    if (!isValidGmail(email) || email.length > 255) {
+      return res.status(400).json({ message: 'Enter a valid Gmail address to receive a verification code.' })
+    }
+
+    try {
+      const actor = await getCurrentActor(token)
+      if (!actor) return res.status(401).json({ message: 'Authentication required.' })
+      if (email === String(actor.user.email || '').toLowerCase()) {
+        return res.status(409).json({ code: 'email_unchanged', message: 'This Gmail address is already on your account.' })
+      }
+
+      const existingUser = await store.findUserByIdentifier(email)
+      if (existingUser && existingUser.id !== actor.user.id) {
+        return res.status(409).json({ message: 'A user with this Gmail address already exists.' })
+      }
+
+      const apiKey = process.env.RESEND_API_KEY
+      const fromEmail = process.env.PASSWORD_RESET_FROM_EMAIL || process.env.SUPER_ADMIN_INVITATION_FROM_EMAIL
+      if (!apiKey || !fromEmail) {
+        return res.status(503).json({ code: 'email_verification_unavailable', message: 'Email verification is not configured. Contact the barangay office.' })
+      }
+
+      const code = String(randomInt(0, 1_000_000)).padStart(6, '0')
+      const expiresAt = Date.now() + 10 * 60 * 1000
+      await deliverProfileEmailVerification({ apiKey, fromEmail, email, code, expiresAt })
+      profileEmailVerifications.set(actor.user.id, {
+        email,
+        codeHash: createHash('sha256').update(code).digest('hex'),
+        expiresAt,
+        attempts: 0,
+      })
+      return res.json({ message: 'A verification code was sent to the new Gmail address. It expires in 10 minutes.' })
+    } catch (error) {
+      console.error('profile email verification delivery failed', error)
+      return res.status(502).json({ message: 'Unable to send the email verification code. Try again later.' })
+    }
+  })
+
+  app.post('/api/profile/email/verify', authRateLimit, async (req, res) => {
+    const authHeader = req.headers.authorization || ''
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : ''
+    if (!token) return res.status(401).json({ message: 'Authentication required.' })
+
+    const email = sanitizeText(req.body?.email || '').toLowerCase()
+    const code = String(req.body?.code || '').trim()
+    if (!isValidGmail(email) || email.length > 255 || !/^\d{6}$/.test(code)) {
+      return res.status(400).json({ message: 'Enter the Gmail address and its 6-digit verification code.' })
+    }
+
+    try {
+      const actor = await getCurrentActor(token)
+      if (!actor) return res.status(401).json({ message: 'Authentication required.' })
+      const pending = profileEmailVerifications.get(actor.user.id)
+      if (!pending || pending.email !== email || pending.expiresAt <= Date.now()) {
+        profileEmailVerifications.delete(actor.user.id)
+        return res.status(400).json({ message: 'The verification code is invalid or expired. Request a new code.' })
+      }
+      pending.attempts += 1
+      const codeHash = createHash('sha256').update(code).digest('hex')
+      if (pending.attempts > 5) {
+        profileEmailVerifications.delete(actor.user.id)
+        return res.status(429).json({ message: 'Too many incorrect codes. Request a new verification code.' })
+      }
+      if (!timingSafeEqual(Buffer.from(codeHash, 'hex'), Buffer.from(pending.codeHash, 'hex'))) {
+        return res.status(400).json({ message: 'The verification code is incorrect.' })
+      }
+
+      const existingUser = await store.findUserByIdentifier(email)
+      if (existingUser && existingUser.id !== actor.user.id) {
+        profileEmailVerifications.delete(actor.user.id)
+        return res.status(409).json({ message: 'A user with this Gmail address already exists.' })
+      }
+      const updatedUser = await store.updateUser?.(actor.user.id, { email })
+      if (!updatedUser) return res.status(404).json({ message: 'User not found.' })
+      profileEmailVerifications.delete(actor.user.id)
+      await writeAudit(actor.user, 'profile.email_verified', 'user', actor.user.id)
+      return res.json({ message: 'Gmail address verified and saved.', user: sanitizeUserRecord(updatedUser) })
+    } catch (error) {
+      if (error?.code === '23505') {
+        return res.status(409).json({ message: 'A user with this Gmail address already exists.' })
+      }
+      console.error('profile email verification failed', error)
+      return res.status(500).json({ message: 'Unable to verify the Gmail address.' })
+    }
+  })
+
   app.patch('/api/profile', async (req, res) => {
     const authHeader = req.headers.authorization || ''
     const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null
@@ -1669,7 +1767,9 @@ export function createApp() {
 
       const firstName = sanitizeText(req.body?.firstName || existingUser.firstName || existingUser.first_name || '')
       const lastName = sanitizeText(req.body?.lastName || existingUser.lastName || existingUser.last_name || '')
-      const email = sanitizeText(req.body?.email || existingUser.email || '').toLowerCase()
+      const currentEmail = String(existingUser.email || '').toLowerCase()
+      const emailProvided = Object.hasOwn(req.body || {}, 'email')
+      const email = emailProvided ? sanitizeText(req.body?.email || '').toLowerCase() : currentEmail
       const mobile = sanitizeText(req.body?.mobile || existingUser.mobile || '')
       const address = sanitizeText(req.body?.address || existingUser.address || '')
       const householdId = sanitizeText(req.body?.householdId || existingUser.householdId || existingUser.household_id || '') || null
@@ -1680,11 +1780,14 @@ export function createApp() {
       if (!firstName || !lastName) {
         return res.status(400).json({ message: 'First name and last name are required.' })
       }
-      if (email && !isValidEmail(email)) {
-        return res.status(400).json({ message: 'Please enter a valid email.' })
+      if (email && email !== currentEmail && !isValidGmail(email)) {
+        return res.status(400).json({ message: 'A new email must be a valid Gmail address. Verify it before saving.' })
       }
-      if (mobile && !isValidMobile(mobile)) {
-        return res.status(400).json({ message: 'Please enter a valid mobile number.' })
+      if (email && email !== currentEmail) {
+        return res.status(400).json({ code: 'email_verification_required', message: 'Verify the new Gmail address before saving it.' })
+      }
+      if (!isValidMobile(mobile)) {
+        return res.status(400).json({ message: 'Provide a valid 11-digit Philippine mobile number starting with 09.' })
       }
 
       const duplicateEmail = email && await store.findUserByIdentifier(email)
@@ -1700,13 +1803,14 @@ export function createApp() {
       const updatedUser = await store.updateUser?.(existingUser.id, {
         firstName,
         lastName,
-        email,
+        ...(emailProvided ? { email: email || null } : {}),
         mobile,
         address,
         householdId,
         familyMembers,
       })
 
+      await writeAudit(existingUser, 'profile.updated', 'user', existingUser.id)
       return res.json({ user: sanitizeUserRecord(updatedUser) })
     } catch (error) {
       console.error('profile update error', error)

@@ -349,7 +349,7 @@ test('duplicate email and mobile conflicts do not consume a valid staff invitati
 })
 
 test('resident registration cannot claim an email with a pending staff invitation', async () => {
-  const invitation = await createInvitation('reserved.invitee@example.test')
+  const invitation = await createInvitation('reserved.invitee@gmail.com')
   const { server, baseUrl } = await startTestServer()
   try {
     const response = await fetch(`${baseUrl}/api/register`, {
@@ -359,7 +359,7 @@ test('resident registration cannot claim an email with a pending staff invitatio
         firstName: 'Ana',
         lastName: 'Santos',
         mobile: '09170000021',
-        email: 'reserved.invitee@example.test',
+        email: 'reserved.invitee@gmail.com',
         password: 'Resident!Password2026',
         address: 'Legaspi',
         zone: 1,
@@ -368,7 +368,7 @@ test('resident registration cannot claim an email with a pending staff invitatio
     assert.equal(response.status, 409)
 
     const stored = await jsonDb.readDb()
-    assert.equal(stored.users.some((user) => user.email === 'reserved.invitee@example.test'), false)
+    assert.equal(stored.users.some((user) => user.email === 'reserved.invitee@gmail.com'), false)
     assert.equal(stored.staffInvitations[0].tokenHash, hashStaffInvitationToken(invitation.token))
     assert.equal(stored.staffInvitations[0].revokedAt, undefined)
   } finally {

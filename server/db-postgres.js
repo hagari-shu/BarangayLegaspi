@@ -210,7 +210,7 @@ export async function initDatabase() {
       first_name VARCHAR(100) NOT NULL,
       last_name VARCHAR(100) NOT NULL,
       mobile VARCHAR(20) UNIQUE NOT NULL,
-      email VARCHAR(255) UNIQUE NOT NULL,
+      email VARCHAR(255) UNIQUE,
       password_hash TEXT NOT NULL,
       must_change_password BOOLEAN NOT NULL DEFAULT false,
       role VARCHAR(30) NOT NULL DEFAULT 'resident',
@@ -226,6 +226,7 @@ export async function initDatabase() {
     );
   `)
 
+  await query('ALTER TABLE users ALTER COLUMN email DROP NOT NULL')
   await query("ALTER TABLE users ADD COLUMN IF NOT EXISTS household_members JSONB DEFAULT '[]'::jsonb")
   await query('ALTER TABLE users ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN NOT NULL DEFAULT false')
   await query('ALTER TABLE users ADD COLUMN IF NOT EXISTS mfa_secret TEXT DEFAULT NULL')
@@ -536,15 +537,15 @@ export async function registerResident(user, auditEntry) {
     await client.query('BEGIN')
     await lockAccountEmail(client, user.email)
     const existingUser = await client.query(
-      'SELECT id FROM users WHERE LOWER(email) = $1 OR mobile = $2 LIMIT 1',
-      [user.email.toLowerCase(), user.mobile],
+      'SELECT id FROM users WHERE ($1::text IS NOT NULL AND LOWER(email) = $1) OR mobile = $2 LIMIT 1',
+      [user.email ? user.email.toLowerCase() : null, user.mobile],
     )
     if (existingUser.rows.length) {
       await client.query('ROLLBACK')
       return { status: 'account_exists' }
     }
 
-    const pendingInvitation = await client.query(
+    const pendingInvitation = user.email ? await client.query(
       `SELECT id FROM staff_invitations
        WHERE LOWER(email) = $1 AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > NOW()
        UNION ALL
@@ -552,7 +553,7 @@ export async function registerResident(user, auditEntry) {
        WHERE LOWER(email) = $1 AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > NOW()
        LIMIT 1`,
       [user.email.toLowerCase()],
-    )
+    ) : { rows: [] }
     if (pendingInvitation.rows.length) {
       await client.query('ROLLBACK')
       return { status: 'invitation_pending' }
@@ -566,7 +567,7 @@ export async function registerResident(user, auditEntry) {
         user.firstName,
         user.lastName,
         user.mobile,
-        user.email.toLowerCase(),
+        user.email ? user.email.toLowerCase() : null,
         user.passwordHash,
         user.householdId,
         user.familyMembers,

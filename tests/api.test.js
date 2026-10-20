@@ -702,7 +702,7 @@ test('Messenger corrections stay limited to recipients of the original announcem
 test('registers a resident and waits for administrator approval', async () => {
   const { server, baseUrl } = await createTestServer()
   const mobile = `091${Math.floor(10000000 + Math.random() * 90000000)}`
-  const email = `resident.${Date.now()}@example.com`
+  const email = `resident.${Date.now()}@gmail.com`
 
   try {
     const registerResponse = await fetch(`${baseUrl}/api/register`, {
@@ -946,10 +946,240 @@ test('request lifecycle preserves copy preference, status history, and resident 
   }
 })
 
+test('mobile-only resident registration and recovery use mobile login and barangay helpdesk', async () => {
+  const { server, baseUrl } = await createTestServer()
+  const mobile = `091${Math.floor(10000000 + Math.random() * 90000000)}`
+  const password = 'MobileOnlyPass123!'
+
+  try {
+    const registerResponse = await fetch(`${baseUrl}/api/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        firstName: 'Mobile',
+        lastName: 'Resident',
+        mobile,
+        address: 'Barangay Legaspi',
+        zone: 1,
+        password,
+      }),
+    })
+    assert.equal(registerResponse.status, 201)
+    const registered = await registerResponse.json()
+    assert.equal(registered.user.email, null)
+
+    await jsonDb.updateUser(registered.user.id, { status: 'Active Resident' })
+    const loginResponse = await fetch(`${baseUrl}/api/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ identifier: mobile, password }),
+    })
+    assert.equal(loginResponse.status, 200)
+
+    const resetResponse = await fetch(`${baseUrl}/api/reset-password/request`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ identifier: mobile }),
+    })
+    assert.equal(resetResponse.status, 200)
+    assert.equal((await resetResponse.json()).deliveryStatus, 'helpdesk')
+
+    const invalidEmailResponse = await fetch(`${baseUrl}/api/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        firstName: 'Invalid',
+        lastName: 'Email',
+        mobile: `091${Math.floor(10000000 + Math.random() * 90000000)}`,
+        email: 'not-gmail@example.com',
+        address: 'Barangay Legaspi',
+        zone: 1,
+        password,
+      }),
+    })
+    assert.equal(invalidEmailResponse.status, 400)
+  } finally {
+    await new Promise((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()))
+    })
+  }
+})
+
+test('profile email changes require a one-time Gmail code and mobile fields are validated', async () => {
+  const originalApiKey = process.env.RESEND_API_KEY
+  const originalFromEmail = process.env.PASSWORD_RESET_FROM_EMAIL
+  const originalFetch = globalThis.fetch
+  const verificationEmails = []
+  process.env.RESEND_API_KEY = 'test-only-resend-api-key'
+  process.env.PASSWORD_RESET_FROM_EMAIL = 'no-reply@example.org'
+  globalThis.fetch = async (input, options) => {
+    if (input === 'https://api.resend.com/emails') {
+      verificationEmails.push(JSON.parse(options.body))
+      return new Response(null, { status: 200 })
+    }
+    return originalFetch(input, options)
+  }
+  const { server, baseUrl } = await createTestServer()
+  const user = {
+    id: randomUUID(),
+    firstName: 'Profile',
+    lastName: 'Owner',
+    mobile: `091${Math.floor(10000000 + Math.random() * 90000000)}`,
+    email: null,
+    passwordHash: await hashPassword('ProfileOwner123!'),
+    role: 'staff',
+    status: 'On Duty',
+    createdAt: new Date().toISOString(),
+  }
+  const token = signToken({ sub: user.id })
+  const authHeaders = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
+  const postJson = (route, body) => fetch(`${baseUrl}${route}`, {
+    method: 'POST',
+    headers: authHeaders,
+    body: JSON.stringify(body),
+  })
+  try {
+    await jsonDb.saveUser(user)
+    const invalidEmailResponse = await postJson('/api/profile/email/request', { email: 'person@example.com' })
+    assert.equal(invalidEmailResponse.status, 400)
+
+    const email = `profile.${Date.now()}@gmail.com`
+    const requestResponse = await postJson('/api/profile/email/request', { email })
+    assert.equal(requestResponse.status, 200)
+    assert.equal(verificationEmails.length, 1)
+    const code = verificationEmails[0].text.match(/\n\n(\d{6})\n\n/)?.[1]
+    assert.ok(code)
+
+    const wrongCodeResponse = await postJson('/api/profile/email/verify', { email, code: '000000' === code ? '000001' : '000000' })
+    assert.equal(wrongCodeResponse.status, 400)
+
+    const verifyResponse = await postJson('/api/profile/email/verify', { email, code })
+    assert.equal(verifyResponse.status, 200)
+    assert.equal((await verifyResponse.json()).user.email, email)
+
+    const reuseResponse = await postJson('/api/profile/email/verify', { email, code })
+    assert.equal(reuseResponse.status, 400)
+
+    const invalidMobileResponse = await fetch(`${baseUrl}/api/profile`, {
+      method: 'PATCH',
+      headers: authHeaders,
+      body: JSON.stringify({ mobile: '12345' }),
+    })
+    assert.equal(invalidMobileResponse.status, 400)
+
+    const removeResponse = await fetch(`${baseUrl}/api/profile`, {
+      method: 'PATCH',
+      headers: authHeaders,
+      body: JSON.stringify({ email: '' }),
+    })
+    assert.equal(removeResponse.status, 200)
+    assert.equal((await removeResponse.json()).user.email, null)
+  } finally {
+    globalThis.fetch = originalFetch
+    if (originalApiKey === undefined) delete process.env.RESEND_API_KEY
+    else process.env.RESEND_API_KEY = originalApiKey
+    if (originalFromEmail === undefined) delete process.env.PASSWORD_RESET_FROM_EMAIL
+    else process.env.PASSWORD_RESET_FROM_EMAIL = originalFromEmail
+    await new Promise((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()))
+    })
+  }
+})
+
+test('profile email verification blocks duplicates, too many attempts, and expired codes', async () => {
+  const originalApiKey = process.env.RESEND_API_KEY
+  const originalFromEmail = process.env.PASSWORD_RESET_FROM_EMAIL
+  const originalFetch = globalThis.fetch
+  const verificationEmails = []
+  process.env.RESEND_API_KEY = 'test-only-resend-api-key'
+  process.env.PASSWORD_RESET_FROM_EMAIL = 'no-reply@example.org'
+  globalThis.fetch = async (input, options) => {
+    if (input === 'https://api.resend.com/emails') {
+      verificationEmails.push(JSON.parse(options.body))
+      return new Response(null, { status: 200 })
+    }
+    return originalFetch(input, options)
+  }
+  const { server, baseUrl } = await createTestServer()
+  const user = {
+    id: randomUUID(),
+    firstName: 'Profile',
+    lastName: 'Owner',
+    mobile: `091${Math.floor(10000000 + Math.random() * 90000000)}`,
+    email: null,
+    passwordHash: await hashPassword('ProfileOwner123!'),
+    role: 'staff',
+    status: 'On Duty',
+    createdAt: new Date().toISOString(),
+  }
+  const token = signToken({ sub: user.id })
+  const authHeaders = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
+  const postJson = (route, body) => fetch(`${baseUrl}${route}`, {
+    method: 'POST',
+    headers: authHeaders,
+    body: JSON.stringify(body),
+  })
+  let originalNow
+
+  try {
+    await jsonDb.saveUser(user)
+    const duplicateEmail = `duplicate.${Date.now()}@gmail.com`
+    const duplicateRequest = await postJson('/api/profile/email/request', { email: duplicateEmail })
+    assert.equal(duplicateRequest.status, 200)
+    const duplicateCode = verificationEmails[0].text.match(/\n\n(\d{6})\n\n/)?.[1]
+    assert.ok(duplicateCode)
+    await jsonDb.saveUser({
+      id: randomUUID(),
+      firstName: 'Duplicate',
+      lastName: 'Owner',
+      mobile: `091${Math.floor(10000000 + Math.random() * 90000000)}`,
+      email: duplicateEmail,
+      passwordHash: await hashPassword('DuplicateOwner123!'),
+      role: 'staff',
+      status: 'On Duty',
+    })
+    const duplicateVerifyResponse = await postJson('/api/profile/email/verify', { email: duplicateEmail, code: duplicateCode })
+    assert.equal(duplicateVerifyResponse.status, 409)
+
+    const attemptEmail = `attempt.${Date.now()}@gmail.com`
+    const attemptRequest = await postJson('/api/profile/email/request', { email: attemptEmail })
+    assert.equal(attemptRequest.status, 200)
+    const attemptCode = verificationEmails[1].text.match(/\n\n(\d{6})\n\n/)?.[1]
+    assert.ok(attemptCode)
+    const incorrectCode = attemptCode === '000000' ? '000001' : '000000'
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const invalidCodeResponse = await postJson('/api/profile/email/verify', { email: attemptEmail, code: incorrectCode })
+      assert.equal(invalidCodeResponse.status, 400)
+    }
+    const limitedResponse = await postJson('/api/profile/email/verify', { email: attemptEmail, code: attemptCode })
+    assert.equal(limitedResponse.status, 429)
+
+    const expiryEmail = `expiry.${Date.now()}@gmail.com`
+    const expiryRequest = await postJson('/api/profile/email/request', { email: expiryEmail })
+    assert.equal(expiryRequest.status, 200)
+    const expiryCode = verificationEmails[2].text.match(/\n\n(\d{6})\n\n/)?.[1]
+    assert.ok(expiryCode)
+    originalNow = Date.now
+    Date.now = () => originalNow() + 11 * 60 * 1000
+    const expiredResponse = await postJson('/api/profile/email/verify', { email: expiryEmail, code: expiryCode })
+    assert.equal(expiredResponse.status, 400)
+  } finally {
+    if (originalNow) Date.now = originalNow
+    globalThis.fetch = originalFetch
+    if (originalApiKey === undefined) delete process.env.RESEND_API_KEY
+    else process.env.RESEND_API_KEY = originalApiKey
+    if (originalFromEmail === undefined) delete process.env.PASSWORD_RESET_FROM_EMAIL
+    else process.env.PASSWORD_RESET_FROM_EMAIL = originalFromEmail
+    await new Promise((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()))
+    })
+  }
+})
+
 test('admin can update user details but cannot change account roles', async () => {
   const { server, baseUrl } = await createTestServer()
   const mobile = `091${Math.floor(10000000 + Math.random() * 90000000)}`
-  const email = `upgrade.${Date.now()}@example.com`
+  const email = `upgrade.${Date.now()}@gmail.com`
 
   try {
     const registerResponse = await fetch(`${baseUrl}/api/register`, {
@@ -1056,7 +1286,7 @@ test('admin can update user details but cannot change account roles', async () =
       body: JSON.stringify({
         firstName: 'Portal',
         lastName: 'Staff',
-        email: `portal.staff.${Date.now()}@example.com`,
+        email: `portal.staff.${Date.now()}@gmail.com`,
         mobile: `091${Math.floor(10000000 + Math.random() * 90000000)}`,
       }),
     })
@@ -1077,7 +1307,7 @@ test('admin can update user details but cannot change account roles', async () =
       body: JSON.stringify({
         firstName: 'Portal',
         lastName: 'Admin',
-        email: `portal.admin.${Date.now()}@example.com`,
+        email: `portal.admin.${Date.now()}@gmail.com`,
         mobile: `091${Math.floor(10000000 + Math.random() * 90000000)}`,
       }),
     })
@@ -1148,7 +1378,7 @@ test('staff can create staff accounts but not admins, and temporary passwords re
     assert.equal(loginResponse.status, 200)
     const loginData = await loginResponse.json()
 
-    const email = `created.staff.${Date.now()}@example.com`
+    const email = `created.staff.${Date.now()}@gmail.com`
     const createResponse = await fetch(`${baseUrl}/api/staff/members`, {
       method: 'POST',
       headers: {
@@ -1229,7 +1459,7 @@ test('staff can create staff accounts but not admins, and temporary passwords re
 
 test('pre-provisioned staff positions persist and duplicate account creation is rejected', async () => {
   const { server, baseUrl } = await createTestServer()
-  const email = `secretary.${Date.now()}@example.com`
+  const email = `secretary.${Date.now()}@gmail.com`
   const mobile = `091${Math.floor(10000000 + Math.random() * 90000000)}`
 
   try {
@@ -2140,7 +2370,7 @@ test('password reset uses a one-time token', async () => {
   const resetPassword = 'Reset<Pass123!'
 
   try {
-    const email = `reset.${Date.now()}@example.com`
+    const email = `reset.${Date.now()}@gmail.com`
     const registerResponse = await fetch(`${baseUrl}/api/register`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -2450,7 +2680,7 @@ test('authenticated users can change passwords with the current password', async
   const { server, baseUrl } = await createTestServer()
   const currentPassword = 'CurrentPass123!'
   const nextPassword = 'NextPass123!'
-  const email = `change.${Date.now()}@example.com`
+  const email = `change.${Date.now()}@gmail.com`
 
   try {
     const registerResponse = await fetch(`${baseUrl}/api/register`, {
@@ -2506,7 +2736,7 @@ test('authenticated users can change passwords with the current password', async
 test('admin can archive residents by zone into separate files', async () => {
   const { server, baseUrl } = await createTestServer()
   const mobile = `091${Math.floor(10000000 + Math.random() * 90000000)}`
-  const email = `zonearchive.${Date.now()}@example.com`
+  const email = `zonearchive.${Date.now()}@gmail.com`
 
   try {
     const registerResponse = await fetch(`${baseUrl}/api/register`, {
@@ -2684,7 +2914,7 @@ test('reset password request sends a delivery webhook payload when configured', 
     const testServer = await createTestServer()
     appServer = testServer.server
     const { baseUrl } = testServer
-    const email = `delivery.${Date.now()}@example.com`
+    const email = `delivery.${Date.now()}@gmail.com`
     const registerResponse = await fetch(`${baseUrl}/api/register`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -2753,7 +2983,7 @@ test('password reset request sends the reset code using the configured Resend se
     const testServer = await createTestServer()
     appServer = testServer.server
     const { baseUrl } = testServer
-    const email = `resend.${Date.now()}@example.com`
+    const email = `resend.${Date.now()}@gmail.com`
     const registerResponse = await fetch(`${baseUrl}/api/register`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

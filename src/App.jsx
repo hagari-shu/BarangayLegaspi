@@ -341,7 +341,7 @@ function AccountCreationModal({ allowedRoles, language, onClose, onCreated }) {
       {createdAccount ? (
         <div className="editor-panel workflow-modal-form">
           <p role="status">{t.accountCreatedNotice}</p>
-          <p><strong>{t.accountCreationEmail}:</strong> {createdAccount.user?.email || email}</p>
+          <p><strong>{createdAccount.user?.email ? t.accountCreationEmail : t.mobileNumberLabel}:</strong> {createdAccount.user?.email || createdAccount.user?.mobile || mobile}</p>
           <p><strong>{t.temporaryPassword}:</strong></p>
           <input className="mfa-secret-input" value={createdAccount.temporaryPassword || ''} readOnly onFocus={(event) => event.target.select()} aria-label={t.temporaryPassword} />
           <p className="report-metric-note">{t.temporaryPasswordShareWarning}</p>
@@ -373,12 +373,14 @@ function AccountCreationModal({ allowedRoles, language, onClose, onCreated }) {
               <input id="account-creation-last-name" autoComplete="family-name" maxLength={100} value={lastName} onChange={(event) => setLastName(event.target.value)} required />
             </div>
             <div className="input-block">
-              <label htmlFor="account-creation-email">{t.accountCreationEmail}</label>
-              <input id="account-creation-email" type="email" autoComplete="email" maxLength={255} value={email} onChange={(event) => setEmail(event.target.value)} required />
+              <label htmlFor="account-creation-email">{t.emailOptional}</label>
+              <input id="account-creation-email" type="email" autoComplete="email" maxLength={255} value={email} onChange={(event) => setEmail(event.target.value)} aria-describedby="account-creation-email-hint" />
+              <small id="account-creation-email-hint">{t.accountCreationEmailHint}</small>
             </div>
             <div className="input-block">
               <label htmlFor="account-creation-mobile">{t.mobileNumberLabel}</label>
-              <input id="account-creation-mobile" type="tel" autoComplete="tel" inputMode="numeric" maxLength={11} value={mobile} onChange={(event) => setMobile(event.target.value)} required />
+              <input id="account-creation-mobile" type="tel" autoComplete="tel" inputMode="numeric" pattern="09[0-9]{9}" maxLength={11} value={mobile} onChange={(event) => setMobile(event.target.value.replace(/\D/g, '').slice(0, 11))} aria-describedby="account-creation-mobile-hint" required />
+              <small id="account-creation-mobile-hint">{t.philippinesMobileFormatHint}</small>
             </div>
             {role === 'staff' && (
               <div className="input-block">
@@ -1297,6 +1299,10 @@ function LoginPage({ onLogin, language, setLanguage }) {
       if (!response.ok) throw new Error(data.message || 'Unable to reset password.')
 
       if (!resetRequested) {
+        if (data.deliveryStatus === 'helpdesk') {
+          alert(t.resetHelpdeskInstructions)
+          return
+        }
         if (!['queued', 'sent'].includes(data.deliveryStatus) && !data.resetToken) {
           alert(t.resetRequestGeneric)
           return
@@ -1671,13 +1677,13 @@ function RegisterPage({ language, setLanguage }) {
       password: sanitizeText(form.password),
     }
 
-    if (!nextForm.firstName || !nextForm.lastName || !nextForm.mobile || !nextForm.email || !nextForm.address || !nextForm.zone || !nextForm.password) {
+    if (!nextForm.firstName || !nextForm.lastName || !nextForm.mobile || !nextForm.address || !nextForm.zone || !nextForm.password) {
       alert('Please complete all required fields to register.')
       return
     }
 
-    if (!/^09\d{9}$/.test(nextForm.mobile) || !/^[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}$/.test(nextForm.email)) {
-      alert('Please enter a valid mobile number and email address.')
+    if (!/^09\d{9}$/.test(nextForm.mobile) || (nextForm.email && !/^[\w.+-]+@gmail\.com$/i.test(nextForm.email))) {
+      alert(nextForm.email ? t.gmailAddressRequired : t.mobileNumberInvalid)
       return
     }
 
@@ -1767,8 +1773,9 @@ function RegisterPage({ language, setLanguage }) {
                     <input type="text" name="mobile" value={form.mobile} onChange={handleChange} placeholder="09XXXXXXXXX" autoComplete="tel" inputMode="numeric" maxLength={11} required />
                   </div>
                   <div className="input-block">
-                    <label>{t.emailAddressLabel}</label>
-                    <input type="email" name="email" value={form.email} onChange={handleChange} placeholder="name@email.com" autoComplete="email" required />
+                    <label>{t.emailOptional}</label>
+                    <input type="email" name="email" value={form.email} onChange={handleChange} placeholder="name@gmail.com" autoComplete="email" aria-describedby="registration-email-hint" />
+                    <small id="registration-email-hint">{t.residentEmailOptionalHint}</small>
                   </div>
                 </div>
               </section>
@@ -1850,6 +1857,7 @@ function RegisterPage({ language, setLanguage }) {
 
 function DashboardPage({ profile, requests, services, announcements, events, payments, onLogout, onProfileUpdated, language, setLanguage }) {
   const t = translations[language] || translations.en
+  const residentStorageKey = profile.email || profile.id || profile.mobile || 'resident'
   const [searchQuery, setSearchQuery] = useState('')
   const [selectedAnnouncement, setSelectedAnnouncement] = useState(null)
   const announcementTriggerRef = useRef(null)
@@ -1858,7 +1866,7 @@ function DashboardPage({ profile, requests, services, announcements, events, pay
   const [editingProfile, setEditingProfile] = useState(false)
   const [showOnboarding, setShowOnboarding] = useState(() => {
     try {
-      return localStorage.getItem(`brgy-legaspi-onboarding:${profile.email}`) !== 'complete'
+      return localStorage.getItem(`brgy-legaspi-onboarding:${residentStorageKey}`) !== 'complete'
     } catch {
       return true
     }
@@ -1866,7 +1874,7 @@ function DashboardPage({ profile, requests, services, announcements, events, pay
   const [notificationsOpen, setNotificationsOpen] = useState(false)
   const [readNotificationIds, setReadNotificationIds] = useState(() => {
     try {
-      const stored = localStorage.getItem(`brgy-legaspi-notifications:${profile.email}`)
+      const stored = localStorage.getItem(`brgy-legaspi-notifications:${residentStorageKey}`)
       return stored ? JSON.parse(stored) : []
     } catch {
       return []
@@ -1945,7 +1953,7 @@ function DashboardPage({ profile, requests, services, announcements, events, pay
   const residentChecklist = [
     {
       label: t.profileComplete,
-      complete: Boolean(profile.firstName && profile.lastName && profile.email && profile.mobile && profile.address),
+      complete: Boolean(profile.firstName && profile.lastName && profile.mobile && profile.address),
       detail: t.residentDetailsComplete,
     },
     {
@@ -1980,7 +1988,7 @@ function DashboardPage({ profile, requests, services, announcements, events, pay
   const completeOnboarding = () => {
     setShowOnboarding(false)
     try {
-      localStorage.setItem(`brgy-legaspi-onboarding:${profile.email}`, 'complete')
+      localStorage.setItem(`brgy-legaspi-onboarding:${residentStorageKey}`, 'complete')
     } catch {
       // Ignore storage write issues in restricted browsing environments.
     }
@@ -1990,7 +1998,7 @@ function DashboardPage({ profile, requests, services, announcements, events, pay
     const nextReadIds = residentNotifications.map((notification) => notification.id)
     setReadNotificationIds(nextReadIds)
     try {
-      localStorage.setItem(`brgy-legaspi-notifications:${profile.email}`, JSON.stringify(nextReadIds))
+      localStorage.setItem(`brgy-legaspi-notifications:${residentStorageKey}`, JSON.stringify(nextReadIds))
     } catch {
       // Ignore storage write issues in restricted browsing environments.
     }
@@ -2001,7 +2009,7 @@ function DashboardPage({ profile, requests, services, announcements, events, pay
       if (current.includes(notificationId)) return current
       const nextReadIds = [...current, notificationId]
       try {
-        localStorage.setItem(`brgy-legaspi-notifications:${profile.email}`, JSON.stringify(nextReadIds))
+        localStorage.setItem(`brgy-legaspi-notifications:${residentStorageKey}`, JSON.stringify(nextReadIds))
       } catch {
         // Ignore storage write issues in restricted browsing environments.
       }
@@ -2342,8 +2350,11 @@ function DashboardPage({ profile, requests, services, announcements, events, pay
                       min={field === 'familyMembers' ? '1' : undefined}
                       value={profileForm[field] ?? ''}
                       onChange={(event) => handleProfileFieldChange(field, event.target.value)}
-                      required={['firstName', 'lastName', 'email', 'mobile'].includes(field)}
+                      required={['firstName', 'lastName', 'mobile'].includes(field)}
+                      readOnly={field === 'email'}
+                      aria-describedby={field === 'email' ? 'resident-profile-email-hint' : undefined}
                     />
+                    {field === 'email' && <small id="resident-profile-email-hint">{t.emailVerificationHint}</small>}
                   </label>
                 ))}
               </div>
@@ -2841,7 +2852,7 @@ function EventsPage({ events, onLogout, language, setLanguage }) {
   )
 }
 
-function SettingsPage({ profile, onLogout, onPasswordChanged, language, setLanguage }) {
+function SettingsPage({ profile, onLogout, onPasswordChanged, onProfileUpdated, language, setLanguage }) {
   const navigate = useNavigate()
   const t = translations[language] || translations.en
   const [settingsProfile, setSettingsProfile] = useState(profile)
@@ -2853,6 +2864,17 @@ function SettingsPage({ profile, onLogout, onPasswordChanged, language, setLangu
   const [mfaCurrentPassword, setMfaCurrentPassword] = useState('')
   const [mfaBusy, setMfaBusy] = useState(false)
   const [mfaMessage, setMfaMessage] = useState('')
+  const [accountForm, setAccountForm] = useState({
+    firstName: profile.firstName || '',
+    lastName: profile.lastName || '',
+    email: profile.email || '',
+    mobile: profile.mobile || '',
+  })
+  const [savingAccount, setSavingAccount] = useState(false)
+  const [emailCode, setEmailCode] = useState('')
+  const [emailVerificationRequested, setEmailVerificationRequested] = useState(false)
+  const [accountMessage, setAccountMessage] = useState('')
+  const [accountError, setAccountError] = useState('')
 
   useEffect(() => {
     let isMounted = true
@@ -2864,6 +2886,12 @@ function SettingsPage({ profile, onLogout, onPasswordChanged, language, setLangu
         if (isMounted) {
           setSettingsProfile(data.user || profile)
           setMfaEnabled(Boolean(data.user?.mfaEnabled))
+          setAccountForm({
+            firstName: data.user?.firstName || '',
+            lastName: data.user?.lastName || '',
+            email: data.user?.email || '',
+            mobile: data.user?.mobile || '',
+          })
         }
         if (data.user?.mfaSetupPending) {
           const setupResponse = await fetch(`${API_BASE}/mfa/setup`, { method: 'POST' })
@@ -2877,7 +2905,133 @@ function SettingsPage({ profile, onLogout, onPasswordChanged, language, setLangu
     }
     loadSecuritySettings()
     return () => { isMounted = false }
-  }, [])
+  }, [profile])
+
+  const saveAccountDetails = async (event) => {
+    event.preventDefault()
+    if (!accountForm.firstName.trim() || !accountForm.lastName.trim()) {
+      setAccountError(t.profileNameRequired)
+      return
+    }
+    if (!/^09\d{9}$/.test(accountForm.mobile.trim())) {
+      setAccountError(t.mobileNumberInvalid)
+      return
+    }
+
+    setSavingAccount(true)
+    setAccountError('')
+    setAccountMessage('')
+    try {
+      const response = await fetch(`${API_BASE}/profile`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          firstName: accountForm.firstName.trim(),
+          lastName: accountForm.lastName.trim(),
+          mobile: accountForm.mobile.trim(),
+        }),
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(data.message || t.profileSaveFailed)
+      setSettingsProfile(data.user)
+      setAccountForm((current) => ({
+        ...current,
+        firstName: data.user.firstName,
+        lastName: data.user.lastName,
+        email: data.user.email || '',
+        mobile: data.user.mobile,
+      }))
+      onProfileUpdated?.(data.user)
+      setAccountMessage(t.profileSaved)
+    } catch (error) {
+      setAccountError(error.message || t.profileSaveFailed)
+    } finally {
+      setSavingAccount(false)
+    }
+  }
+
+  const requestEmailVerification = async () => {
+    const email = accountForm.email.trim().toLowerCase()
+    if (!/^[\w.+-]+@gmail\.com$/i.test(email)) {
+      setAccountError(t.gmailAddressRequired)
+      return
+    }
+    if (email === String(settingsProfile.email || '').toLowerCase()) {
+      setAccountError(t.emailAlreadyCurrent)
+      return
+    }
+
+    setSavingAccount(true)
+    setAccountError('')
+    setAccountMessage('')
+    try {
+      const response = await fetch(`${API_BASE}/profile/email/request`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email }),
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(data.message || t.emailVerificationFailed)
+      setEmailVerificationRequested(true)
+      setEmailCode('')
+      setAccountMessage(data.message || t.emailVerificationSent)
+    } catch (error) {
+      setAccountError(error.message || t.emailVerificationFailed)
+    } finally {
+      setSavingAccount(false)
+    }
+  }
+
+  const verifyProfileEmail = async (event) => {
+    event.preventDefault()
+    setSavingAccount(true)
+    setAccountError('')
+    setAccountMessage('')
+    try {
+      const response = await fetch(`${API_BASE}/profile/email/verify`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: accountForm.email.trim().toLowerCase(), code: emailCode }),
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(data.message || t.emailVerificationFailed)
+      setSettingsProfile(data.user)
+      setAccountForm((current) => ({ ...current, email: data.user.email || '' }))
+      setEmailVerificationRequested(false)
+      setEmailCode('')
+      onProfileUpdated?.(data.user)
+      setAccountMessage(data.message || t.emailVerified)
+    } catch (error) {
+      setAccountError(error.message || t.emailVerificationFailed)
+    } finally {
+      setSavingAccount(false)
+    }
+  }
+
+  const removeProfileEmail = async () => {
+    setSavingAccount(true)
+    setAccountError('')
+    setAccountMessage('')
+    try {
+      const response = await fetch(`${API_BASE}/profile`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: '' }),
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(data.message || t.profileSaveFailed)
+      setSettingsProfile(data.user)
+      setAccountForm((current) => ({ ...current, email: '' }))
+      setEmailVerificationRequested(false)
+      setEmailCode('')
+      onProfileUpdated?.(data.user)
+      setAccountMessage(t.emailRemovedHelpdesk)
+    } catch (error) {
+      setAccountError(error.message || t.profileSaveFailed)
+    } finally {
+      setSavingAccount(false)
+    }
+  }
 
   const startMfaSetup = async (rotate = false) => {
     setMfaBusy(true)
@@ -3009,11 +3163,55 @@ function SettingsPage({ profile, onLogout, onPasswordChanged, language, setLangu
           <div className="profile-grid">
             <div className="info-box">
               <h3>{t.account}</h3>
-              <dl>
-                <div><dt>{t.name}</dt><dd>{settingsProfile.firstName} {settingsProfile.lastName}</dd></div>
-                <div><dt>{t.email}</dt><dd>{settingsProfile.email}</dd></div>
-                <div><dt>{t.mobileNumberLabel}</dt><dd>{settingsProfile.mobile}</dd></div>
-              </dl>
+              <form className="password-change-form" onSubmit={saveAccountDetails}>
+                <label className="input-block">
+                  <span>{t.firstName}</span>
+                  <input autoComplete="given-name" maxLength={100} value={accountForm.firstName} onChange={(event) => setAccountForm((current) => ({ ...current, firstName: event.target.value }))} required />
+                </label>
+                <label className="input-block">
+                  <span>{t.lastName}</span>
+                  <input autoComplete="family-name" maxLength={100} value={accountForm.lastName} onChange={(event) => setAccountForm((current) => ({ ...current, lastName: event.target.value }))} required />
+                </label>
+                <label className="input-block">
+                  <span>{t.mobileNumberLabel}</span>
+                  <input type="tel" autoComplete="tel" inputMode="numeric" maxLength={11} value={accountForm.mobile} onChange={(event) => setAccountForm((current) => ({ ...current, mobile: event.target.value.replace(/\D/g, '').slice(0, 11) }))} required aria-describedby="profile-mobile-hint" />
+                  <small id="profile-mobile-hint">{t.philippinesMobileFormatHint}</small>
+                </label>
+                <button type="submit" className="primary-btn small" disabled={savingAccount}>{savingAccount ? t.working : t.saveChanges}</button>
+              </form>
+              <div className="profile-email-settings">
+                <label className="input-block" htmlFor="profile-email">
+                  <span>{t.emailOptional}</span>
+                  <input id="profile-email" type="email" autoComplete="email" maxLength={255} value={accountForm.email} disabled={savingAccount} onChange={(event) => {
+                    setAccountForm((current) => ({ ...current, email: event.target.value }))
+                    setEmailVerificationRequested(false)
+                    setEmailCode('')
+                    setAccountError('')
+                    setAccountMessage('')
+                  }} aria-describedby="profile-email-hint" />
+                </label>
+                <small id="profile-email-hint">{t.emailVerificationHint}</small>
+                {emailVerificationRequested ? (
+                  <form className="password-change-form" onSubmit={verifyProfileEmail}>
+                    <label className="input-block">
+                      <span>{t.emailVerificationCode}</span>
+                      <input inputMode="numeric" autoComplete="one-time-code" maxLength={6} value={emailCode} onChange={(event) => setEmailCode(event.target.value.replace(/\D/g, '').slice(0, 6))} required />
+                    </label>
+                    <button type="submit" className="primary-btn small" disabled={savingAccount || emailCode.length !== 6}>{savingAccount ? t.working : t.verifyEmail}</button>
+                    <button type="button" className="secondary-btn small" onClick={requestEmailVerification} disabled={savingAccount}>{t.resendEmailCode}</button>
+                  </form>
+                ) : accountForm.email.trim().toLowerCase() !== String(settingsProfile.email || '').toLowerCase() ? (
+                  accountForm.email.trim()
+                    ? <button type="button" className="secondary-btn small" onClick={requestEmailVerification} disabled={savingAccount}>{savingAccount ? t.working : t.sendEmailCode}</button>
+                    : settingsProfile.email && <button type="button" className="secondary-btn small" onClick={removeProfileEmail} disabled={savingAccount}>{savingAccount ? t.working : t.removeEmail}</button>
+                ) : settingsProfile.email ? (
+                  <p className="mfa-status enabled">{t.emailOnAccount}</p>
+                ) : (
+                  <p className="report-metric-note">{t.mobileOnlyRecoveryHint}</p>
+                )}
+              </div>
+              {accountError && <p className="inline-error" role="alert">{accountError}</p>}
+              {accountMessage && <p className="mfa-message" role="status">{accountMessage}</p>}
             </div>
 
             <div className="info-box">
@@ -6350,6 +6548,13 @@ function App() {
     writeStoredSession(nextSession)
   }
 
+  const handleProfileUpdated = (user) => {
+    const nextSession = { ...session, user, isActive: true }
+    setProfile(user)
+    setSession(nextSession)
+    writeStoredSession(nextSession)
+  }
+
   const handleLogout = () => {
     clearStoredSession()
     setSession(null)
@@ -6511,12 +6716,12 @@ function App() {
         <Route path="/staff-invite" element={<StaffInvitationPage language={language} />} />
         <Route path="/super-admin-invite" element={<StaffInvitationPage language={language} accountType="super_admin" />} />
         <Route path="/staff-access" element={<StaffTemporaryAccessPage onLogin={handleLogin} language={language} setLanguage={switchLanguage} />} />
-        <Route path="/dashboard" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['resident']} userRole={userRole}><DashboardPage profile={profile} requests={requests} services={services} announcements={announcementsData} events={events} payments={payments} onLogout={handleLogout} onProfileUpdated={setProfile} language={language} setLanguage={switchLanguage} /></ProtectedRoute>} />
+        <Route path="/dashboard" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['resident']} userRole={userRole}><DashboardPage profile={profile} requests={requests} services={services} announcements={announcementsData} events={events} payments={payments} onLogout={handleLogout} onProfileUpdated={handleProfileUpdated} language={language} setLanguage={switchLanguage} /></ProtectedRoute>} />
         <Route path="/requests" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['resident']} userRole={userRole}><RequestsPage requests={requests} onSubmit={handleRequestSubmit} onRequestUpdated={handleRequestUpdated} onLogout={handleLogout} language={language} setLanguage={switchLanguage} userId={session?.user?.id} /></ProtectedRoute>} />
         <Route path="/profile" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['resident']} userRole={userRole}><ProfilePage profile={profile} onLogout={handleLogout} language={language} setLanguage={switchLanguage} /></ProtectedRoute>} />
         <Route path="/payments" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['resident']} userRole={userRole}><PaymentsPage payments={payments} onLogout={handleLogout} language={language} setLanguage={switchLanguage} /></ProtectedRoute>} />
         <Route path="/events" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['resident']} userRole={userRole}><EventsPage events={events} onLogout={handleLogout} language={language} setLanguage={switchLanguage} /></ProtectedRoute>} />
-        <Route path="/settings" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['resident', 'staff', 'admin', 'super_admin']} userRole={userRole}><SettingsPage profile={profile} onLogout={handleLogout} onPasswordChanged={handlePasswordChanged} language={language} setLanguage={switchLanguage} /></ProtectedRoute>} />
+        <Route path="/settings" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['resident', 'staff', 'admin', 'super_admin']} userRole={userRole}><SettingsPage profile={profile} onLogout={handleLogout} onPasswordChanged={handlePasswordChanged} onProfileUpdated={handleProfileUpdated} language={language} setLanguage={switchLanguage} /></ProtectedRoute>} />
         <Route path="/staff" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['staff', 'admin', 'super_admin']} userRole={userRole}><StaffPage staffMembers={staffMembers} announcements={announcementsData} currentUser={session?.user} userRole={userRole} onProcessRequest={handleRequestStatus} onLogout={handleLogout} onStaffMemberUpdated={handleStaffMemberUpdated} onPortalAccountCreated={handlePortalAccountCreated} onAddAnnouncement={handleAddAnnouncement} onDeleteAnnouncement={handleDeleteAnnouncement} onRetractAnnouncement={handleRetractAnnouncement} onDeleteStaffMember={handleDeleteStaffMember} language={language} setLanguage={switchLanguage} /></ProtectedRoute>} />
         <Route path="/admin" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['admin']} userRole={userRole}><AdminPage users={users} residents={residents} requests={requests} reports={reports} currentUser={session?.user} onLogout={handleLogout} onPortalAccountCreated={handlePortalAccountCreated} language={language} setLanguage={switchLanguage} /></ProtectedRoute>} />
         <Route path="/super-admin" element={<ProtectedRoute isAuthenticated={isAuthenticated} allowedRoles={['super_admin']} userRole={userRole}><AdminPage users={users} residents={residents} requests={requests} reports={reports} currentUser={session?.user} onLogout={handleLogout} onPortalAccountCreated={handlePortalAccountCreated} language={language} setLanguage={switchLanguage} /></ProtectedRoute>} />
