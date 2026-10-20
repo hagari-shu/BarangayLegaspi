@@ -1687,7 +1687,10 @@ export async function insertRegistryResidents(residents, auditEntry, options = {
   try {
     await client.query('BEGIN')
     const identityKeys = [...new Set(residents.map((resident) => (
-      `${resident.firstName.trim().toLocaleLowerCase()}\u0000${resident.lastName.trim().toLocaleLowerCase()}`
+      JSON.stringify([
+        resident.firstName.trim().toLocaleLowerCase(),
+        resident.lastName.trim().toLocaleLowerCase(),
+      ])
     )))].sort()
     await client.query(
       `SELECT pg_advisory_xact_lock(hashtextextended(identity_key, 0))

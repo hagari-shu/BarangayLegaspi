@@ -7,6 +7,7 @@ process.env.ADMIN_PASSWORD = 'TestAdminPass123!'
 
 const [{ default: pg }, {
   acceptSuperAdminInvitation,
+  insertRegistryResidents,
   initDatabase,
   issueSuperAdminInvitation,
   promoteExistingUserToSuperAdmin,
@@ -52,6 +53,64 @@ test('PostgreSQL initialization skips admin seeding when a seed identifier alrea
   assert.ok(queries.some((sql) => sql.includes('resident_registry_first_name_prefix_idx')))
   assert.ok(queries.some((sql) => sql.includes('resident_registry_last_name_prefix_idx')))
   assert.equal(queries.some((sql) => sql.startsWith('insert into users')), false)
+})
+
+test('PostgreSQL resident insertion uses valid text advisory-lock keys', async () => {
+  const statements = []
+  const parameters = []
+  const originalConnect = pg.Pool.prototype.connect
+  pg.Pool.prototype.connect = async function () {
+    return {
+      query: async (sql, values = []) => {
+        const normalizedSql = sql.replace(/\s+/g, ' ').trim().toLowerCase()
+        statements.push(normalizedSql)
+        parameters.push(values)
+        if (normalizedSql.startsWith('insert into resident_registry')) {
+          return { rows: [{ source_fingerprint: values[15] }] }
+        }
+        return { rows: [] }
+      },
+      release() {},
+    }
+  }
+
+  try {
+    const outcome = await insertRegistryResidents([{
+      id: '8b25c614-536b-4a0e-95dc-9d104806be85',
+      firstName: 'Mia',
+      lastName: 'Rivera',
+      birthDate: null,
+      sex: null,
+      maritalStatus: null,
+      occupation: null,
+      householdId: 'HH-RIVERA',
+      purok: null,
+      zone: 4,
+      address: null,
+      sourceReference: null,
+      sourceFilename: null,
+      sourceFingerprint: 'a'.repeat(64),
+      createdBy: 'f388fc8e-95aa-442e-86da-232f07faf4d3',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    }], {
+      id: '64ca2567-d1c4-4c64-b12e-e79e16bcfc28',
+      actorId: 'f388fc8e-95aa-442e-86da-232f07faf4d3',
+      actorRole: 'staff',
+      action: 'resident_registry.family_added',
+      targetType: 'resident_registry_batch',
+      targetId: null,
+      metadata: { count: 1 },
+    }, { reviewedMatches: [] })
+
+    assert.equal(outcome.inserted.length, 1)
+    assert.ok(statements.some((sql) => sql.includes('pg_advisory_xact_lock')))
+    const lockKeys = parameters.find((values) => Array.isArray(values[0]) && values[0][0]?.startsWith('["mia"'))
+    assert.deepEqual(lockKeys, [['["mia","rivera"]']])
+    assert.equal(JSON.stringify(parameters).includes('\\u0000'), false)
+  } finally {
+    pg.Pool.prototype.connect = originalConnect
+  }
 })
 
 test('PostgreSQL Super Admin promotion updates only a verified matching resident and audits it transactionally', async () => {
