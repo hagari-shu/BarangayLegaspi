@@ -99,7 +99,7 @@ Only after all checks pass should an authorized operator schedule DNS changes. K
 
 ## Current blocker
 
-Hostinger hosting is not confirmed as provisioned; an open checkout or payment page does not establish that a VPS is ready. The intended domain is `barangay-legaspi.gov.ph`, but current registration, ownership, and DNS control have not been confirmed. The production database credentials are not available in this session. No Hostinger app, database, backup, DNS, or production traffic has been changed.
+The Hostinger VPS has been paid for, but the user reports it is still provisioning and has not been configured. The hPanel view available to this session is still loading and does not expose a server address or console, so no deployment connection is available yet. The intended domain is `barangay-legaspi.gov.ph`, but current registration, ownership, and DNS control have not been confirmed. The production database credentials are not available in this session. No Hostinger app, database, backup, DNS, or production traffic has been changed.
 
 Laravel API parity is not complete (42 Node routes are missing in the current route inventory). Laravel's feature tests pass in GitHub Actions (20 tests, 86 assertions, commit `7e1477e` on `readiness/laravel-prod-hardening`); they could not be run locally because Composer and required PHP extensions are absent. This does not establish staging or production readiness, and the feature branch has not been merged or deployed.
 
