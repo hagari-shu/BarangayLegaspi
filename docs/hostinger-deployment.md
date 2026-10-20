@@ -11,20 +11,22 @@ The active production frontend and API currently use Vercel and Render. Keep tho
 
 ## Before deployment
 
-1. Choose the public website domain and API hostnames, for example `www.example.org`, `api.example.org`, and `laravel-api.example.org`. Keep the website and API services on separate origins unless deliberately reconfigured.
-2. Confirm the Hostinger plan supports Node.js 22.12 or newer, a persistent Node.js web app, PHP 8.2 or newer, Composer, the `pdo_pgsql` extension, outbound HTTPS, and managed PostgreSQL. Confirm both apps can use the selected database service.
-3. Confirm whether Hostinger's database allows secure remote connections from the current production database. If not, arrange an approved secure backup-and-restore path with Hostinger support before migrating. Do not put database credentials in GitHub, the repository, or chat.
-4. Arrange a maintenance window and an authorized database operator. Resident and staff records are sensitive; transfer backups only through approved, encrypted channels with access limited to the migration operators.
+1. Choose the public website domain and API hostnames, for example `www.example.org`, `api.example.org`, and `laravel-api.example.org`.
+2. Use a Hostinger VPS with root access for a single-provider deployment. The shared Web Hosting offers visible in hPanel include Node.js only on the Unlimited tier and list MySQL databases, not PostgreSQL; this application requires PostgreSQL. Hostinger's VPS provides root access so PostgreSQL, Node.js, PHP, and the web server can be installed and configured together.
+3. Select a VPS operating system supported by Hostinger's current images and confirm the selected region/data center, CPU, RAM, disk, backup options, and renewal price during checkout. KVM 2 (2 vCPU, 8 GB RAM, 100 GB NVMe) is a reasonable staging starting point, not a production capacity guarantee. Size production from actual load and backup/monitoring requirements.
+4. Plan server operations: security updates, firewall, SSH key-only access, TLS renewal, process supervision, log rotation, monitoring/alerts, PostgreSQL backups, and restore drills. Hostinger advertises weekly VPS backups; weekly snapshots alone are not an adequate backup plan for a production resident database.
+5. Arrange a maintenance window and an authorized database operator. Resident and staff records are sensitive; transfer backups only through approved, encrypted channels with access limited to the migration operators. Do not put credentials in GitHub, the repository, or chat.
 
-## Deploy the API as a staging service
+## Provision a staging VPS
 
-1. Create a PostgreSQL database on Hostinger. Do not use MySQL: the production API requires PostgreSQL.
-2. Create a Node.js web app connected to the repository's `main` branch. Set the application root to the repository root, the startup command to `npm start`, and the Node version to 22.12 or newer. The `start` script runs `node server.js`.
-3. Configure the environment in Hostinger's private application settings. Set `NODE_ENV=production`, `DATABASE_URL`, `JWT_SECRET`, and `CORS_ORIGINS`. `PORT` is supplied by the hosting platform. Add other settings only when the corresponding feature is enabled.
-4. Preserve the current production `JWT_SECRET` and `MFA_ENCRYPTION_KEY` values during a database migration. Changing them can invalidate user sessions or prevent existing MFA credentials from decrypting. Transfer them using the provider's secure secret manager, not source control or chat.
-5. Set `CORS_ORIGINS` to the exact HTTPS origin(s) of the new frontend, comma-separated if required. Do not use `*` for a production portal.
-6. Leave all `ADMIN_*` seed variables unset when importing the production database. The database initialization path creates schema but does not need to create another administrator.
-7. Verify `https://<api-hostname>/api/health` returns HTTP 200 and reports PostgreSQL storage. Confirm startup logs contain no database or configuration errors.
+1. Create an isolated staging VPS and provision a non-production SSH key. Do not point production DNS at it.
+2. Install and configure a supported Ubuntu LTS release, Nginx, Node.js 22.12 or newer, PHP 8.2 or newer with PHP-FPM and `pdo_pgsql`, Composer, and PostgreSQL. Keep PostgreSQL bound to localhost/private networking; do not expose port 5432 publicly.
+3. Create separate least-privilege PostgreSQL roles and empty databases for Node staging and Laravel staging. Restrict the firewall to SSH from trusted addresses plus HTTP/HTTPS; enable automatic security updates and SSH key authentication.
+4. Deploy the Node API from repository `main` with `npm ci --omit=dev` and the startup command `npm start` under a process supervisor such as systemd. Configure private environment variables including `NODE_ENV=production`, `PORT`, `DATABASE_URL`, `JWT_SECRET`, and `CORS_ORIGINS`. Add other settings only when the corresponding feature is enabled.
+5. Configure Nginx to serve the built Vite frontend over HTTPS and proxy `/api/` to the Node API. This same-origin layout avoids cross-origin browser requests. If using separate origins, set `CORS_ORIGINS` to the exact HTTPS frontend origin(s); never use `*`.
+6. Preserve the current production `JWT_SECRET` and `MFA_ENCRYPTION_KEY` during an approved production database migration. Changing them can invalidate sessions or prevent existing MFA credentials from decrypting. Keep secrets in root-readable environment files or a secret manager, never in source control or chat.
+7. Leave all `ADMIN_*` seed variables unset when importing the production database. The database initialization path creates schema but should not create another administrator.
+8. Verify `https://<website-domain>/api/health` returns HTTP 200 and reports PostgreSQL storage. Confirm startup logs contain no database or configuration errors.
 
 ## Deploy Laravel/PHP as a separate staging API
 
@@ -32,14 +34,28 @@ Laravel is included in the repository under `laravel-api`, but it is not current
 
 The current route inventory finds 42 Node API routes missing from Laravel's route declarations. The missing surface includes the resident registry, official profile/logo/photo management, staff invitations and temporary access, staff presence/reporting, and other Admin workflows. Matching health responses and empty announcement/event collections does not establish application workflow parity.
 
-1. Create a separate, empty PostgreSQL staging database for Laravel. Do not point both API implementations at the production database or at one shared staging database until schema and transaction compatibility have been verified.
-2. Create a PHP web application using `laravel-api` as its application root. Set the document root to `laravel-api/public`, use PHP 8.2 or newer, install dependencies from `composer.lock` with production Composer settings, and enable the required extensions including `pdo_pgsql`, `mbstring`, `openssl`, `tokenizer`, `xml`, `ctype`, `curl`, `fileinfo`, and `zip`. Keep `storage` and `bootstrap/cache` writable by the application user.
+1. Use a separate empty PostgreSQL database and least-privilege role for Laravel. Do not point both API implementations at the production database or one shared staging database until schema and transaction compatibility are verified.
+2. Deploy Laravel from `laravel-api` using PHP 8.2 or newer and production Composer dependencies from `composer.lock`. Configure Nginx/PHP-FPM with document root `laravel-api/public`; enable `pdo_pgsql`, `mbstring`, `openssl`, `tokenizer`, `xml`, `ctype`, `curl`, `fileinfo`, and `zip`. Keep `storage` and `bootstrap/cache` writable by the application user.
 3. Configure Laravel's private environment values for production mode, a unique `APP_KEY`, the staging `DATABASE_URL`, a `JWT_SECRET` that matches the staging Node API only if shared authentication is intentionally being tested, and exact `CORS_ORIGINS`. Preserve the current production JWT/MFA secrets only for a reviewed migration to the production data; never copy them into an isolated test environment unnecessarily.
-4. Run Laravel migrations only against the empty staging database first. The container entrypoint in `laravel-api/docker-entrypoint.sh` automatically runs `php artisan migrate --force`; a non-container Hostinger PHP deployment must run migrations explicitly using the Hostinger terminal/SSH or deployment release command.
+4. Run Laravel migrations only against the empty staging database first. The container entrypoint in `laravel-api/docker-entrypoint.sh` runs `php artisan migrate --force`; on a VPS deployment, run migrations as a controlled release step over SSH, after confirming Laravel's environment points to the staging database.
 5. Verify `https://<laravel-api-hostname>/api/health` returns HTTP 200 and reports `pgsql`. Run the Laravel test suite from `laravel-api` with `composer install` and `php artisan test` in a development/staging environment.
 6. Compare Laravel route behavior and response shapes with the Node API using the frontend contract tests and authorized test accounts. The README currently identifies Laravel API parity as incomplete. Track and fix any missing or different behavior before selecting Laravel as the production API.
 
 Keep Node and Laravel on separate database copies until parity checks, migration behavior, account/session compatibility, audit logging, and rollback have all been reviewed. For the eventual cutover, configure the frontend to use exactly one API base URL. Do not load-balance or switch requests between Node and Laravel while both are independently mutating data.
+
+## Initial production Admin
+
+The repository supports two distinct account paths:
+
+- Once an Admin exists, authenticated Admin/Staff screens can create accounts. The generated temporary password is shown once to the creator, and the new user must change it before accessing the portal.
+- To bootstrap the first Admin, the protected GitHub Actions workflow sends a single-use, 12-hour setup invitation. The invitee verifies the email address and chooses their own password. It does not generate or send a temporary password; this avoids handing an initial credential through the operator or CI logs.
+
+Do not dispatch the invitation until `https://barangay-legaspi.gov.ph` is registered to the barangay, points to the tested production portal, and serves HTTPS. Then configure the GitHub repository's protected `production` environment:
+
+- Variables: `PUBLIC_APP_URL` (the exact deployed HTTPS portal origin), `SUPER_ADMIN_INVITATION_FROM_EMAIL` (verified sender), and `PRODUCTION_ACCOUNT_WORKFLOW_ENABLED` (set to `true` only after all checks below).
+- Secrets: `PRODUCTION_DATABASE_URL`, `PRODUCTION_JWT_SECRET`, and `RESEND_API_KEY`.
+
+The workflow now fails closed when `PUBLIC_APP_URL`, database/JWT configuration, invitation email configuration, or explicit workflow enablement is absent. After confirming the portal URL and invitation delivery, enable the workflow and choose `invite-admin` in the protected Actions workflow. Enter only the intended recipient email in the workflow form; the recipient creates their password from the emailed setup invitation. Never put a temporary password, database URL, API key, or invitation link into source control or chat.
 
 ## Migrate the database safely
 
@@ -79,6 +95,6 @@ Only after all checks pass should an authorized operator schedule DNS changes. K
 
 ## Current blocker
 
-The Hostinger account currently has no hosting service attached; its Websites area opens the hosting purchase page. The production domain has not been selected, and this session does not have production database credentials. The repository is prepared locally for staging, but no Hostinger app, database, backup, or production traffic has been changed. Laravel's tests could not run locally because Composer dependencies are absent and the PHP runtime lacks the PostgreSQL and SQLite PDO drivers, OpenSSL, cURL, and mbstring extensions. Laravel API parity is not complete (42 Node routes are missing in the current route inventory).
+The Hostinger account currently has no hosting service attached; its Websites area opens the hosting purchase page. The intended domain is `barangay-legaspi.gov.ph`, but it currently has no DNS resolution, and ownership/registration has not been confirmed. The production database credentials are not available in this session. The repository is prepared locally for staging, but no Hostinger app, database, backup, or production traffic has been changed. Laravel's tests could not run locally because Composer dependencies are absent and the PHP runtime lacks the PostgreSQL and SQLite PDO drivers, OpenSSL, cURL, and mbstring extensions. Laravel API parity is not complete (42 Node routes are missing in the current route inventory).
 
 The last production check also found that the official Vercel URL serves an older JavaScript bundle than the local build. The active Node API is healthy, but its three official profile photo endpoints return `204 No Content` and `Cross-Origin-Resource-Policy: same-origin`; this blocks cross-origin image requests. The source fix is local until deployed. Profile photos are not currently available from those endpoints, so the frontend should display its fallback until an authorized Admin uploads them.

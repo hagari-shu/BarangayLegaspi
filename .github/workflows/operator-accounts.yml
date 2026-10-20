@@ -44,12 +44,27 @@ jobs:
       - name: Require explicit workflow enablement
         env:
           WORKFLOW_ENABLED: ${{ vars.PRODUCTION_ACCOUNT_WORKFLOW_ENABLED }}
+          PUBLIC_APP_URL: ${{ vars.PUBLIC_APP_URL }}
         run: |
           set -euo pipefail
           if [[ "$WORKFLOW_ENABLED" != "true" ]]; then
             echo "Role assignment is disabled. Review and enable the protected production environment first."
             exit 1
           fi
+          if [[ -z "$PUBLIC_APP_URL" ]]; then
+            echo "Set PUBLIC_APP_URL in the production environment to the deployed official HTTPS portal origin."
+            exit 1
+          fi
+          node -e '
+            const url = new URL(process.env.PUBLIC_APP_URL);
+            if (url.protocol !== "https:" || url.username || url.password || url.pathname !== "/" || url.search || url.hash) {
+              console.error("PUBLIC_APP_URL must be an HTTPS origin without credentials, path, query, or fragment.");
+              process.exit(1);
+            }
+          '
+          curl --fail --location --silent --show-error --max-time 25 \
+            --output /dev/null "$PUBLIC_APP_URL"
+          echo "Official HTTPS portal is responding."
 
       - name: Mask and validate account details
         env:
@@ -119,7 +134,8 @@ jobs:
           JWT_SECRET: ${{ secrets.PRODUCTION_JWT_SECRET }}
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
           SUPER_ADMIN_INVITATION_FROM_EMAIL: ${{ vars.SUPER_ADMIN_INVITATION_FROM_EMAIL }}
-          CORS_ORIGINS: https://barangay-legaspi.vercel.app
+          PUBLIC_APP_URL: ${{ vars.PUBLIC_APP_URL }}
+          CORS_ORIGINS: ${{ vars.PUBLIC_APP_URL }}
           ACCOUNT_ACTION: ${{ inputs.action }}
           ADMIN_EMAIL: ${{ inputs.email }}
           ADMIN_MOBILE: ${{ inputs.mobile }}
@@ -130,11 +146,33 @@ jobs:
           STAFF_POSITION: ${{ inputs.position }}
         run: |
           set -euo pipefail
+          if [[ -z "$DATABASE_URL" || -z "$JWT_SECRET" ]]; then
+            echo "Configure PRODUCTION_DATABASE_URL and PRODUCTION_JWT_SECRET in the protected production environment."
+            exit 1
+          fi
           case "$ACCOUNT_ACTION" in
             promote-admin) npm run accounts:promote-admin -- --confirm ;;
-            invite-admin) npm run accounts:invite-admin -- --confirm --email "$ADMIN_EMAIL" ;;
+            invite-admin)
+              if [[ -z "$RESEND_API_KEY" || -z "$SUPER_ADMIN_INVITATION_FROM_EMAIL" ]]; then
+                echo "Configure RESEND_API_KEY and SUPER_ADMIN_INVITATION_FROM_EMAIL before inviting an Admin."
+                exit 1
+              fi
+              npm run accounts:invite-admin -- --confirm --email "$ADMIN_EMAIL"
+              ;;
             promote-super-admin) npm run accounts:promote-super-admin -- --confirm ;;
-            invite-super-admin) npm run accounts:invite-super-admin -- --confirm ;;
-            invite-staff) npm run accounts:invite-staff -- --confirm --email "$STAFF_INVITATION_EMAIL" --position "${STAFF_POSITION:-Staff}" ;;
+            invite-super-admin)
+              if [[ -z "$RESEND_API_KEY" || -z "$SUPER_ADMIN_INVITATION_FROM_EMAIL" ]]; then
+                echo "Configure RESEND_API_KEY and SUPER_ADMIN_INVITATION_FROM_EMAIL before inviting a Super Admin."
+                exit 1
+              fi
+              npm run accounts:invite-super-admin -- --confirm
+              ;;
+            invite-staff)
+              if [[ -z "$RESEND_API_KEY" || -z "$SUPER_ADMIN_INVITATION_FROM_EMAIL" ]]; then
+                echo "Configure RESEND_API_KEY and SUPER_ADMIN_INVITATION_FROM_EMAIL before inviting Staff."
+                exit 1
+              fi
+              npm run accounts:invite-staff -- --confirm --email "$STAFF_INVITATION_EMAIL" --position "${STAFF_POSITION:-Staff}"
+              ;;
             *) echo "Unsupported account role or invitation action."; exit 1 ;;
           esac
