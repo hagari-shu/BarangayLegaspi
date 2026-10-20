@@ -1,0 +1,46 @@
+name: Laravel API tests
+
+on:
+  push:
+    branches:
+      - '**'
+    paths:
+      - 'laravel-api/**'
+      - '.github/workflows/laravel-tests.yml'
+  pull_request:
+    paths:
+      - 'laravel-api/**'
+      - '.github/workflows/laravel-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-laravel:
+    name: Test Laravel API
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: laravel-api
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: curl, mbstring, pdo_sqlite, zip
+          coverage: none
+
+      - name: Install Composer dependencies
+        env:
+          APP_ENV: testing
+        run: composer install --no-interaction --prefer-dist --no-progress
+
+      - name: Run Laravel tests
+        run: php artisan test

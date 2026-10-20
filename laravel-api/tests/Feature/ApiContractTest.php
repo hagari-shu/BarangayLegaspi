@@ -6,11 +6,50 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+use RuntimeException;
 use Tests\TestCase;
 
 class ApiContractTest extends TestCase
 {
     use RefreshDatabase;
+
+    private function insertAuthUser(string $id, string $email, string $password): void
+    {
+        DB::table('users')->insert([
+            'id' => $id,
+            'first_name' => 'Test',
+            'last_name' => 'Account',
+            'mobile' => '09170000999',
+            'email' => $email,
+            'password_hash' => password_hash($password, PASSWORD_BCRYPT),
+            'role' => 'admin',
+            'household_id' => 'security-test',
+            'family_members' => 1,
+            'household_members' => '[]',
+            'status' => 'Administrator',
+            'address' => 'Barangay Hall, Legaspi',
+            'zone' => 0,
+            'availability' => 'Available',
+            'mfa_enabled' => false,
+            'mfa_last_step' => 0,
+            'created_at' => now(),
+        ]);
+    }
+
+    private function legacyJwtFor(string $userId, ?int $issuedAt = null): string
+    {
+        $encode = static fn (string $value): string => rtrim(strtr(base64_encode($value), '+/', '-_'), '=');
+        $header = $encode(json_encode(['alg' => 'HS256', 'typ' => 'JWT'], JSON_THROW_ON_ERROR));
+        $payload = $encode(json_encode([
+            'sub' => $userId,
+            'role' => 'admin',
+            'iat' => $issuedAt ?? time(),
+            'exp' => time() + 3600,
+        ], JSON_THROW_ON_ERROR));
+        $signature = $encode(hash_hmac('sha256', $header.'.'.$payload, (string) config('app.jwt_secret'), true));
+
+        return $header.'.'.$payload.'.'.$signature;
+    }
 
     public function test_health_reports_the_active_database_driver(): void
     {
@@ -183,6 +222,173 @@ class ApiContractTest extends TestCase
             ->assertStatus(409);
 
         $this->assertDatabaseCount('announcements', 0);
+    }
+
+    public function test_password_change_revokes_other_database_tokens_and_legacy_jwts(): void
+    {
+        config(['app.jwt_secret' => 'laravel-contract-test-jwt-secret-32-characters']);
+        $userId = '00000000-0000-4000-8000-000000000301';
+        $this->insertAuthUser($userId, 'password-change@example.test', 'Original!Password2026');
+        $legacyToken = $this->legacyJwtFor($userId, time() - 30);
+
+        $firstLogin = $this->postJson('/api/login', [
+            'identifier' => 'password-change@example.test',
+            'password' => 'Original!Password2026',
+        ])->assertOk();
+        $secondLogin = $this->postJson('/api/login', [
+            'identifier' => 'password-change@example.test',
+            'password' => 'Original!Password2026',
+        ])->assertOk();
+
+        $this->withToken($firstLogin->json('token'))
+            ->postJson('/api/change-password', [
+                'currentPassword' => 'Original!Password2026',
+                'newPassword' => 'Updated!Password2026',
+            ])
+            ->assertOk();
+
+        $this->withToken($firstLogin->json('token'))->getJson('/api/profile')->assertUnauthorized();
+        $this->withToken($secondLogin->json('token'))->getJson('/api/profile')->assertUnauthorized();
+        $this->withToken($legacyToken)->getJson('/api/profile')->assertUnauthorized();
+        $this->assertDatabaseCount('api_tokens', 0);
+
+        $newLogin = $this->postJson('/api/login', [
+            'identifier' => 'password-change@example.test',
+            'password' => 'Updated!Password2026',
+        ])->assertOk();
+        $this->withToken($newLogin->json('token'))->getJson('/api/profile')->assertOk();
+    }
+
+    public function test_logout_revokes_a_legacy_jwt_instead_of_allowing_it_to_be_reused(): void
+    {
+        config(['app.jwt_secret' => 'laravel-contract-test-jwt-secret-32-characters']);
+        $userId = '00000000-0000-4000-8000-000000000302';
+        $this->insertAuthUser($userId, 'logout@example.test', 'Original!Password2026');
+        $token = $this->legacyJwtFor($userId);
+        $tokenHash = hash('sha256', $token);
+
+        $this->withToken($token)->getJson('/api/profile')->assertOk();
+        $this->withToken($token)->postJson('/api/logout')->assertOk();
+        $this->withToken($token)->getJson('/api/profile')->assertUnauthorized();
+        $this->assertDatabaseHas('api_token_revocations', ['token_hash' => $tokenHash]);
+    }
+
+    public function test_password_reset_revokes_legacy_jwts_as_well_as_database_tokens(): void
+    {
+        config(['app.jwt_secret' => 'laravel-contract-test-jwt-secret-32-characters']);
+        $userId = '00000000-0000-4000-8000-000000000303';
+        $this->insertAuthUser($userId, 'password-reset@example.test', 'Original!Password2026');
+        $legacyToken = $this->legacyJwtFor($userId, time() - 30);
+        $resetToken = str_repeat('R', 43);
+
+        DB::table('password_reset_tokens')->insert([
+            'token_hash' => hash('sha256', $resetToken),
+            'user_id' => $userId,
+            'expires_at' => now()->addMinutes(15),
+            'created_at' => now(),
+        ]);
+
+        $this->postJson('/api/reset-password', [
+            'token' => $resetToken,
+            'newPassword' => 'Reset!Password2026',
+        ])->assertOk();
+
+        $this->withToken($legacyToken)->getJson('/api/profile')->assertUnauthorized();
+        $this->postJson('/api/login', [
+            'identifier' => 'password-reset@example.test',
+            'password' => 'Reset!Password2026',
+        ])->assertOk();
+    }
+
+    public function test_production_requires_distinct_non_placeholder_application_and_jwt_secrets(): void
+    {
+        config([
+            'app.key' => 'base64:'.base64_encode(str_repeat('a', 32)),
+            'app.jwt_secret' => 'replace-with-a-random-secret-at-least-32-characters-long',
+        ]);
+        $this->app->detectEnvironment(fn () => 'production');
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('JWT_SECRET must be configured with a unique random value');
+
+        (new \App\Providers\AppServiceProvider($this->app))->boot();
+    }
+
+    public function test_production_rejects_an_invalid_application_key(): void
+    {
+        config([
+            'app.key' => 'short-key',
+            'app.jwt_secret' => 'laravel-contract-test-jwt-secret-32-characters',
+        ]);
+        $this->app->detectEnvironment(fn () => 'production');
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('APP_KEY must be configured');
+
+        (new \App\Providers\AppServiceProvider($this->app))->boot();
+    }
+
+    public function test_production_rejects_debug_mode(): void
+    {
+        config([
+            'app.key' => 'base64:'.base64_encode(str_repeat('a', 32)),
+            'app.jwt_secret' => 'laravel-contract-test-jwt-secret-32-characters',
+            'app.debug' => true,
+            'database.default' => 'pgsql',
+            'cors.allowed_origins' => ['https://portal.example.test'],
+        ]);
+        $this->app->detectEnvironment(fn () => 'production');
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('APP_DEBUG must be false');
+
+        (new \App\Providers\AppServiceProvider($this->app))->boot();
+    }
+
+    public function test_production_requires_postgresql_and_an_explicit_cors_origin(): void
+    {
+        config([
+            'app.key' => 'base64:'.base64_encode(str_repeat('a', 32)),
+            'app.jwt_secret' => 'laravel-contract-test-jwt-secret-32-characters',
+            'app.debug' => false,
+            'database.default' => 'sqlite',
+            'cors.allowed_origins' => ['https://portal.example.test'],
+        ]);
+        $this->app->detectEnvironment(fn () => 'production');
+
+        try {
+            (new \App\Providers\AppServiceProvider($this->app))->boot();
+            $this->fail('Production must refuse to start with a non-PostgreSQL database.');
+        } catch (RuntimeException $error) {
+            $this->assertSame('PostgreSQL must be configured as the production database.', $error->getMessage());
+        }
+
+        config([
+            'database.default' => 'pgsql',
+            'cors.allowed_origins' => [],
+        ]);
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('CORS_ORIGINS must contain the deployed frontend origin');
+
+        (new \App\Providers\AppServiceProvider($this->app))->boot();
+    }
+
+    public function test_production_cors_rejects_non_https_or_non_origin_values(): void
+    {
+        config([
+            'app.key' => 'base64:'.base64_encode(str_repeat('a', 32)),
+            'app.jwt_secret' => 'laravel-contract-test-jwt-secret-32-characters',
+            'app.debug' => false,
+            'database.default' => 'pgsql',
+            'cors.allowed_origins' => ['http://localhost:5173'],
+        ]);
+        $this->app->detectEnvironment(fn () => 'production');
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('Every production CORS_ORIGINS entry must be an exact HTTPS origin.');
+
+        (new \App\Providers\AppServiceProvider($this->app))->boot();
     }
 
     public function test_super_admin_monitoring_is_role_restricted_and_admin_access_remains_compatible(): void

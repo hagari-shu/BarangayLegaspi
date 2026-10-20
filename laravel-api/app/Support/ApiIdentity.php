@@ -38,6 +38,25 @@ class ApiIdentity
         return self::fromLegacyJwt($token);
     }
 
+    public static function revokeLegacyJwt(string $token): bool
+    {
+        $claims = self::legacyJwtClaims($token);
+        if (!$claims) {
+            return false;
+        }
+
+        DB::table('api_token_revocations')
+            ->where('expires_at', '<=', now())
+            ->delete();
+        DB::table('api_token_revocations')->insertOrIgnore([
+            'token_hash' => hash('sha256', $token),
+            'expires_at' => date('Y-m-d H:i:sP', (int) $claims->exp),
+            'created_at' => now(),
+        ]);
+
+        return true;
+    }
+
     public static function normalizeUser(object $user): object
     {
         $user->firstName = $user->first_name ?? $user->firstName ?? '';
@@ -65,12 +84,42 @@ class ApiIdentity
 
     private static function fromLegacyJwt(string $token): ?object
     {
+        if (DB::table('api_token_revocations')->where('token_hash', hash('sha256', $token))->exists()) {
+            return null;
+        }
+
+        $claims = self::legacyJwtClaims($token);
+        if (!$claims) {
+            return null;
+        }
+
+        $actor = DB::table('users')->where('id', $claims->sub)->first();
+        if (!$actor) {
+            return null;
+        }
+
+        $tokensValidAfter = (int) ($actor->tokens_valid_after ?? 0);
+        if ($tokensValidAfter > 0 && (int) $claims->iat < $tokensValidAfter) {
+            return null;
+        }
+
+        return self::normalizeUser($actor);
+    }
+
+    private static function legacyJwtClaims(string $token): ?object
+    {
         $parts = explode('.', $token);
         if (count($parts) !== 3) {
             return null;
         }
 
         [$header, $payload, $signature] = $parts;
+        $decodedHeader = self::base64UrlDecode($header);
+        $headerClaims = $decodedHeader === false ? null : json_decode($decodedHeader);
+        if (!$headerClaims || ($headerClaims->alg ?? null) !== 'HS256') {
+            return null;
+        }
+
         $decodedSignature = self::base64UrlDecode($signature);
         if ($decodedSignature === false) {
             return null;
@@ -87,13 +136,11 @@ class ApiIdentity
         if (!$claims || empty($claims->sub) || ($claims->purpose ?? null) === 'mfa_pending') {
             return null;
         }
-        if (isset($claims->exp) && $claims->exp <= time()) {
+        if (!isset($claims->iat, $claims->exp) || !is_numeric($claims->iat) || !is_numeric($claims->exp) || $claims->exp <= time()) {
             return null;
         }
 
-        $actor = DB::table('users')->where('id', $claims->sub)->first();
-
-        return $actor ? self::normalizeUser($actor) : null;
+        return $claims;
     }
 
     private static function base64UrlDecode(string $value): string|false

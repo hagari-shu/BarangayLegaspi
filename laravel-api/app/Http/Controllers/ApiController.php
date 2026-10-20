@@ -356,6 +356,7 @@ class ApiController extends Controller
         $token = str_starts_with($authorization, 'Bearer ') ? substr($authorization, 7) : '';
         if ($token !== '') {
             DB::table('api_tokens')->where('token_hash', hash('sha256', $token))->delete();
+            ApiIdentity::revokeLegacyJwt($token);
         }
 
         return response()->json(['success' => true]);
@@ -1110,7 +1111,10 @@ class ApiController extends Controller
             return response()->json(['message' => 'This reset token is invalid or expired.'], 400);
         }
         DB::transaction(function () use ($reset, $tokenHash, $newPassword) {
-            DB::table('users')->where('id', $reset->user_id)->update(['password_hash' => password_hash($newPassword, PASSWORD_BCRYPT)]);
+            DB::table('users')->where('id', $reset->user_id)->update([
+                'password_hash' => password_hash($newPassword, PASSWORD_BCRYPT),
+                'tokens_valid_after' => now()->timestamp + 1,
+            ]);
             DB::table('api_tokens')->where('user_id', $reset->user_id)->delete();
             DB::table('password_reset_tokens')->where('token_hash', $tokenHash)->delete();
         });
@@ -1134,7 +1138,13 @@ class ApiController extends Controller
         if (!$user || !password_verify($currentPassword, $user->password_hash)) {
             return response()->json(['message' => 'Current password is incorrect.'], 401);
         }
-        DB::table('users')->where('id', $actor->id)->update(['password_hash' => password_hash($newPassword, PASSWORD_BCRYPT)]);
+        DB::transaction(function () use ($actor, $newPassword): void {
+            DB::table('users')->where('id', $actor->id)->update([
+                'password_hash' => password_hash($newPassword, PASSWORD_BCRYPT),
+                'tokens_valid_after' => now()->timestamp + 1,
+            ]);
+            DB::table('api_tokens')->where('user_id', $actor->id)->delete();
+        });
         $this->writeAudit($actor, 'password.changed', 'user', $actor->id);
 
         return response()->json(['message' => 'Password changed successfully.']);

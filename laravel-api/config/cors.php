@@ -1,6 +1,9 @@
 <?php
 
-$configuredOrigins = array_filter(array_map('trim', explode(',', (string) env('CORS_ORIGINS', 'http://localhost:5173,http://127.0.0.1:5173'))));
+$defaultOrigins = in_array(env('APP_ENV', 'production'), ['local', 'testing'], true)
+    ? 'http://localhost:5173,http://127.0.0.1:5173'
+    : '';
+$configuredOrigins = array_filter(array_map('trim', explode(',', (string) env('CORS_ORIGINS', $defaultOrigins))));
 
 return [
     'paths' => ['api/*', 'sanctum/csrf-cookie'],

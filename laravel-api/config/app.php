@@ -54,7 +54,7 @@ return [
 
     'url' => env('APP_URL', 'http://localhost'),
 
-    'jwt_secret' => env('JWT_SECRET', env('APP_KEY', '')),
+    'jwt_secret' => env('JWT_SECRET', ''),
     'mfa_encryption_key' => env('MFA_ENCRYPTION_KEY', ''),
     'mfa_encryption_key_previous' => env('MFA_ENCRYPTION_KEY_PREVIOUS', ''),
 

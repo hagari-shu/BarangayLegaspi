@@ -3,8 +3,8 @@ FROM composer:2 AS composer-bin
 FROM php:8.4-apache
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends libpq-dev libzip-dev \
-    && docker-php-ext-install pdo_pgsql zip \
+    && apt-get install -y --no-install-recommends libonig-dev libpq-dev libzip-dev \
+    && docker-php-ext-install mbstring pdo_pgsql zip \
     && a2enmod rewrite \
     && rm -rf /var/lib/apt/lists/*
 
@@ -16,7 +16,7 @@ COPY composer.json composer.lock ./
 RUN composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader --no-scripts
 
 COPY . .
-RUN composer dump-autoload --no-dev --optimize \
+RUN APP_ENV=local composer dump-autoload --no-dev --optimize \
     && chown -R www-data:www-data storage bootstrap/cache \
     && chmod +x docker-entrypoint.sh
 
