@@ -2555,6 +2555,79 @@ test('reset password request sends a delivery webhook payload when configured', 
   }
 })
 
+test('password reset request sends the reset code using the configured Resend sender', async () => {
+  const originalApiKey = process.env.RESEND_API_KEY
+  const originalResetFromEmail = process.env.PASSWORD_RESET_FROM_EMAIL
+  const originalInvitationFromEmail = process.env.SUPER_ADMIN_INVITATION_FROM_EMAIL
+  const originalFetch = globalThis.fetch
+  const emailRequests = []
+  process.env.RESEND_API_KEY = 'test-only-resend-api-key'
+  process.env.PASSWORD_RESET_FROM_EMAIL = 'no-reply@example.org'
+  delete process.env.SUPER_ADMIN_INVITATION_FROM_EMAIL
+  globalThis.fetch = async (input, options) => {
+    if (input === 'https://api.resend.com/emails') {
+      emailRequests.push({ input, options, payload: JSON.parse(options.body) })
+      return new Response(null, { status: 200 })
+    }
+    return originalFetch(input, options)
+  }
+  let appServer
+
+  try {
+    const testServer = await createTestServer()
+    appServer = testServer.server
+    const { baseUrl } = testServer
+    const email = `resend.${Date.now()}@example.com`
+    const registerResponse = await fetch(`${baseUrl}/api/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        firstName: 'Resend',
+        lastName: 'User',
+        mobile: `091${Math.floor(10000000 + Math.random() * 90000000)}`,
+        email,
+        password: 'SecurePass123!',
+      }),
+    })
+    assert.equal(registerResponse.status, 201)
+
+    const requestResponse = await fetch(`${baseUrl}/api/reset-password/request`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ identifier: email }),
+    })
+    assert.equal(requestResponse.status, 200)
+    assert.equal((await requestResponse.json()).deliveryStatus, 'sent')
+    assert.equal(emailRequests.length, 1)
+
+    const { payload } = emailRequests[0]
+    assert.equal(payload.to[0], email)
+    assert.equal(payload.from, 'Barangay Legaspi <no-reply@example.org>')
+    const resetToken = payload.text.match(/\n\n([a-f0-9]{64})\n\n/)?.[1]
+    assert.ok(resetToken)
+
+    const resetResponse = await fetch(`${baseUrl}/api/reset-password`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: resetToken, newPassword: 'ResetPass123!' }),
+    })
+    assert.equal(resetResponse.status, 200)
+  } finally {
+    if (originalApiKey === undefined) delete process.env.RESEND_API_KEY
+    else process.env.RESEND_API_KEY = originalApiKey
+    if (originalResetFromEmail === undefined) delete process.env.PASSWORD_RESET_FROM_EMAIL
+    else process.env.PASSWORD_RESET_FROM_EMAIL = originalResetFromEmail
+    if (originalInvitationFromEmail === undefined) delete process.env.SUPER_ADMIN_INVITATION_FROM_EMAIL
+    else process.env.SUPER_ADMIN_INVITATION_FROM_EMAIL = originalInvitationFromEmail
+    globalThis.fetch = originalFetch
+    if (appServer) {
+      await new Promise((resolve, reject) => {
+        appServer.close((error) => (error ? reject(error) : resolve()))
+      })
+    }
+  }
+})
+
 test('resident registry imports are staff-only, duplicate-reviewed, pending, and audited', async () => {
   const { server, baseUrl } = await createTestServer()
   const staffPassword = 'StaffPass123!'

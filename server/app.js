@@ -51,6 +51,7 @@ import {
   isValidSuperAdminInvitationToken,
 } from './super-admin-invitations.js'
 import { isAdminRole, isStaffOrAdminRole, isSuperAdminRole } from './rbac.js'
+import { deliverPasswordResetEmail } from './password-reset-email.js'
 
 let store = process.env.DATABASE_URL && !IS_TEST_RUN ? pgDb : jsonDb
 
@@ -1477,19 +1478,33 @@ export function createApp() {
       const expiresAt = Date.now() + 15 * 60 * 1000
       resetTokens.set(createHash('sha256').update(token).digest('hex'), { userId: user.id, expiresAt })
 
-      const webhookResult = await sendDeliveryWebhook({
-        event: 'password_reset',
-        recipient: user.email,
-        token,
-        expiresAt,
-        user,
-        title: 'Password reset requested',
-        message: 'Use the reset code below to continue resetting your password.',
-        metadata: { expiresInMinutes: 15 },
-      }).catch((error) => {
-        console.error('delivery webhook error', error)
+      const deliveryResult = (async () => {
+        if (process.env.RESEND_API_KEY || process.env.PASSWORD_RESET_FROM_EMAIL) {
+          await deliverPasswordResetEmail({
+            apiKey: process.env.RESEND_API_KEY,
+            fromEmail: process.env.PASSWORD_RESET_FROM_EMAIL || process.env.SUPER_ADMIN_INVITATION_FROM_EMAIL,
+            email: user.email,
+            token,
+            expiresAt,
+          })
+          return { queued: true, deliveryStatus: 'sent', event: 'password_reset' }
+        }
+
+        return sendDeliveryWebhook({
+          event: 'password_reset',
+          recipient: user.email,
+          token,
+          expiresAt,
+          user,
+          title: 'Password reset requested',
+          message: 'Use the reset code below to continue resetting your password.',
+          metadata: { expiresInMinutes: 15 },
+        })
+      })().catch((error) => {
+        console.error('password reset delivery error', error)
         return { queued: false, deliveryStatus: 'failed', event: 'password_reset' }
       })
+      const webhookResult = await deliveryResult
 
       if (webhookResult.queued) {
         return res.json({ message: genericMessage, deliveryStatus: webhookResult.deliveryStatus })
