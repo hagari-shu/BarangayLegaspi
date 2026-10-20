@@ -1542,6 +1542,27 @@ test('captain photo upload links require an administrator and bounded object sto
   }
 })
 
+test('public official profile photos can be embedded by the separate frontend origin', async () => {
+  const { server, baseUrl } = await createTestServer()
+
+  try {
+    for (const role of ['captain', 'secretary', 'treasurer']) {
+      const response = await fetch(`${baseUrl}/api/official-profiles/${role}/photo`, { redirect: 'manual' })
+      assert.equal(response.headers.get('cross-origin-resource-policy'), 'cross-origin')
+      assert.ok([204, 302].includes(response.status), `${role} photo returned ${response.status}`)
+    }
+
+    if (!isCaptainPhotoStorageConfigured()) {
+      const response = await fetch(`${baseUrl}/api/official-profiles/secretary/photo`)
+      assert.equal(response.status, 204)
+    }
+  } finally {
+    await new Promise((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()))
+    })
+  }
+})
+
 test('Admin-issued Staff temporary access is emailed, single-use, time-limited, and Staff-only', async () => {
   const { server, baseUrl } = await createTestServer()
   const deliveryPayloads = []

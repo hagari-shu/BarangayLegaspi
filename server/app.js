@@ -732,6 +732,7 @@ export function createApp() {
   })
 
   app.get('/api/official-profiles/:role/photo', async (req, res) => {
+    res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin')
     res.setHeader('Cache-Control', 'no-store')
     if (!OFFICIAL_PHOTO_ROLES.includes(req.params.role)) return res.sendStatus(404)
     try {

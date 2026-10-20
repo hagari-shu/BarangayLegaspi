@@ -43,6 +43,20 @@ jobs:
             console.log(`Active Node API healthy; storage=${health.storage}`);
           '
 
+      - name: Check public profile photo embedding policy
+        run: |
+          set -euo pipefail
+          for role in captain secretary treasurer; do
+            headers="$(curl --silent --show-error --max-time 25 \
+              --dump-header - --output /dev/null \
+              "https://barangaylegaspi.onrender.com/api/official-profiles/${role}/photo")"
+            if ! printf '%s\n' "$headers" | tr -d '\r' | grep --ignore-case --quiet '^cross-origin-resource-policy: cross-origin$'; then
+              echo "Public ${role} photo endpoint does not allow embedding from the separate frontend origin."
+              exit 1
+            fi
+          done
+          echo 'Public official photo endpoints allow cross-origin embedding.'
+
       - name: Check staged Laravel API health
         run: |
           set -euo pipefail

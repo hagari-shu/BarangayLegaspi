@@ -28,6 +28,8 @@ Staff can print a full Zone 1–7 roster, family roster/individual sheets by hou
 
 The current production frontend on Vercel uses the Node/Express API at `https://barangaylegaspi.onrender.com/api`, backed by PostgreSQL. Laravel is deployed as a staged migration target and is not yet the API used by the production frontend. Do not change `VITE_API_BASE` to Laravel until authenticated resident, staff, admin, and content-management workflows have passed a coordinated cutover check.
 
+For a staged Hostinger migration of the Vite frontend, Node API, Laravel/PHP API, and PostgreSQL database, follow [the Hostinger deployment guide](./docs/hostinger-deployment.md). Laravel is not yet the active API and has incomplete API parity; keep it on an isolated staging database and keep current production services online until parity, restore, and rollback checks pass.
+
 1. Set the Vercel build command to `npm run build`.
 2. Set `VITE_API_BASE` in Vercel to the active Node API URL ending in `/api`.
 3. Keep the active Node/Express Render service connected to PostgreSQL and configure its keys, exact frontend `CORS_ORIGINS`, and other required environment variables. Use random keys of at least 32 characters. Existing installations must coordinate JWT rotation because it invalidates existing sessions; the MFA key-rotation procedure below preserves enrolled authenticators.
