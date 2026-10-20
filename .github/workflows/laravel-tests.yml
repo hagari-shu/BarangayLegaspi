@@ -43,7 +43,7 @@ jobs:
 
       - name: Prevent Laravel API parity regressions
         working-directory: .
-        run: node scripts/check-laravel-api-parity.js --max-missing=42
+        run: node scripts/check-laravel-api-parity.js --max-missing=0
 
       - name: Set up PHP
         uses: shivammathur/setup-php@v2

@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url'
 
 const repositoryRoot = fileURLToPath(new URL('../', import.meta.url))
 const serverRoot = join(repositoryRoot, 'server')
-const laravelRoutesPath = join(repositoryRoot, 'laravel-api', 'routes', 'api.php')
+const laravelRoutesDirectory = join(repositoryRoot, 'laravel-api', 'routes')
 const maximumMissingArgument = process.argv.find((argument) => argument.startsWith('--max-missing='))
 const maximumMissing = maximumMissingArgument
   ? Number(maximumMissingArgument.slice('--max-missing='.length))
@@ -39,11 +39,14 @@ for (const filePath of listJavaScriptFiles(serverRoot)) {
   }
 }
 
-const laravelSource = readFileSync(laravelRoutesPath, 'utf8')
-const laravelRoutes = new Set(
-  [...laravelSource.matchAll(/Route::(get|post|put|patch|delete)\s*\(\s*['"]([^'"]+)['"]/gi)]
-    .map(([, method, path]) => `${method.toUpperCase()} ${normalizePath(`/api${path}`)}`),
-)
+const laravelRoutes = new Set()
+for (const entry of readdirSync(laravelRoutesDirectory, { withFileTypes: true })) {
+  if (!entry.isFile() || !entry.name.endsWith('.php')) continue
+  const laravelSource = readFileSync(join(laravelRoutesDirectory, entry.name), 'utf8')
+  for (const [, method, path] of laravelSource.matchAll(/(?:Route::|->)(get|post|put|patch|delete)\s*\(\s*['"]([^'"]+)['"]/gi)) {
+    laravelRoutes.add(`${method.toUpperCase()} ${normalizePath(`/api${path}`)}`)
+  }
+}
 
 const missingRoutes = [...nodeRoutes.entries()]
   .filter(([route]) => !laravelRoutes.has(route))

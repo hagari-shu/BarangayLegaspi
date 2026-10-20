@@ -57,7 +57,9 @@ The staged Laravel API preserves the `/api` routes and PostgreSQL data model, an
 
 For the active Node/Express API, automatic administrator seeding is only for a genuinely new database. If either configured seed identifier (`ADMIN_EMAIL` or `ADMIN_MOBILE`) already belongs to an account, seeding is skipped; it never promotes or overwrites an existing user.
 
-The Laravel API does not create an administrator during login or from `ADMIN_*` environment variables. Its current Super Admin invitation endpoints only accept invitations; the protected operator workflow in this repository provisions accounts through the active Node API and must not be treated as a Laravel provisioning workflow. Do not replace the live API with Laravel until an audited Laravel invitation-issuance path and the complete API/workflow parity are implemented and verified.
+The Laravel API does not create an administrator during login or from `ADMIN_*` environment variables. After deploying Laravel behind the intended HTTPS portal and configuring its isolated database and verified Resend sender, an authorized operator can issue the first Laravel Admin setup invitation with `php artisan app:invite-admin admin@example.gov --confirm`. The invite is single-use, expires after 12 hours, stores only a token hash, and lets the recipient choose their password. The invitation URL is emailed and never printed. The existing GitHub operator-account workflow still provisions accounts through the active Node API; do not confuse it with this Laravel CLI command.
+
+The Node/Laravel API route parity gate is `npm run check:laravel-parity` and must report zero missing routes before a replacement can be considered. Route coverage alone is not sufficient: run the Laravel suite, validate behavior and integrations against an isolated database copy, and complete deployment/rollback checks first.
 
 #### Operator account provisioning
 
