@@ -12,7 +12,7 @@ services:
       INIT_NODE_DATABASE: "true"
       INIT_LARAVEL_DATABASE: "false"
     volumes:
-      - node_postgres_data:/var/lib/postgresql/data
+      - node_postgres_data:${POSTGRES_DATA_DIR:-/var/lib/postgresql/data}
       - ./deploy/hostinger/postgres-init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
@@ -96,7 +96,7 @@ services:
       INIT_NODE_DATABASE: "false"
       INIT_LARAVEL_DATABASE: "true"
     volumes:
-      - laravel_postgres_data:/var/lib/postgresql/data
+      - laravel_postgres_data:${POSTGRES_DATA_DIR:-/var/lib/postgresql/data}
       - ./deploy/hostinger/postgres-init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
