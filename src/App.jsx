@@ -1169,14 +1169,14 @@ function LoginPage({ onLogin, language, setLanguage }) {
     event.preventDefault()
 
     const cleanedIdentifier = sanitizeText(form.identifier)
-    const cleanedPassword = sanitizeText(form.password)
+    const password = String(form.password)
 
-    if (!cleanedIdentifier || !cleanedPassword) {
+    if (!cleanedIdentifier || !password) {
       alert(t.loginRequired)
       return
     }
 
-    if (!isValidIdentifier(cleanedIdentifier) || cleanedPassword.length < 8) {
+    if (!isValidIdentifier(cleanedIdentifier) || password.length < 8) {
       alert(t.loginFormatInvalid)
       return
     }
@@ -1185,7 +1185,7 @@ function LoginPage({ onLogin, language, setLanguage }) {
       const response = await fetch(`${API_BASE}/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ identifier: cleanedIdentifier, password: cleanedPassword }),
+        body: JSON.stringify({ identifier: cleanedIdentifier, password }),
       })
       const data = await response.json().catch(() => ({}))
       if (!response.ok) {
