@@ -42,8 +42,11 @@ jobs:
           APP_ENV: testing
         run: composer install --no-interaction --prefer-dist --no-progress
 
+      - name: Prepare Laravel test environment
+        run: cp .env.example .env
+
       - name: Run Laravel tests
         env:
           APP_ENV: testing
-          APP_KEY: 01234567890123456789012345678901
+          APP_KEY: 'base64:MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY='
         run: php artisan test
