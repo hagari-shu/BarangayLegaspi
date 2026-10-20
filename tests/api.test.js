@@ -2659,10 +2659,25 @@ test('resident registry imports are staff-only, duplicate-reviewed, pending, and
     })
     assert.equal(flagReviewResponse.status, 200)
     assert.equal((await flagReviewResponse.json()).resident.verifiedAt, null)
+    const incompleteRecordsResponse = await fetch(`${baseUrl}/api/staff/residents?verificationStatus=needs_review&page=1&pageSize=10`, { headers })
+    assert.equal(incompleteRecordsResponse.status, 200)
+    const incompleteRecords = await incompleteRecordsResponse.json()
+    assert.equal(incompleteRecords.total, 1)
+    assert.equal(incompleteRecords.residents[0].verificationStatus, 'needs_review')
+    const reviewZoneCountsResponse = await fetch(`${baseUrl}/api/staff/residents/zones`, { headers })
+    const reviewZoneCounts = await reviewZoneCountsResponse.json()
+    assert.equal(reviewZoneCounts.zones.find((item) => item.zone === 2).total, 2)
     const flaggedDemographics = await fetch(`${baseUrl}/api/staff/demographics`, {
       headers: { Authorization: `Bearer ${staffToken}` },
     })
     assert.equal((await flaggedDemographics.json()).overall.total, 0)
+    const informationCompleteResponse = await fetch(`${baseUrl}/api/staff/residents/${residentsData.residents[0].id}/verify`, {
+      method: 'PATCH',
+      headers,
+      body: JSON.stringify({ verificationStatus: 'pending' }),
+    })
+    assert.equal(informationCompleteResponse.status, 200)
+    assert.equal((await informationCompleteResponse.json()).resident.verificationStatus, 'pending')
     const reverifyResponse = await fetch(`${baseUrl}/api/staff/residents/${residentsData.residents[0].id}/verify`, {
       method: 'PATCH',
       headers,
@@ -2888,7 +2903,10 @@ test('staff can add a manual resident with duplicate review and privacy safeguar
     assert.equal(JSON.stringify(created).includes('confidential-source-sheet.csv'), false)
     const detailResponse = await fetch(`${baseUrl}/api/staff/residents/${created.resident.id}`, { headers })
     assert.equal(detailResponse.status, 200)
-    assert.equal((await detailResponse.json()).resident.address, 'Sensitive address')
+    const detailResident = (await detailResponse.json()).resident
+    assert.equal(detailResident.address, 'Sensitive address')
+    assert.equal(detailResident.status, 'active')
+    assert.equal(detailResident.verificationStatus, 'pending')
     const fullNameSearch = await fetch(`${baseUrl}/api/staff/residents?search=Luz%20Santos`, { headers })
     assert.equal(fullNameSearch.status, 200)
     const fullNameSearchData = await fullNameSearch.json()

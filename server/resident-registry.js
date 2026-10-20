@@ -230,6 +230,8 @@ export function registerResidentRegistryRoutes(app, { store }) {
     const zoneRaw = req.query.zone
     const zone = zoneRaw === undefined || zoneRaw === '' ? null : Number(zoneRaw)
     const purok = String(req.query.purok || '').trim()
+    const verificationStatus = String(req.query.verificationStatus || '').trim()
+    const excludeVerificationStatus = String(req.query.excludeVerificationStatus || '').trim()
     const page = Math.max(1, Number.parseInt(req.query.page, 10) || 1)
     const pageSize = Math.min(100, Math.max(1, Number.parseInt(req.query.pageSize, 10) || 25))
     const today = manilaDateKey()
@@ -238,6 +240,15 @@ export function registerResidentRegistryRoutes(app, { store }) {
     if (birthDate && (!validDateKey(birthDate) || birthDate > today)) return res.status(400).json({ message: 'Enter a valid birthdate that is not in the future.' })
     if (age !== null && (!Number.isInteger(age) || age < 0 || age > 130)) return res.status(400).json({ message: 'Age must be a whole number from 0 to 130.' })
     if (zone !== null && (!Number.isInteger(zone) || zone < 1 || zone > 7)) return res.status(400).json({ message: 'Choose a valid zone from 1 to 7.' })
+    if (verificationStatus && !['pending', 'verified', 'needs_review'].includes(verificationStatus)) {
+      return res.status(400).json({ message: 'Choose a valid resident verification status.' })
+    }
+    if (excludeVerificationStatus && !['pending', 'verified', 'needs_review'].includes(excludeVerificationStatus)) {
+      return res.status(400).json({ message: 'Choose a valid resident verification status to exclude.' })
+    }
+    if (verificationStatus && verificationStatus === excludeVerificationStatus) {
+      return res.status(400).json({ message: 'A verification status cannot be both included and excluded.' })
+    }
 
     let ageStart = null
     let ageEnd = null
@@ -247,7 +258,9 @@ export function registerResidentRegistryRoutes(app, { store }) {
 
     try {
       requireStorage('listResidentRegistry')
-      const result = await store.listResidentRegistry({ search, birthDate, ageStart, ageEnd, zone, purok, page, pageSize })
+      const result = await store.listResidentRegistry({
+        search, birthDate, ageStart, ageEnd, zone, purok, verificationStatus, excludeVerificationStatus, page, pageSize,
+      })
       const residents = result.residents.map((resident) => ({
         id: resident.id,
         firstName: resident.firstName || resident.first_name,
@@ -276,7 +289,7 @@ export function registerResidentRegistryRoutes(app, { store }) {
       requireStorage('listResidentRegistry')
       const zones = await Promise.all(Array.from({ length: 7 }, async (_, index) => {
         const zone = index + 1
-        const result = await store.listResidentRegistry({ zone, page: 1, pageSize: 1 })
+        const result = await store.listResidentRegistry({ zone, excludeVerificationStatus: 'needs_review', page: 1, pageSize: 1 })
         return { zone, total: result.total }
       }))
       return res.json({ zones })
@@ -306,6 +319,8 @@ export function registerResidentRegistryRoutes(app, { store }) {
         householdId: resident.householdId || null,
         zone: resident.zone === null || resident.zone === undefined ? null : Number(resident.zone),
         address: resident.address || null,
+        status: resident.status || resident.recordStatus || resident.record_status || 'active',
+        verificationStatus: resident.verificationStatus || resident.verification_status || 'pending',
       } })
     } catch (error) {
       console.error('resident registry record lookup failed', error)
@@ -679,7 +694,7 @@ export function registerResidentRegistryRoutes(app, { store }) {
     const actor = await authorizeStaff(req, res)
     if (!actor) return
     const verificationStatus = req.body?.verificationStatus
-    if (!['verified', 'needs_review'].includes(verificationStatus)) return res.status(400).json({ message: 'Choose verified or needs_review.' })
+    if (!['pending', 'verified', 'needs_review'].includes(verificationStatus)) return res.status(400).json({ message: 'Choose pending, verified, or needs_review.' })
     try {
       requireStorage('updateRegistryResidentWithAudit')
       const verifiedAt = new Date().toISOString()

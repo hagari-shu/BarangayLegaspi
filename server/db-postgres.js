@@ -1503,6 +1503,8 @@ const registryWhere = (filters = {}) => {
   }
   if (filters.zone) add('zone = ?', Number(filters.zone))
   if (filters.purok) add('purok = ?', filters.purok)
+  if (filters.verificationStatus) add('verification_status = ?', filters.verificationStatus)
+  if (filters.excludeVerificationStatus) add('verification_status <> ?', filters.excludeVerificationStatus)
   return { sql: clauses.length ? `WHERE ${clauses.join(' AND ')}` : '', params }
 }
 

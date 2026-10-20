@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { parseRegistryCsv, registryCsvTemplate } from './registry-csv'
+import { createRegistryPrintHtml, writePrintWindow } from './registry-printing'
 import './StaffRegistryPanel.css'
 
 const API_BASE = (import.meta.env.VITE_API_BASE || (import.meta.env.DEV ? 'http://localhost:3001/api' : '')).replace(/\/$/, '')
@@ -13,6 +14,25 @@ const text = {
     zoneResidentsTitle: 'Residents in Zone',
     assignedResidents: 'assigned residents',
     zoneResidentsEmpty: 'No resident records are assigned to this zone yet.',
+    printZoneRoster: 'Print zone roster',
+    printZoneSheets: 'Print individual sheets',
+    printResident: 'Print resident sheet',
+    printFamilyRoster: 'Print family roster',
+    printFamilySheets: 'Print family sheets',
+    selectedForPrint: 'selected for printing',
+    clearSelection: 'Clear selection',
+    printSelectedRoster: 'Print selected roster',
+    printSelectedSheets: 'Print selected sheets',
+    selectedBatchTitle: 'Selected resident batch',
+    selectResidentForPrint: 'Select resident for printing',
+    selectPageForPrint: 'Select all residents on this page',
+    printLoading: 'Preparing printout…',
+    printError: 'Unable to prepare the registry printout.',
+    popupBlocked: 'Allow pop-ups for this site to open the print view.',
+    noFamilyId: 'No household ID is recorded for this resident.',
+    printResidents: 'residents',
+    printGenerated: 'Printed',
+    printConfidential: 'Personal information — authorized barangay use only. Do not share this printout outside approved work.',
     zoneCountsError: 'Unable to load zone totals.',
     editResident: 'Edit resident',
     saveChanges: 'Save changes',
@@ -64,21 +84,22 @@ const text = {
     openZone: 'View residents',
     sexOptional: 'Sex (optional)',
     manualOccupation: 'Type an occupation instead',
-    sourceReviewTitle: 'Source list follow-up',
-    sourceReviewHelp: 'Record an incomplete or unclear source sheet for follow-up. Do not include resident names or sensitive details; resolve the warning only after the source list is reconciled.',
-    sourceReviewAttention: 'Source list is incomplete or contains unclear entries; staff review is required.',
-    sourceReviewLocation: 'Purok for follow-up',
-    sourceReviewOpen: 'Add warning',
-    sourceReviewResolve: 'Mark resolved',
-    sourceReviewConfirm: 'Confirm the source list for this purok has been reconciled and all remaining residents have been accounted for?',
-    sourceReviewLoadError: 'Unable to load source-review warnings.',
-    sourceReviewCreateError: 'Unable to add the source-review warning.',
-    sourceReviewResolveError: 'Unable to resolve the source-review warning.',
-    sourceReviewCreated: 'Source-review warning added.',
-    sourceReviewAlreadyOpen: 'An open warning already exists for this location.',
-    sourceReviewNone: 'No open source-review warnings.',
+    incompleteTitle: 'Incomplete resident information',
+    incompleteHelp: 'Review records marked incomplete here. They stay outside the Zone 1–7 resident lists until staff finishes checking the information.',
+    incompleteCount: 'records need information review',
+    incompleteOpen: 'View incomplete records',
+    incompleteClose: 'Hide incomplete records',
+    incompleteLoading: 'Loading records for review…',
+    incompleteLoadError: 'Unable to load incomplete resident records.',
+    incompleteEmpty: 'No resident records are waiting for information review.',
+    incompletePage: 'Page {page} of {pages}',
+    markInformationComplete: 'Information complete — send to verification',
+    confirmInformationComplete: 'Confirm the record has been checked and its available information is complete. It will move to the verification queue.',
+    informationReady: 'Record moved to the verification queue.',
+    verificationQueue: 'Ready for verification',
+    verificationQueueHelp: 'Review the source record, then mark the resident verified.',
     privacyTitle: 'Personal information — authorized use only',
-    privacyNotice: 'Use these records only for authorized barangay duties. Enter only information needed from an official source; leave unknown fields blank. Do not share screenshots or exports outside approved work. New entries stay pending, and resident, import, verification, status, and source-warning changes are recorded in the audit log.',
+    privacyNotice: 'Use these records only for authorized barangay duties. Enter only information needed from an official source; leave unknown fields blank. Do not share screenshots or exports outside approved work. New entries stay pending, and resident, import, verification, review-status, and record-status changes are recorded in the audit log.',
     search: 'Search full name',
     birthDate: 'Exact birthdate',
     zone: 'Zone',
@@ -154,6 +175,25 @@ const text = {
     zoneResidentsTitle: 'Mga residente sa Zone',
     assignedResidents: 'residenteng nakatalaga',
     zoneResidentsEmpty: 'Wala pang residenteng nakatalaga sa zone na ito.',
+    printZoneRoster: 'I-imprenta ang talaan ng zone',
+    printZoneSheets: 'I-imprenta ang indibidwal na tala',
+    printResident: 'I-imprenta ang tala ng residente',
+    printFamilyRoster: 'I-imprenta ang talaan ng pamilya',
+    printFamilySheets: 'I-imprenta ang mga tala ng pamilya',
+    selectedForPrint: 'napili para i-imprenta',
+    clearSelection: 'Alisin ang napili',
+    printSelectedRoster: 'I-imprenta ang napiling talaan',
+    printSelectedSheets: 'I-imprenta ang mga napiling tala',
+    selectedBatchTitle: 'Napiling batch ng residente',
+    selectResidentForPrint: 'Piliin ang residente para i-imprenta',
+    selectPageForPrint: 'Piliin ang lahat ng residente sa pahinang ito',
+    printLoading: 'Inihahanda ang imprenta…',
+    printError: 'Hindi naihanda ang imprenta ng registry.',
+    popupBlocked: 'Payagan ang pop-up ng site na ito upang buksan ang pahina ng imprenta.',
+    noFamilyId: 'Walang nakatalang household ID para sa residenteng ito.',
+    printResidents: 'residente',
+    printGenerated: 'Inimprenta',
+    printConfidential: 'Personal na impormasyon — para lamang sa awtorisadong gamit ng barangay. Huwag ibahagi sa labas ng aprubadong gawain.',
     zoneCountsError: 'Hindi makuha ang bilang ng bawat zone.',
     editResident: 'I-edit ang residente',
     saveChanges: 'I-save ang mga pagbabago',
@@ -205,21 +245,22 @@ const text = {
     openZone: 'Tingnan ang mga residente',
     sexOptional: 'Kasarian (opsyonal)',
     manualOccupation: 'Mag-type ng ibang trabaho',
-    sourceReviewTitle: 'Follow-up sa source list',
-    sourceReviewHelp: 'Itala para sa follow-up ang hindi kumpleto o hindi malinaw na source sheet. Huwag ilagay ang pangalan ng residente o sensitibong detalye; lutasin lamang ang babala kapag naitugma na ang source list.',
-    sourceReviewAttention: 'Hindi kumpleto ang source list o may hindi malinaw na tala; kailangan itong suriin ng kawani.',
-    sourceReviewLocation: 'Purok na susuriin',
-    sourceReviewOpen: 'Magdagdag ng babala',
-    sourceReviewResolve: 'Markahang nalutas',
-    sourceReviewConfirm: 'Kumpirmahing naitugma na ang source list para sa purok na ito at naisama na ang lahat ng natitirang residente?',
-    sourceReviewLoadError: 'Hindi makuha ang mga babala sa pagsusuri ng source.',
-    sourceReviewCreateError: 'Hindi maidagdag ang babala sa pagsusuri ng source.',
-    sourceReviewResolveError: 'Hindi malutas ang babala sa pagsusuri ng source.',
-    sourceReviewCreated: 'Naidagdag ang babala sa pagsusuri ng source.',
-    sourceReviewAlreadyOpen: 'May bukas nang babala para sa lokasyong ito.',
-    sourceReviewNone: 'Walang bukas na babala sa pagsusuri ng source.',
+    incompleteTitle: 'Kulang na impormasyon ng residente',
+    incompleteHelp: 'Suriin dito ang mga markadong kulang na tala. Hindi muna sila isasama sa mga listahan ng Zone 1–7 hanggang matapos ang pagsusuri.',
+    incompleteCount: 'tala ang kailangang suriin',
+    incompleteOpen: 'Tingnan ang mga kulang na tala',
+    incompleteClose: 'Itago ang mga kulang na tala',
+    incompleteLoading: 'Kinukuha ang mga tala para suriin…',
+    incompleteLoadError: 'Hindi makuha ang mga residenteng kulang ang impormasyon.',
+    incompleteEmpty: 'Walang residenteng naghihintay ng pagsusuri sa impormasyon.',
+    incompletePage: 'Pahina {page} sa {pages}',
+    markInformationComplete: 'Kumpleto na — ipadala para beripikahin',
+    confirmInformationComplete: 'Kumpirmahing nasuri at kumpleto na ang makukuhang impormasyon. Ililipat ito sa pila para beripikahin.',
+    informationReady: 'Inilipat ang tala sa pila para beripikahin.',
+    verificationQueue: 'Handa nang beripikahin',
+    verificationQueueHelp: 'Suriin ang source record, saka markahang beripikado ang residente.',
     privacyTitle: 'Personal na impormasyon — para lamang sa awtorisadong gawain',
-    privacyNotice: 'Gamitin lamang ang mga tala para sa awtorisadong tungkulin ng barangay. Ilagay lamang ang impormasyong kailangan mula sa opisyal na sanggunian; iwang blangko ang hindi alam. Huwag magbahagi ng screenshot o kopya sa labas ng aprubadong gawain. Mananatiling pending ang mga bagong tala, at itinatala sa audit log ang pagbabago ng resident, import, beripikasyon, status, at source-warning.',
+    privacyNotice: 'Gamitin lamang ang mga tala para sa awtorisadong tungkulin ng barangay. Ilagay lamang ang impormasyong kailangan mula sa opisyal na sanggunian; iwang blangko ang hindi alam. Huwag magbahagi ng screenshot o kopya sa labas ng aprubadong gawain. Mananatiling pending ang mga bagong tala, at itinatala sa audit log ang pagbabago ng resident, import, beripikasyon, review status, at status ng tala.',
     search: 'Hanapin ang buong pangalan',
     birthDate: 'Eksaktong petsa ng kapanganakan',
     zone: 'Zone',
@@ -313,13 +354,19 @@ export default function StaffRegistryPanel({ language = 'en' }) {
   const [zonePage, setZonePage] = useState(1)
   const [zoneLoading, setZoneLoading] = useState(false)
   const [zoneError, setZoneError] = useState('')
-  const [sourceReviews, setSourceReviews] = useState([])
-  const [sourceReviewPurok, setSourceReviewPurok] = useState('')
-  const [sourceReviewZone, setSourceReviewZone] = useState('')
-  const [sourceReviewError, setSourceReviewError] = useState('')
-  const [sourceReviewMessage, setSourceReviewMessage] = useState('')
-  const [sourceReviewBusy, setSourceReviewBusy] = useState(false)
+  const [selectedForPrint, setSelectedForPrint] = useState({})
+  const [printBusy, setPrintBusy] = useState(false)
+  const [printError, setPrintError] = useState('')
+  const [incompleteResidents, setIncompleteResidents] = useState([])
+  const [incompleteTotal, setIncompleteTotal] = useState(0)
+  const [incompletePage, setIncompletePage] = useState(1)
+  const [incompleteOpen, setIncompleteOpen] = useState(false)
+  const [incompleteLoading, setIncompleteLoading] = useState(false)
+  const [incompleteError, setIncompleteError] = useState('')
+  const [incompleteMessage, setIncompleteMessage] = useState('')
+  const [incompleteBusy, setIncompleteBusy] = useState(false)
   const [pageSize] = useState(25)
+  const incompletePageSize = 10
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [familyWizardOpen, setFamilyWizardOpen] = useState(false)
@@ -367,6 +414,7 @@ export default function StaffRegistryPanel({ language = 'en' }) {
       search: debounced.search,
       birthDate: debounced.birthDate,
       zone: debounced.zone,
+      excludeVerificationStatus: 'needs_review',
       page: '1',
       pageSize: String(pageSize),
     })
@@ -437,6 +485,7 @@ export default function StaffRegistryPanel({ language = 'en' }) {
     const controller = new AbortController()
     const params = new URLSearchParams({
       zone: String(zoneDialog),
+      excludeVerificationStatus: 'needs_review',
       page: String(zonePage),
       pageSize: String(pageSize),
     })
@@ -470,70 +519,37 @@ export default function StaffRegistryPanel({ language = 'en' }) {
   useEffect(() => {
     let active = true
     const controller = new AbortController()
-    const loadSourceReviews = async () => {
-      setSourceReviewError('')
+    const loadIncompleteResidents = async () => {
+      setIncompleteLoading(true)
+      setIncompleteError('')
       try {
-        const response = await fetch(`${API_BASE}/staff/registry-source-reviews`, { signal: controller.signal })
+        const params = new URLSearchParams({
+          verificationStatus: 'needs_review',
+          page: String(incompleteOpen ? incompletePage : 1),
+          pageSize: String(incompleteOpen ? incompletePageSize : 1),
+        })
+        const response = await fetch(`${API_BASE}/staff/residents?${params}`, { signal: controller.signal })
         const data = await response.json().catch(() => ({}))
-        if (!response.ok) throw new Error(data.message || labels.sourceReviewLoadError)
-        if (active) setSourceReviews(Array.isArray(data.reviews) ? data.reviews : [])
+        if (!response.ok || !Array.isArray(data.residents)) throw new Error(data.message || labels.incompleteLoadError)
+        if (active) {
+          setIncompleteTotal(Number(data.total) || 0)
+          setIncompleteResidents(incompleteOpen ? data.residents : [])
+        }
       } catch (loadError) {
         if (loadError.name !== 'AbortError' && active) {
-          console.error('load registry source-review warnings failed', loadError)
-          setSourceReviewError(loadError.message || labels.sourceReviewLoadError)
+          console.error('load incomplete resident records failed', loadError)
+          setIncompleteError(loadError.message || labels.incompleteLoadError)
         }
+      } finally {
+        if (active) setIncompleteLoading(false)
       }
     }
-    loadSourceReviews()
+    loadIncompleteResidents()
     return () => {
       active = false
       controller.abort()
     }
-  }, [labels.sourceReviewLoadError, refreshKey])
-
-  const openSourceReview = async (event) => {
-    event.preventDefault()
-    setSourceReviewBusy(true)
-    setSourceReviewError('')
-    setSourceReviewMessage('')
-    try {
-      const response = await fetch(`${API_BASE}/staff/registry-source-reviews`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ purok: sourceReviewPurok.trim(), zone: sourceReviewZone || null }),
-      })
-      const data = await response.json().catch(() => ({}))
-      if (!response.ok) throw new Error(data.message || labels.sourceReviewCreateError)
-      setSourceReviews((current) => current.some((review) => review.id === data.review.id) ? current : [...current, data.review])
-      setSourceReviewError('')
-      setSourceReviewMessage(data.created ? labels.sourceReviewCreated : labels.sourceReviewAlreadyOpen)
-    } catch (openError) {
-      console.error('create registry source-review warning failed', openError)
-      setSourceReviewError(openError.message || labels.sourceReviewCreateError)
-    } finally {
-      setSourceReviewBusy(false)
-    }
-  }
-
-  const resolveSourceReview = async (review) => {
-    if (!window.confirm(labels.sourceReviewConfirm)) return
-    setSourceReviewBusy(true)
-    setSourceReviewError('')
-    try {
-      const response = await fetch(`${API_BASE}/staff/registry-source-reviews/${encodeURIComponent(review.id)}/resolve`, {
-        method: 'PATCH',
-      })
-      const data = await response.json().catch(() => ({}))
-      if (!response.ok) throw new Error(data.message || labels.sourceReviewResolveError)
-      setSourceReviews((current) => current.filter((item) => item.id !== review.id))
-      setSourceReviewMessage('')
-    } catch (resolveError) {
-      console.error('resolve registry source-review warning failed', resolveError)
-      setSourceReviewError(resolveError.message || labels.sourceReviewResolveError)
-    } finally {
-      setSourceReviewBusy(false)
-    }
-  }
+  }, [incompleteOpen, incompletePage, incompletePageSize, labels.incompleteLoadError, refreshKey])
 
   const openFamilyWizard = () => {
     const householdId = `HH-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`
@@ -692,9 +708,14 @@ export default function StaffRegistryPanel({ language = 'en' }) {
   }
 
   const updateVerification = async (resident, verificationStatus) => {
-    const message = verificationStatus === 'verified' ? labels.confirmVerify : labels.confirmFlag
+    const message = verificationStatus === 'verified'
+      ? labels.confirmVerify
+      : verificationStatus === 'pending'
+        ? labels.confirmInformationComplete
+        : labels.confirmFlag
     if (!window.confirm(message)) return
     setError('')
+    setIncompleteMessage('')
     try {
       const response = await fetch(`${API_BASE}/staff/residents/${encodeURIComponent(resident.id)}/verify`, {
         method: 'PATCH',
@@ -709,6 +730,7 @@ export default function StaffRegistryPanel({ language = 'en' }) {
       setZoneRecords((current) => current.map((item) => item.id === resident.id
         ? { ...item, verificationStatus: data.resident.verificationStatus }
         : item))
+      if (verificationStatus === 'pending') setIncompleteMessage(labels.informationReady)
       setRefreshKey((current) => current + 1)
     } catch (verifyError) {
       console.error('update resident verification failed', verifyError)
@@ -823,7 +845,105 @@ export default function StaffRegistryPanel({ language = 'en' }) {
     setZonePage(1)
     setZoneRecords([])
     setZoneError('')
+    setPrintError('')
   }
+
+  const fetchAllZoneResidents = async (zoneNumber) => {
+    const residents = []
+    let total = 0
+    let page = 1
+    do {
+      const params = new URLSearchParams({
+        zone: String(zoneNumber),
+        excludeVerificationStatus: 'needs_review',
+        page: String(page),
+        pageSize: '100',
+      })
+      const response = await fetch(`${API_BASE}/staff/residents?${params}`)
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok || !Array.isArray(data.residents) || !Number.isFinite(Number(data.total))) {
+        throw new Error(data.message || labels.printError)
+      }
+      residents.push(...data.residents)
+      total = Number(data.total)
+      if (data.residents.length === 0 && residents.length < total) throw new Error(labels.printError)
+      page += 1
+    } while (residents.length < total)
+    return residents
+  }
+
+  const printRegistryRecords = async (title, subtitle, mode, loadRecords) => {
+    const printWindow = window.open('', '_blank')
+    if (!printWindow) {
+      setPrintError(labels.popupBlocked)
+      return
+    }
+    setPrintBusy(true)
+    setPrintError('')
+    try {
+      let residents = typeof loadRecords === 'function' ? await loadRecords() : loadRecords
+      if (!residents.length) throw new Error(labels.zoneResidentsEmpty)
+      if (mode === 'individuals') {
+        const residentsWithDetails = []
+        for (let start = 0; start < residents.length; start += 10) {
+          const batch = await Promise.all(residents.slice(start, start + 10).map(async (resident) => {
+            const response = await fetch(`${API_BASE}/staff/residents/${encodeURIComponent(resident.id)}`)
+            const data = await response.json().catch(() => ({}))
+            if (!response.ok || !data.resident) throw new Error(data.message || labels.printError)
+            return { ...resident, ...data.resident }
+          }))
+          residentsWithDetails.push(...batch)
+        }
+        residents = residentsWithDetails
+      }
+      const html = createRegistryPrintHtml({
+        title,
+        subtitle,
+        records: residents,
+        mode,
+        language,
+        labels: {
+          barangayName: 'Barangay Legaspi',
+          generated: labels.printGenerated,
+          residents: labels.printResidents,
+          name: labels.name,
+          birthDate: labels.birthDate,
+          zone: labels.zone,
+          household: labels.household,
+          sex: labels.sex,
+          maritalStatus: labels.maritalStatus,
+          occupation: labels.occupation,
+          address: labels.address,
+          verification: labels.status,
+          recordStatus: labels.recordStatus,
+          unassigned: labels.unassigned,
+          confidentialNotice: labels.printConfidential,
+        },
+      })
+      writePrintWindow(printWindow, html)
+    } catch (printFailure) {
+      printWindow.close()
+      console.error('prepare resident registry printout failed', printFailure)
+      setPrintError(printFailure.message || labels.printError)
+    } finally {
+      setPrintBusy(false)
+    }
+  }
+
+  const togglePrintSelection = (resident, selected) => {
+    setSelectedForPrint((current) => {
+      const next = { ...current }
+      if (selected) next[resident.id] = resident
+      else delete next[resident.id]
+      return next
+    })
+  }
+
+  const selectedPrintRecords = Object.values(selectedForPrint)
+  const selectedZoneLabels = [...new Set(selectedPrintRecords.map((resident) => resident.zone ? `Zone ${resident.zone}` : labels.unassigned))]
+  const selectedBatchSubtitle = selectedZoneLabels.join(', ')
+  const pageIsSelected = zoneRecords.length > 0 && zoneRecords.every((resident) => selectedForPrint[resident.id])
+  const incompletePages = Math.max(1, Math.ceil(incompleteTotal / incompletePageSize))
 
   return (
     <section className="registry-panel" aria-labelledby="resident-registry-title">
@@ -845,30 +965,60 @@ export default function StaffRegistryPanel({ language = 'en' }) {
         <p>{labels.privacyNotice}</p>
       </aside>
 
-      <section className="registry-source-reviews" aria-labelledby="registry-source-review-title">
-        <div className="registry-source-review-heading">
+      <section className="registry-incomplete-review" aria-labelledby="registry-incomplete-title">
+        <div className="registry-incomplete-header">
           <div>
-            <h3 id="registry-source-review-title">{labels.sourceReviewTitle}</h3>
-            <p>{labels.sourceReviewHelp}</p>
+            <h3 id="registry-incomplete-title">{labels.incompleteTitle}</h3>
+            <p>{labels.incompleteHelp}</p>
           </div>
+          <button
+            type="button"
+            className="secondary-btn small"
+            aria-expanded={incompleteOpen}
+            aria-controls="registry-incomplete-list"
+            onClick={() => { setIncompletePage(1); setIncompleteOpen((open) => !open) }}
+          >
+            {incompleteOpen ? labels.incompleteClose : `${labels.incompleteOpen} (${incompleteTotal})`}
+          </button>
         </div>
-        {sourceReviewError && <p className="registry-message error" role="alert">{sourceReviewError}</p>}
-        {sourceReviews.length ? (
-          <ul className="registry-source-review-list">
-            {sourceReviews.map((review) => (
-              <li key={review.id}>
-                <div><strong><span className="registry-warning-icon" aria-hidden="true">⚠</span> {review.purok}{review.zone ? ` · Zone ${review.zone}` : ''}</strong><small>{labels.sourceReviewAttention}</small></div>
-                <button type="button" className="secondary-btn small" disabled={sourceReviewBusy} onClick={() => resolveSourceReview(review)}>{labels.sourceReviewResolve}</button>
-              </li>
-            ))}
-          </ul>
-        ) : !sourceReviewError && <p className="registry-source-review-empty">{labels.sourceReviewNone}</p>}
-        {sourceReviewMessage && <p className="registry-message" role="status">{sourceReviewMessage}</p>}
-        <form className="registry-source-review-form" onSubmit={openSourceReview}>
-          <label>{labels.sourceReviewLocation}<input value={sourceReviewPurok} maxLength={100} onChange={(event) => setSourceReviewPurok(event.target.value)} required /></label>
-          <label>{labels.zone}<select value={sourceReviewZone} onChange={(event) => setSourceReviewZone(event.target.value)}><option value="">{labels.unassigned}</option>{[1, 2, 3, 4, 5, 6, 7].map((number) => <option key={number} value={number}>{number}</option>)}</select></label>
-          <button type="submit" className="secondary-btn small" disabled={!sourceReviewPurok.trim() || sourceReviewBusy}>{labels.sourceReviewOpen}</button>
-        </form>
+        <strong className="registry-incomplete-count">{incompleteTotal} {labels.incompleteCount}</strong>
+        {incompleteError && <p className="registry-message error" role="alert">{incompleteError}</p>}
+        {incompleteMessage && <p className="registry-message" role="status">{incompleteMessage}</p>}
+        {incompleteOpen && (
+          <div id="registry-incomplete-list" className="registry-incomplete-list" aria-busy={incompleteLoading}>
+            {incompleteLoading && <p className="registry-message" role="status">{labels.incompleteLoading}</p>}
+            {!incompleteLoading && incompleteResidents.length > 0 && (
+              <>
+                <ul className="registry-incomplete-records">
+                  {incompleteResidents.map((resident) => (
+                    <li key={resident.id}>
+                      <div>
+                        <strong>{resident.firstName} {resident.lastName}</strong>
+                        <small>{resident.birthDate ? formatDate(resident.birthDate, language) : labels.noDob} · {resident.zone ? `Zone ${resident.zone}` : labels.unassigned}</small>
+                      </div>
+                      <div className="registry-row-actions">
+                        <button type="button" className="secondary-btn small" onClick={() => openResidentEditor(resident)}>{labels.editResident}</button>
+                        <button type="button" className="primary-btn small" disabled={incompleteBusy} onClick={async () => {
+                          setIncompleteBusy(true)
+                          await updateVerification(resident, 'pending')
+                          setIncompleteBusy(false)
+                        }}>{labels.markInformationComplete}</button>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+                <div className="registry-incomplete-pagination">
+                  <span>{labels.incompletePage.replace('{page}', String(incompletePage)).replace('{pages}', String(incompletePages))}</span>
+                  <div className="registry-row-actions">
+                    <button type="button" className="secondary-btn small" disabled={incompleteLoading || incompletePage <= 1} onClick={() => setIncompletePage((page) => Math.max(1, page - 1))}>{labels.previous}</button>
+                    <button type="button" className="secondary-btn small" disabled={incompleteLoading || incompletePage >= incompletePages} onClick={() => setIncompletePage((page) => Math.min(incompletePages, page + 1))}>{labels.next}</button>
+                  </div>
+                </div>
+              </>
+            )}
+            {!incompleteLoading && incompleteResidents.length === 0 && !incompleteError && <p className="registry-source-review-empty">{labels.incompleteEmpty}</p>}
+          </div>
+        )}
       </section>
 
       {importOpen && (
@@ -1101,14 +1251,41 @@ export default function StaffRegistryPanel({ language = 'en' }) {
             </div>
             {zoneLoading && <p className="registry-message" role="status">{labels.loading}</p>}
             {zoneError && <p className="registry-message error" role="alert">{zoneError}</p>}
+            {printError && <p className="registry-message error" role="alert">{printError}</p>}
+            <div className="registry-print-actions">
+              <button type="button" className="secondary-btn small" disabled={printBusy || zoneTotal === 0} onClick={() => printRegistryRecords(`Zone ${zoneDialog} resident roster`, `Zone ${zoneDialog}`, 'roster', () => fetchAllZoneResidents(zoneDialog))}>{printBusy ? labels.printLoading : labels.printZoneRoster}</button>
+              <button type="button" className="secondary-btn small" disabled={printBusy || zoneTotal === 0} onClick={() => printRegistryRecords(`Zone ${zoneDialog} resident sheets`, `Zone ${zoneDialog}`, 'individuals', () => fetchAllZoneResidents(zoneDialog))}>{printBusy ? labels.printLoading : labels.printZoneSheets}</button>
+              {selectedPrintRecords.length > 0 && (
+                <>
+                  <span className="registry-print-selected-count">{selectedPrintRecords.length} {labels.selectedForPrint}</span>
+                  <button type="button" className="secondary-btn small" disabled={printBusy} onClick={() => printRegistryRecords(labels.selectedBatchTitle, selectedBatchSubtitle, 'roster', selectedPrintRecords)}>{labels.printSelectedRoster}</button>
+                  <button type="button" className="secondary-btn small" disabled={printBusy} onClick={() => printRegistryRecords(labels.selectedBatchTitle, selectedBatchSubtitle, 'individuals', selectedPrintRecords)}>{labels.printSelectedSheets}</button>
+                  <button type="button" className="secondary-btn small" disabled={printBusy} onClick={() => setSelectedForPrint({})}>{labels.clearSelection}</button>
+                </>
+              )}
+            </div>
             {!zoneLoading && !zoneError && zoneRecords.length === 0 && <p className="registry-message">{labels.zoneResidentsEmpty}</p>}
             {zoneRecords.length > 0 && (
               <>
                 <div className="registry-table-wrap">
                   <table className="registry-table">
-                    <thead><tr><th>{labels.name}</th><th>{labels.birthDate}</th><th>{labels.maritalStatus}</th><th>{labels.occupation}</th><th>{labels.household}</th><th>{labels.status}</th><th>{labels.recordStatus}</th><th>{labels.editResident}</th></tr></thead>
+                    <thead><tr>
+                      <th><input type="checkbox" checked={pageIsSelected} aria-label={labels.selectPageForPrint} onChange={(event) => {
+                        const checked = event.currentTarget.checked
+                        setSelectedForPrint((current) => {
+                          const next = { ...current }
+                          zoneRecords.forEach((resident) => {
+                            if (checked) next[resident.id] = resident
+                            else delete next[resident.id]
+                          })
+                          return next
+                        })
+                      }} /></th>
+                      <th>{labels.name}</th><th>{labels.birthDate}</th><th>{labels.maritalStatus}</th><th>{labels.occupation}</th><th>{labels.household}</th><th>{labels.status}</th><th>{labels.recordStatus}</th><th>{labels.editResident}</th>
+                    </tr></thead>
                     <tbody>{zoneRecords.map((resident) => (
                       <tr key={resident.id}>
+                        <td><input type="checkbox" checked={Boolean(selectedForPrint[resident.id])} aria-label={`${labels.selectResidentForPrint}: ${resident.firstName} ${resident.lastName}`} onChange={(event) => togglePrintSelection(resident, event.target.checked)} /></td>
                         <td>{resident.firstName} {resident.lastName}</td>
                         <td>{formatDate(resident.birthDate, language) || labels.noDob}</td>
                         <td>{resident.maritalStatus ? labels[resident.maritalStatus === 'Legally Separated' ? 'legallySeparated' : resident.maritalStatus.toLowerCase()] || resident.maritalStatus : '—'}</td>
@@ -1117,6 +1294,9 @@ export default function StaffRegistryPanel({ language = 'en' }) {
                         <td><span className={`registry-status is-${resident.verificationStatus}`}>{resident.verificationStatus === 'verified' ? labels.verified : resident.verificationStatus === 'needs_review' ? labels.needsReview : labels.pending}</span></td>
                         <td><label className="registry-status-select"><span className="sr-only">{labels.updateStatus}: {resident.firstName} {resident.lastName}</span><select value={resident.status} onChange={(event) => updateRecordStatus(resident, event.target.value)}><option value="active">{labels.active}</option><option value="inactive">{labels.inactive}</option><option value="deceased">{labels.deceased}</option><option value="archived">{labels.archived}</option></select></label></td>
                         <td><div className="registry-row-actions">
+                          <button type="button" className="secondary-btn tiny" disabled={printBusy} onClick={() => printRegistryRecords(`${labels.printResident}: ${resident.firstName} ${resident.lastName}`, `Zone ${zoneDialog}`, 'individuals', [resident])}>{labels.printResident}</button>
+                          {resident.householdId && <button type="button" className="secondary-btn tiny" disabled={printBusy} onClick={() => printRegistryRecords(`${labels.printFamilyRoster}: ${resident.householdId}`, `Zone ${zoneDialog}`, 'roster', async () => (await fetchAllZoneResidents(zoneDialog)).filter((member) => member.householdId === resident.householdId))}>{labels.printFamilyRoster}</button>}
+                          {resident.householdId && <button type="button" className="secondary-btn tiny" disabled={printBusy} onClick={() => printRegistryRecords(`${labels.printFamilySheets}: ${resident.householdId}`, `Zone ${zoneDialog}`, 'individuals', async () => (await fetchAllZoneResidents(zoneDialog)).filter((member) => member.householdId === resident.householdId))}>{labels.printFamilySheets}</button>}
                           <button type="button" className="secondary-btn tiny" onClick={() => openResidentEditor(resident)}>{labels.editResident}</button>
                           {resident.verificationStatus !== 'verified' && <><button type="button" className="secondary-btn tiny" onClick={() => updateVerification(resident, 'verified')}>{labels.markVerified}</button><button type="button" className="secondary-btn tiny" onClick={() => updateVerification(resident, 'needs_review')}>{labels.flagReview}</button></>}
                         </div></td>

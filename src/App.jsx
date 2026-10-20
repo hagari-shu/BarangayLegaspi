@@ -8,6 +8,7 @@ import { reportClientError } from './client-error-reporting'
 import { getReportDateRange } from './report-date-range'
 import { isStaffReportResponse } from './report-contract'
 import StaffRegistryPanel from './StaffRegistryPanel'
+import StaffPrintCenter from './StaffPrintCenter'
 import StaffInvitationPage from './StaffInvitationPage'
 import translations from './translations'
 import './App.css'
@@ -3141,6 +3142,12 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
   const [dashboardError, setDashboardError] = useState('')
   const [dashboardUpdatedAt, setDashboardUpdatedAt] = useState(null)
   const [dashboardRefreshKey, setDashboardRefreshKey] = useState(0)
+  const [staffArchives, setStaffArchives] = useState([])
+  const [staffArchivesLoading, setStaffArchivesLoading] = useState(false)
+  const [staffArchivesError, setStaffArchivesError] = useState('')
+  const [staffArchiveMessage, setStaffArchiveMessage] = useState('')
+  const [staffArchiveBusy, setStaffArchiveBusy] = useState(false)
+  const [staffArchiveRefreshKey, setStaffArchiveRefreshKey] = useState(0)
   const [reportRefreshKey, setReportRefreshKey] = useState(0)
   const [reportPeriod, setReportPeriod] = useState('last30')
   const [reportRange, setReportRange] = useState(() => getReportDateRange('last30'))
@@ -3205,7 +3212,7 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
     return () => window.clearTimeout(timeout)
   }, [queueSearch])
 
-  const effectiveQueueStatus = activeTab === 'approvals' ? 'Approved' : queueStatus
+  const effectiveQueueStatus = queueStatus
   useEffect(() => {
     let active = true
     const loadingTimer = window.setTimeout(() => {
@@ -3255,6 +3262,34 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
   }, [debouncedQueueSearch, effectiveQueueStatus, queueZone, queueType, queueFrom, queueTo, queueSort, queueDirection, queuePage, queuePageSize, dashboardRefreshKey, t.requestDashboardUnavailable])
 
   useEffect(() => {
+    if (activeTab !== 'approvals') return undefined
+    let active = true
+    const controller = new AbortController()
+    const loadStaffArchives = async () => {
+      setStaffArchivesLoading(true)
+      setStaffArchivesError('')
+      try {
+        const response = await fetch(`${API_BASE}/staff/archives`, { signal: controller.signal })
+        const data = await response.json().catch(() => ({}))
+        if (!response.ok || !Array.isArray(data.archives)) throw new Error(data.message || t.staffArchivesLoadFailed)
+        if (active) setStaffArchives(data.archives.filter((archive) => archive.name?.startsWith('queue-approvals-')))
+      } catch (loadError) {
+        if (loadError.name !== 'AbortError' && active) {
+          console.error('load staff processed-request archives failed', loadError)
+          setStaffArchivesError(loadError.message || t.staffArchivesLoadFailed)
+        }
+      } finally {
+        if (active) setStaffArchivesLoading(false)
+      }
+    }
+    loadStaffArchives()
+    return () => {
+      active = false
+      controller.abort()
+    }
+  }, [activeTab, staffArchiveRefreshKey, t.staffArchivesLoadFailed])
+
+  useEffect(() => {
     if (activeTab !== 'reports' || reportValidationError) return undefined
 
     let active = true
@@ -3294,11 +3329,16 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
 
   const pendingCount = Number(dashboardSummary.pending) || 0
   const inReviewCount = Number(dashboardSummary.inReview) || 0
-  const needsInformationCount = Number(dashboardSummary.needsInformation) || 0
   const approvedCount = Number(dashboardSummary.approved) || 0
   const totalRequests = Number(dashboardSummary.total) || 0
   const filteredQueueRequests = dashboardRequests
   const requestPages = Math.max(1, Math.ceil(dashboardTotal / queuePageSize))
+  const quickQueueFilters = [
+    { value: 'active', label: t.activeQueue, count: pendingCount + inReviewCount + (Number(dashboardSummary.needsInformation) || 0) },
+    { value: 'Pending', label: t.pendingReview, count: pendingCount },
+    { value: 'In Review', label: t.statusUnderReview, count: inReviewCount },
+    { value: 'Needs Information', label: t.statusNeedsInformation, count: Number(dashboardSummary.needsInformation) || 0 },
+  ]
 
   const setQueueFilter = (status) => {
     setActiveTab('queue')
@@ -3414,6 +3454,54 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
     }
   }
 
+  const archiveProcessedRequests = async () => {
+    if (!window.confirm(t.processedArchiveOlderMessage)) return
+    setStaffArchiveBusy(true)
+    setStaffArchivesError('')
+    setStaffArchiveMessage('')
+    try {
+      const response = await fetch(`${API_BASE}/staff/archive-requests`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ days: 30 }),
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok || !data.archive) throw new Error(data.message || t.staffArchiveFailed)
+      const archive = data.archive
+      setStaffArchiveMessage(archive.count
+        ? t.archiveSummary.replace('{count}', String(archive.count)).replace('{date}', formatRequestDate(archive.archivedAt || new Date().toISOString()))
+        : t.noEligibleProcessedRequests)
+      setDashboardRefreshKey((current) => current + 1)
+      setStaffArchiveRefreshKey((current) => current + 1)
+    } catch (archiveError) {
+      console.error('archive processed resident requests failed', archiveError)
+      setStaffArchivesError(archiveError.message || t.staffArchiveFailed)
+    } finally {
+      setStaffArchiveBusy(false)
+    }
+  }
+
+  const downloadStaffArchive = async (archive) => {
+    try {
+      const response = await fetch(`${API_BASE}/staff/archive-file?name=${encodeURIComponent(archive.name)}`)
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}))
+        throw new Error(data.message || t.staffArchivesLoadFailed)
+      }
+      const downloadUrl = URL.createObjectURL(await response.blob())
+      const link = document.createElement('a')
+      link.href = downloadUrl
+      link.download = archive.name
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      URL.revokeObjectURL(downloadUrl)
+    } catch (downloadError) {
+      console.error('download staff request archive failed', downloadError)
+      setStaffArchivesError(downloadError.message || t.staffArchivesLoadFailed)
+    }
+  }
+
   const toggleAnnouncementChannel = (channelKey) => {
     setAnnouncementForm((prev) => {
       const nextChannels = new Set(prev.socialChannels || [])
@@ -3520,11 +3608,19 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
             )}
             <button
               type="button"
+              className={`nav-item ${activeTab === 'printing' ? 'active' : ''}`}
+              aria-current={activeTab === 'printing' ? 'page' : undefined}
+              onClick={() => setActiveTab('printing')}
+            >
+              <span className="nav-icon">🖨️</span><span>{t.printCenterNav}</span>
+            </button>
+            <button
+              type="button"
               className={`nav-item ${activeTab === 'approvals' ? 'active' : ''}`}
               aria-current={activeTab === 'approvals' ? 'page' : undefined}
               onClick={() => { setActiveTab('approvals'); setOpenRequestPanel('approvals'); setQueuePage(1) }}
             >
-              <span className="nav-icon">✓</span><span>{t.approvals}</span>
+              <span className="nav-icon">🗄️</span><span>{t.processedArchiveNav}</span>
             </button>
             <button
               type="button"
@@ -3557,7 +3653,7 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
           <div className="welcome-row">
             <div>
               <p className="eyebrow">{t.operations}</p>
-              <h1>{activeTab === 'queue' ? t.staffDashboardTitle : activeTab === 'reports' ? t.serviceReports : activeTab === 'announcements' ? t.announcements : activeTab === 'staff' ? t.staffDirectoryAndOfficials : activeTab === 'residents' ? (language === 'fil' ? 'Talaan ng residente' : 'Resident registry') : t.approvalsManagement}</h1>
+              <h1>{activeTab === 'queue' ? t.staffDashboardTitle : activeTab === 'printing' ? t.printCenterTitle : activeTab === 'reports' ? t.serviceReports : activeTab === 'announcements' ? t.announcements : activeTab === 'staff' ? t.staffDirectoryAndOfficials : activeTab === 'residents' ? (language === 'fil' ? 'Talaan ng residente' : 'Resident registry') : t.approvalsManagement}</h1>
               {activeTab === 'queue' && <p className="staff-dashboard-subtitle">{t.staffDashboardSubtitle}</p>}
             </div>
             {activeTab === 'queue' ? (
@@ -3568,10 +3664,10 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
                   {dashboardLoading ? t.loadingRequests : t.refreshRequests}
                 </button>
               </div>
-            ) : !['residents', 'staff'].includes(activeTab) && <span className="counter-pill">{activeTab === 'approvals' ? approvedCount : totalRequests} {activeTab === 'approvals' ? t.processed : t.requests}</span>}
+            ) : !['residents', 'staff', 'printing', 'approvals'].includes(activeTab) && <span className="counter-pill">{totalRequests} {t.requests}</span>}
           </div>
 
-          {!['residents', 'staff'].includes(activeTab) && <div className="stats-grid staff-dashboard-metrics" aria-label={t.staffSummaryLabel}>
+          {!['residents', 'staff', 'printing', 'approvals'].includes(activeTab) && <div className="stats-grid staff-dashboard-metrics" aria-label={t.staffSummaryLabel}>
             <button className="stat-card staff-metric-card accent" type="button" onClick={() => setQueueFilter('Pending')}>
               <span className="label">{t.pendingReviewMetric}</span>
               <span className="stat-number">{pendingCount}</span>
@@ -3597,33 +3693,17 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
           <div className="dashboard-body">
             <div className="main-column">
               {activeTab === 'residents' && <StaffRegistryPanel language={language} />}
+              {activeTab === 'printing' && <StaffPrintCenter language={language} />}
               {activeTab === 'queue' && (
                 <>
                 <section className="panel-card needs-attention" aria-labelledby="needs-attention-title">
                   <div className="panel-header left-align">
-                    <h2 id="needs-attention-title">{t.needsAttention}</h2>
+                    <h2 id="needs-attention-title">{t.printCenterTitle}</h2>
                   </div>
-                  <div className="attention-items">
-                    {pendingCount > 0 && (
-                      <button type="button" onClick={() => setQueueFilter('Pending')}>
-                        <strong>{pendingCount}</strong><span>{t.pendingReviewMetric}</span><small>{t.pendingAttentionDescription}</small>
-                      </button>
-                    )}
-                    {inReviewCount > 0 && (
-                      <button type="button" onClick={() => setQueueFilter('In Review')}>
-                        <strong>{inReviewCount}</strong><span>{t.inProcessingMetric}</span><small>{t.reviewAttentionDescription}</small>
-                      </button>
-                    )}
-                    {needsInformationCount > 0 && (
-                      <button type="button" onClick={() => setQueueFilter('Needs Information')}>
-                        <strong>{needsInformationCount}</strong><span>{t.statusNeedsInformation}</span><small>{t.informationAttentionDescription}</small>
-                      </button>
-                    )}
-                    {!dashboardLoading && !dashboardError && pendingCount + inReviewCount + needsInformationCount === 0 && (
-                      <p className="attention-empty">{t.attentionEmpty}</p>
-                    )}
+                  <div className="staff-print-launcher">
+                    <p>{t.printCenterSummary}</p>
+                    <button type="button" className="primary-btn small" onClick={() => setActiveTab('printing')}>{t.openPrintCenter}</button>
                   </div>
-                  <p className="workflow-limit-notice">{t.noReleaseOrDeadlineTracking}</p>
                 </section>
 
                 <article className="panel-card" id="staff-request-queue">
@@ -3641,46 +3721,73 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
                   </button>
 
                   {openRequestPanel === 'queue' && <>
-                  <div className="staff-queue-filters">
-                    <input type="search" value={queueSearch} onChange={(event) => { setQueueSearch(event.target.value); setQueuePage(1) }} placeholder={t.requestQueueSearch} aria-label={t.requestQueueSearch} />
-                    <select value={queueStatus} onChange={(event) => { setQueueStatus(event.target.value); setQueuePage(1) }} aria-label={t.requestStatusFilter}>
-                      <option value="active">{t.activeQueue}</option>
-                      <option value="all">{t.allStatuses}</option>
-                      <option value="Pending">{t.pending}</option>
-                      <option value="In Review">{t.statusUnderReview}</option>
-                      <option value="Needs Information">{t.statusNeedsInformation}</option>
-                      <option value="Approved">{t.approved}</option>
-                      <option value="Rejected">{t.statusRejected}</option>
-                    </select>
-                    <select value={queueType} onChange={(event) => { setQueueType(event.target.value); setQueuePage(1) }} aria-label={t.documentTypeFilter}>
-                      <option value="all">{t.allDocumentTypes}</option>
-                      {dashboardDocumentTypes.map((type) => (
-                        <option key={type} value={type}>{type}</option>
+                  <div className="staff-queue-controls">
+                    <div className="staff-queue-toolbar">
+                      <input type="search" value={queueSearch} onChange={(event) => { setQueueSearch(event.target.value); setQueuePage(1) }} placeholder={t.requestQueueSearch} aria-label={t.requestQueueSearch} />
+                      <button type="button" className="secondary-btn small" disabled={dashboardLoading} onClick={() => setDashboardRefreshKey((current) => current + 1)}>{dashboardLoading ? t.loadingRequests : t.refreshRequests}</button>
+                    </div>
+                    <nav className="staff-queue-workflow-filters" aria-label={t.requestStatusFilter}>
+                      {quickQueueFilters.map((filter) => (
+                        <button
+                          type="button"
+                          key={filter.value}
+                          className={`staff-queue-workflow-filter${queueStatus === filter.value ? ' active' : ''}`}
+                          aria-pressed={queueStatus === filter.value}
+                          onClick={() => { setQueueStatus(filter.value); setQueuePage(1) }}
+                        >
+                          <span>{filter.label}</span><strong>{filter.count}</strong>
+                        </button>
                       ))}
-                    </select>
-                    <select value={queueZone} onChange={(event) => { setQueueZone(event.target.value); setQueuePage(1) }} aria-label={t.requestZoneFilter}>
-                      <option value="all">{t.allZonesLabel}</option>
-                      {[1, 2, 3, 4, 5, 6, 7].map((zone) => <option key={zone} value={String(zone)}>Zone {zone}</option>)}
-                    </select>
-                    <label>{t.fromDate}<input type="date" max={queueTo || undefined} value={queueFrom} onChange={(event) => { setQueueFrom(event.target.value); setQueuePage(1) }} /></label>
-                    <label>{t.toDate}<input type="date" min={queueFrom || undefined} value={queueTo} onChange={(event) => { setQueueTo(event.target.value); setQueuePage(1) }} /></label>
-                    <label>{t.sortRequestsBy}
-                      <select value={queueSort} onChange={(event) => { setQueueSort(event.target.value); setQueuePage(1) }}>
-                        <option value="date">{t.sortSubmissionDate}</option>
-                        <option value="status">{t.sortStatus}</option>
-                      </select>
-                    </label>
-                    <label>{t.sortDirection}
-                      <select value={queueDirection} onChange={(event) => { setQueueDirection(event.target.value); setQueuePage(1) }}>
-                        <option value="desc">{t.descending}</option>
-                        <option value="asc">{t.ascending}</option>
-                      </select>
-                    </label>
-                    <label>{t.requestPageSize}
-                      <select value={queuePageSize} onChange={(event) => { setQueuePageSize(Number(event.target.value)); setQueuePage(1) }}>
-                        {[10, 25, 50].map((size) => <option key={size} value={size}>{size}</option>)}
-                      </select>
-                    </label>
+                    </nav>
+                    <details className="staff-queue-advanced">
+                      <summary>{t.advancedFilters}</summary>
+                      <div className="staff-queue-filters">
+                        <label>{t.requestStatusFilter}
+                          <select value={queueStatus} onChange={(event) => { setQueueStatus(event.target.value); setQueuePage(1) }}>
+                            <option value="active">{t.activeQueue}</option>
+                            <option value="all">{t.allStatuses}</option>
+                            <option value="Pending">{t.pending}</option>
+                            <option value="In Review">{t.statusUnderReview}</option>
+                            <option value="Needs Information">{t.statusNeedsInformation}</option>
+                            <option value="Approved">{t.approved}</option>
+                            <option value="Rejected">{t.statusRejected}</option>
+                          </select>
+                        </label>
+                        <label>{t.documentTypeFilter}
+                          <select value={queueType} onChange={(event) => { setQueueType(event.target.value); setQueuePage(1) }}>
+                            <option value="all">{t.allDocumentTypes}</option>
+                            {dashboardDocumentTypes.map((type) => (
+                              <option key={type} value={type}>{type}</option>
+                            ))}
+                          </select>
+                        </label>
+                        <label>{t.requestZoneFilter}
+                          <select value={queueZone} onChange={(event) => { setQueueZone(event.target.value); setQueuePage(1) }}>
+                            <option value="all">{t.allZonesLabel}</option>
+                            {[1, 2, 3, 4, 5, 6, 7].map((zone) => <option key={zone} value={String(zone)}>Zone {zone}</option>)}
+                          </select>
+                        </label>
+                        <label>{t.fromDate}<input type="date" max={queueTo || undefined} value={queueFrom} onChange={(event) => { setQueueFrom(event.target.value); setQueuePage(1) }} /></label>
+                        <label>{t.toDate}<input type="date" min={queueFrom || undefined} value={queueTo} onChange={(event) => { setQueueTo(event.target.value); setQueuePage(1) }} /></label>
+                        <label>{t.sortRequestsBy}
+                          <select value={queueSort} onChange={(event) => { setQueueSort(event.target.value); setQueuePage(1) }}>
+                            <option value="date">{t.sortSubmissionDate}</option>
+                            <option value="status">{t.sortStatus}</option>
+                          </select>
+                        </label>
+                        <label>{t.sortDirection}
+                          <select value={queueDirection} onChange={(event) => { setQueueDirection(event.target.value); setQueuePage(1) }}>
+                            <option value="desc">{t.descending}</option>
+                            <option value="asc">{t.ascending}</option>
+                          </select>
+                        </label>
+                        <label>{t.requestPageSize}
+                          <select value={queuePageSize} onChange={(event) => { setQueuePageSize(Number(event.target.value)); setQueuePage(1) }}>
+                            {[10, 25, 50].map((size) => <option key={size} value={size}>{size}</option>)}
+                          </select>
+                        </label>
+                      </div>
+                    </details>
                   </div>
                   {dashboardLoading && <p className="request-dashboard-loading" role="status">{t.loadingRequests}</p>}
                   {dashboardError && <div className="request-dashboard-error" role="alert">
@@ -3695,12 +3802,7 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
                           <th>{t.resident}</th>
                           <th>{t.requestType}</th>
                           <th>{t.submissionDate}</th>
-                          <th>{t.purpose}</th>
                           <th>{t.status}</th>
-                          <th>{t.deliveryMethodLabel}</th>
-                          <th>{t.latestFollowUp}</th>
-                          <th>{t.requestStatusHistory}</th>
-                          <th>{t.priority}</th>
                           <th>{t.actionsLabel}</th>
                         </tr>
                       </thead>
@@ -3709,21 +3811,13 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
                           <tr key={item.id}>
                             <td><button type="button" className="request-id-button" aria-label={t.viewRequestDetails.replace('{id}', String(item.id))} onClick={() => setSelectedRequest(item)}>{item.id}</button></td>
                             <td>{item.first_name || item.firstName || t.resident} {item.last_name || item.lastName || ''}</td>
-                            <td>{item.type}</td>
+                            <td>{item.type}{item.type === 'Emergency Help' && <span className="priority-badge urgent">{t.urgentLabel}</span>}</td>
                             <td>{formatRequestDate(item.date || item.createdAt || item.created_at)}</td>
-                            <td>{item.purpose}</td>
                             <td><span className={`status-badge ${(item.status || '').toLowerCase().replace(/\s+/g, '-')}`}>{getRequestStatusLabel(item.status, t)}</span></td>
                             <td>
-                              {item.deliveryMethod === 'physical' || item.delivery_method === 'physical' ? t.physicalCopy : t.onlineCopy}
-                              {(item.deliveryNote || item.delivery_note) && <small className="request-staff-note">{item.deliveryNote || item.delivery_note}</small>}
-                            </td>
-                            <td>{(item.followUps || item.follow_ups || []).slice(-1)[0]?.message || '—'}</td>
-                            <td><details className="request-history-details"><summary>{t.requestStatusHistory}</summary><RequestHistory history={item.statusHistory || item.status_history} t={t} /></details></td>
-                            <td><span className={`priority-badge ${item.type === 'Emergency Help' ? 'urgent' : 'normal'}`}>{item.type === 'Emergency Help' ? t.urgentLabel : t.normalLabel}</span></td>
-                            <td>
                               {['Approved', 'Rejected'].includes(item.status)
-                                ? <span>{getRequestStatusLabel(item.status, t)}</span>
-                                : <button type="button" className="small-action success" onClick={() => setSelectedRequest(item)}>{t.requestStatusAction}</button>}
+                                ? <button type="button" className="secondary-btn small" onClick={() => setSelectedRequest(item)}>{t.openRequestDetails}</button>
+                                : <button type="button" className="small-action success" onClick={() => setSelectedRequest(item)}>{t.openRequestDetails}</button>}
                             </td>
                           </tr>
                         ))}
@@ -3745,59 +3839,51 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
               )}
 
               {activeTab === 'approvals' && (
-                <article className="panel-card">
-                  <button
-                    type="button"
-                    className="collapsible-panel-header"
-                    aria-expanded={openRequestPanel === 'approvals'}
-                    onClick={() => setOpenRequestPanel((current) => current === 'approvals' ? null : 'approvals')}
-                  >
-                    <span>
-                      <h2>{t.approvedRequests}</h2>
-                      <span className="soft-label">{approvedCount} {t.approved}</span>
-                    </span>
-                    <span className={`collapse-chevron ${openRequestPanel === 'approvals' ? 'open' : ''}`}>▾</span>
-                  </button>
-
-                  {openRequestPanel === 'approvals' && <div className="request-table-wrap">
-                    <table className="request-table">
-                      <thead>
-                        <tr>
-                          <th>{t.resident}</th>
-                          <th>{t.requestType}</th>
-                          <th>{t.purpose}</th>
-                          <th>{t.status}</th>
-                          <th>{t.submissionDate}</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {dashboardRequests.map((item) => (
-                          <tr key={item.id}>
-                            <td>{item.first_name || item.firstName || t.resident} {item.last_name || item.lastName || ''}</td>
-                            <td>{item.type}</td>
-                            <td>{item.purpose}</td>
-                            <td><span className={`status-badge approved`}>{getRequestStatusLabel(item.status, t)}</span></td>
-                            <td><span className="soft-label">{formatRequestDate(item.date || item.createdAt || item.created_at)}</span></td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                    {dashboardLoading && <p className="request-dashboard-loading" role="status">{t.loadingRequests}</p>}
-                    {!dashboardLoading && !dashboardError && dashboardRequests.length === 0 && <div className="empty-state">{t.approvalsEmpty}</div>}
-                  </div>}
-                  {dashboardError && <div className="request-dashboard-error" role="alert">
-                    <span>{dashboardError}</span>
-                    <button type="button" className="secondary-btn small" onClick={() => setDashboardRefreshKey((current) => current + 1)}>{t.retry}</button>
-                  </div>}
-                  {openRequestPanel === 'approvals' && <div className="request-pagination">
-                    <span>{t.pageOfPages.replace('{page}', String(queuePage)).replace('{pages}', String(requestPages))} · {dashboardTotal}</span>
+                <section className="staff-archive-page" aria-labelledby="staff-archive-title">
+                  <article className="panel-card staff-archive-intro">
                     <div>
-                      <button type="button" className="secondary-btn small" disabled={dashboardLoading || queuePage <= 1} onClick={() => setQueuePage((page) => Math.max(1, page - 1))}>{t.previousPage}</button>
-                      <button type="button" className="secondary-btn small" disabled={dashboardLoading || queuePage >= requestPages} onClick={() => setQueuePage((page) => Math.min(requestPages, page + 1))}>{t.nextPage}</button>
+                      <h2 id="staff-archive-title">{t.approvalsManagement}</h2>
+                      <p>{t.processedArchiveHelp}</p>
                     </div>
+                    <div className="staff-archive-summary">
+                      <strong>{approvedCount + (Number(dashboardSummary.rejected) || 0)}</strong>
+                      <span>{t.processedArchiveCount}</span>
+                    </div>
+                    <div className="staff-archive-actions">
+                      <button type="button" className="primary-btn small" onClick={archiveProcessedRequests} disabled={staffArchiveBusy || dashboardLoading}>
+                        {staffArchiveBusy ? t.working : t.archiveOlderThan30Days}
+                      </button>
+                      <button type="button" className="secondary-btn small" onClick={() => setStaffArchiveRefreshKey((current) => current + 1)} disabled={staffArchivesLoading}>
+                        {staffArchivesLoading ? t.loadingRequests : t.refreshRequests}
+                      </button>
+                    </div>
+                  </article>
+                  {staffArchiveMessage && <p className="staff-archive-message" role="status">{staffArchiveMessage}</p>}
+                  {staffArchivesError && <div className="request-dashboard-error" role="alert">
+                    <span>{staffArchivesError}</span>
+                    <button type="button" className="secondary-btn small" onClick={() => setStaffArchiveRefreshKey((current) => current + 1)}>{t.retry}</button>
                   </div>}
-
-                </article>
+                  <article className="panel-card staff-archive-files">
+                    <div className="panel-header">
+                      <h2>{t.processedArchiveFiles}</h2>
+                      <span className="soft-label">{staffArchives.length}</span>
+                    </div>
+                    {staffArchivesLoading && <p className="request-dashboard-loading" role="status">{t.loadingRequests}</p>}
+                    {!staffArchivesLoading && staffArchives.length > 0 ? (
+                      <ul>
+                        {staffArchives.map((archive) => (
+                          <li key={archive.name}>
+                            <div>
+                              <strong>{archive.name}</strong>
+                              <small>{t.processedArchiveDate}: {formatRequestDate(archive.mtime || archive.created_at)} · {t.processedArchiveSize}: {Math.max(1, Math.round(Number(archive.size || 0) / 1024))} KB</small>
+                            </div>
+                            <button type="button" className="secondary-btn small" onClick={() => downloadStaffArchive(archive)}>{t.processedArchiveDownload}</button>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : !staffArchivesLoading && !staffArchivesError && <div className="empty-state">{t.processedArchiveNoFiles}</div>}
+                  </article>
+                </section>
               )}
 
               {activeTab === 'reports' && (
@@ -4257,8 +4343,14 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
               <div><dt>{t.submissionDate}</dt><dd>{formatRequestDate(selectedRequest.date || selectedRequest.createdAt || selectedRequest.created_at)}</dd></div>
               <div><dt>{t.status}</dt><dd>{getRequestStatusLabel(selectedRequest.status, t)}</dd></div>
               <div><dt>{t.purpose}</dt><dd>{selectedRequest.purpose || '—'}</dd></div>
-              {(selectedRequest.notes || selectedRequest.deliveryNote || selectedRequest.delivery_note) && (
-                <div><dt>{t.notesLabel}</dt><dd>{selectedRequest.notes || selectedRequest.deliveryNote || selectedRequest.delivery_note}</dd></div>
+              <div><dt>{t.deliveryMethodLabel}</dt><dd>{selectedRequest.deliveryMethod === 'physical' || selectedRequest.delivery_method === 'physical' ? t.physicalCopy : t.onlineCopy}</dd></div>
+              {(selectedRequest.deliveryNote || selectedRequest.delivery_note) && <div><dt>{t.deliveryNoteLabel}</dt><dd>{selectedRequest.deliveryNote || selectedRequest.delivery_note}</dd></div>}
+              {selectedRequest.notes && <div><dt>{t.notesLabel}</dt><dd>{selectedRequest.notes}</dd></div>}
+              {((selectedRequest.followUps || selectedRequest.follow_ups || []).length > 0) && (
+                <div>
+                  <dt>{t.latestFollowUp}</dt>
+                  <dd>{(selectedRequest.followUps || selectedRequest.follow_ups).slice(-1)[0].message}</dd>
+                </div>
               )}
             </dl>
             <details className="request-history-details" open>

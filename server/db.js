@@ -913,6 +913,8 @@ export async function listResidentRegistry(filters = {}) {
     if (filters.ageStart && filters.ageEnd && (!resident.birthDate || resident.birthDate < filters.ageStart || resident.birthDate > filters.ageEnd)) return false
     if (filters.zone && Number(resident.zone) !== Number(filters.zone)) return false
     if (filters.purok && resident.purok !== filters.purok) return false
+    if (filters.verificationStatus && resident.verificationStatus !== filters.verificationStatus) return false
+    if (filters.excludeVerificationStatus && resident.verificationStatus === filters.excludeVerificationStatus) return false
     return true
   }).sort((left, right) => (
     Number(left.zone || 99) - Number(right.zone || 99)
