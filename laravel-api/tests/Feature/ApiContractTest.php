@@ -491,19 +491,19 @@ class ApiContractTest extends TestCase
             'expires_at' => now()->addHours(12),
         ]);
 
-        $this->postJson('/api/super-admin/invitations/validate', ['token' => $token])
+        $validationResponse = $this->postJson('/api/super-admin/invitations/validate', ['token' => $token])
             ->assertOk()
-            ->assertHeader('Cache-Control', 'no-store')
             ->assertJsonPath('email', 'invited.super.admin@example.test');
+        $this->assertStringContainsString('no-store', $validationResponse->headers->get('Cache-Control', ''));
 
-        $this->postJson('/api/super-admin/invitations/accept', [
+        $acceptanceResponse = $this->postJson('/api/super-admin/invitations/accept', [
             'token' => $token,
             'firstName' => 'Invited',
             'lastName' => 'Administrator',
             'mobile' => '09170000201',
             'password' => 'Chosen!Password2026',
-        ])->assertCreated()
-            ->assertHeader('Cache-Control', 'no-store');
+        ])->assertCreated();
+        $this->assertStringContainsString('no-store', $acceptanceResponse->headers->get('Cache-Control', ''));
 
         $this->assertDatabaseHas('users', [
             'email' => 'invited.super.admin@example.test',

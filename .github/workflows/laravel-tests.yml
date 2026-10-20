@@ -45,4 +45,5 @@ jobs:
       - name: Run Laravel tests
         env:
           APP_ENV: testing
+          APP_KEY: 01234567890123456789012345678901
         run: php artisan test
