@@ -11,7 +11,6 @@ Route::post('/announcements/{id}/retract', [StaffOperationsController::class, 'r
 Route::get('/staff/dashboard-requests', [StaffOperationsController::class, 'dashboardRequests'])->middleware(['auth.api', 'role:staff,admin']);
 Route::get('/staff/reports/export.csv', [StaffOperationsController::class, 'exportReports'])->middleware(['auth.api', 'role:staff,admin']);
 Route::get('/staff/reports', [StaffOperationsController::class, 'reports'])->middleware(['auth.api', 'role:staff,admin']);
-Route::post('/staff/reports', [StaffOperationsController::class, 'createReport'])->middleware(['auth.api', 'role:admin']);
 Route::post('/staff/presence', [StaffOperationsController::class, 'updatePresence'])->middleware(['auth.api', 'role:staff']);
 Route::get('/admin/staff/presence', [StaffOperationsController::class, 'staffPresence'])->middleware(['auth.api', 'role:admin']);
 Route::post('/admin/staff/{id}/password', [StaffOperationsController::class, 'resetStaffPassword'])->middleware(['auth.api', 'role:admin']);

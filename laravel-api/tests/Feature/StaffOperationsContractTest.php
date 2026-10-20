@@ -261,7 +261,7 @@ class StaffOperationsContractTest extends TestCase
         $this->assertDatabaseCount('announcements', 2);
     }
 
-    public function test_reports_creation_and_staff_password_reset_are_role_checked_and_audited(): void
+    public function test_staff_password_reset_is_role_checked_and_audited(): void
     {
         $staffToken = $this->addUser('00000000-0000-4000-8000-000000000551', 'staff', '09170000551');
         $adminToken = $this->addUser('00000000-0000-4000-8000-000000000552', 'admin', '09170000552');
@@ -293,13 +293,8 @@ class StaffOperationsContractTest extends TestCase
         ]);
 
         $this->withHeader('Authorization', 'Bearer '.$staffToken)
-            ->postJson('/api/staff/reports', ['type' => 'Safety', 'title' => 'Broken light'])
+            ->postJson('/api/admin/staff/'.$staffId.'/password', ['password' => 'Replacement!2026'])
             ->assertForbidden();
-        $this->withHeader('Authorization', 'Bearer '.$adminToken)
-            ->postJson('/api/staff/reports', ['type' => 'Safety', 'title' => 'Broken light'])
-            ->assertCreated()
-            ->assertJsonPath('report.status', 'Open');
-
         $this->withHeader('Authorization', 'Bearer '.$adminToken)
             ->postJson('/api/admin/staff/'.$staffId.'/password', ['password' => 'Replacement!2026'])
             ->assertOk()

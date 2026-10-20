@@ -51,21 +51,30 @@ for (const entry of readdirSync(laravelRoutesDirectory, { withFileTypes: true })
 const missingRoutes = [...nodeRoutes.entries()]
   .filter(([route]) => !laravelRoutes.has(route))
   .sort(([left], [right]) => left.localeCompare(right))
+const extraRoutes = [...laravelRoutes]
+  .filter((route) => !nodeRoutes.has(route))
+  .sort((left, right) => left.localeCompare(right))
 
 console.log(`Node API routes: ${nodeRoutes.size}`)
 console.log(`Laravel API routes: ${laravelRoutes.size}`)
 console.log(`Routes missing from Laravel: ${missingRoutes.length}`)
+console.log(`Routes not present in Node: ${extraRoutes.length}`)
 
 if (missingRoutes.length > 0) {
   for (const [route, source] of missingRoutes) {
     console.log(`- ${route} (${source})`)
   }
-  if (missingRoutes.length > maximumMissing) {
-    console.error(`Laravel route parity check failed: ${missingRoutes.length} missing routes exceeds the allowed maximum of ${maximumMissing}.`)
-    process.exitCode = 1
-  } else {
-    console.log(`Route gap is within the allowed maximum of ${maximumMissing}; Laravel is not yet API-parity complete.`)
-  }
-} else {
+}
+if (extraRoutes.length > 0) {
+  console.log('Laravel-only routes:')
+  for (const route of extraRoutes) console.log(`- ${route}`)
+}
+
+if (missingRoutes.length > maximumMissing) {
+  console.error(`Laravel route parity check failed: ${missingRoutes.length} missing routes exceeds the allowed maximum of ${maximumMissing}.`)
+  process.exitCode = 1
+} else if (missingRoutes.length === 0) {
   console.log('All statically registered Node API routes are present in Laravel.')
+} else {
+  console.log(`Route gap is within the allowed maximum of ${maximumMissing}; Laravel is not yet API-parity complete.`)
 }

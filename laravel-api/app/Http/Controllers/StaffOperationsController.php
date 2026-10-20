@@ -584,47 +584,6 @@ class StaffOperationsController extends Controller
         }
     }
 
-    public function createReport(Request $request): JsonResponse
-    {
-        $type = $this->clean($request->input('type'));
-        $title = $this->clean($request->input('title'));
-        $description = $this->clean($request->input('description'));
-        $severity = $this->clean($request->input('severity'));
-        $zone = (int) $request->input('zone', 0) ?: 1;
-        if (!$type || !$title) {
-            return response()->json(['message' => 'Type and title are required.'], 400);
-        }
-
-        $report = [
-            'id' => 'RPT-'.substr((string) now()->valueOf(), -6),
-            'type' => $type,
-            'title' => $title,
-            'description' => $description,
-            'severity' => $severity ?: null,
-            'zone' => $zone,
-            'status' => 'Open',
-            'date' => now()->toISOString(),
-        ];
-        try {
-            DB::table('reports')->insert([
-                'id' => $report['id'],
-                'type' => $report['type'],
-                'title' => $report['title'],
-                'description' => $report['description'],
-                'severity' => $report['severity'],
-                'zone' => $zone,
-                'status' => 'Open',
-                'report_date' => $report['date'],
-            ]);
-
-            return response()->json(['report' => $report], 201);
-        } catch (Throwable $error) {
-            Log::error('Staff report creation failed', ['exception' => $error::class]);
-
-            return response()->json(['message' => 'Unable to create report.'], 500);
-        }
-    }
-
     public function updatePresence(Request $request): JsonResponse
     {
         $actor = $request->attributes->get('actor');
