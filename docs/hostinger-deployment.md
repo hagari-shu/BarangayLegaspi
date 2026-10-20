@@ -17,16 +17,43 @@ The active production frontend and API currently use Vercel and Render. Keep tho
 4. Plan server operations: security updates, firewall, SSH key-only access, TLS renewal, process supervision, log rotation, monitoring/alerts, PostgreSQL backups, and restore drills. Hostinger advertises weekly VPS backups; weekly snapshots alone are not an adequate backup plan for a production resident database.
 5. Arrange a maintenance window and an authorized database operator. Resident and staff records are sensitive; transfer backups only through approved, encrypted channels with access limited to the migration operators. Do not put credentials in GitHub, the repository, or chat.
 
-## Provision a staging VPS
+## Provision the VPS
 
-1. Create an isolated staging VPS and provision a non-production SSH key. Do not point production DNS at it.
-2. Install and configure a supported Ubuntu LTS release, Nginx, Node.js 22.12 or newer, PHP 8.2 or newer with PHP-FPM and `pdo_pgsql`, Composer, and PostgreSQL. Keep PostgreSQL bound to localhost/private networking; do not expose port 5432 publicly.
-3. Create separate least-privilege PostgreSQL roles and empty databases for Node staging and Laravel staging. Restrict the firewall to SSH from trusted addresses plus HTTP/HTTPS; enable automatic security updates and SSH key authentication.
-4. Deploy the Node API from repository `main` with `npm ci --omit=dev` and the startup command `npm start` under a process supervisor such as systemd. Configure private environment variables including `NODE_ENV=production`, `PORT`, `DATABASE_URL`, `JWT_SECRET`, and `CORS_ORIGINS`. Add other settings only when the corresponding feature is enabled.
-5. Configure Nginx to serve the built Vite frontend over HTTPS and proxy `/api/` to the Node API. This same-origin layout avoids cross-origin browser requests. If using separate origins, set `CORS_ORIGINS` to the exact HTTPS frontend origin(s); never use `*`.
-6. Preserve the current production `JWT_SECRET` and `MFA_ENCRYPTION_KEY` during an approved production database migration. Changing them can invalidate sessions or prevent existing MFA credentials from decrypting. Keep secrets in root-readable environment files or a secret manager, never in source control or chat.
-7. Leave all `ADMIN_*` seed variables unset when importing the production database. The database initialization path creates schema but should not create another administrator.
-8. Verify `https://<website-domain>/api/health` returns HTTP 200 and reports PostgreSQL storage. Confirm startup logs contain no database or configuration errors.
+1. Provision a non-production SSH key for this VPS. Use a separate Compose project and database volume for migration rehearsal; do not point production DNS at it.
+2. Wait until hPanel reports the VPS is running. Record its public IP and confirm the operating system, region, backups, firewall, and recovery console. Do not share a root password or private SSH key in chat.
+3. Use the current supported Ubuntu LTS image. Install Docker Engine and the Compose plugin from Docker's official Ubuntu instructions, plus Nginx, Certbot, `python3-certbot-nginx`, `ufw`, `unattended-upgrades`, and `postgresql-client`. The application containers provide Node, PHP, and PostgreSQL; do not expose either database port publicly.
+4. Create a non-root deployment account and configure SSH key authentication. Docker group membership is root-equivalent; limit it to trusted VPS administrators. Configure the firewall to deny inbound traffic by default, allow SSH from trusted IPs, and allow only HTTP/HTTPS publicly. Enable unattended security updates and set up an independent backup destination and restore drill.
+5. Configure DNS only after confirming authorized ownership and the VPS address. For initial testing use a temporary hostname or an approved staging subdomain with HTTPS; do not route the official domain or resident traffic to an untested VPS.
+
+## Prepare and test the Hostinger stack
+
+The repository now includes `Dockerfile.hostinger`, `docker-compose.hostinger.yml`, an inner application Nginx config, a host HTTPS reverse-proxy template, a PostgreSQL least-privilege initialization script, and `.env.hostinger.example`. The stack runs the frontend and Node API on a private Docker network, with PostgreSQL not published to the Internet. The PostgreSQL administrator is separate from the two application database owners. Laravel is optional and isolated behind a Compose profile with its own database; it is not used by the frontend while API parity is incomplete.
+
+1. Check out the reviewed deployment commit on the VPS and copy `.env.hostinger.example` to `.env.hostinger`. Keep the private environment file outside Git; restrict it to the deployment operator (`chmod 600 .env.hostinger`). Generate distinct random values locally/on the VPS with a cryptographically secure generator. Use hexadecimal-only database passwords so the internal PostgreSQL URLs parse correctly. Never paste production credentials into chat or commit them. Set distinct random values for the database administrator, Node database role, Laravel database role, Node JWT secret, and Laravel keys. Existing production JWT/MFA keys must be transferred through a protected secret channel only at cutover. The PostgreSQL init scripts run only when a database volume is first initialized; changing the environment file later does not rotate role passwords or reset the database.
+2. Set `PUBLIC_APP_URL` and the exact `CORS_ORIGINS` to the HTTPS staging hostname during rehearsal. Configure only integrations that are ready to test. Keep `SKIP_SEED=true` (Compose enforces it) and do not add any `ADMIN_*` seed variables; this prevents demo accounts or a second administrator from being created.
+3. For the migration rehearsal, make a protected backup of the current PostgreSQL database, restore it only to a separate staging Compose project/database, and restrict access to the authorized operators. Use synthetic test accounts and do not expose the restored resident data or its staging API publicly. Verify that the Node startup schema changes complete on that restored copy, `/api/health` reports PostgreSQL, sign-in, registration approval, resident/staff/Admin workflows, password reset delivery, MFA, uploads, audit records, and the required integrations behave as expected. Keep production JWT/MFA secrets out of the rehearsal; this means existing sessions and MFA cannot be used for staging validation.
+4. Start only the staging database first, restore the rehearsal dump into that empty database, and then start the stack. Keep the dump in a root-only directory and remove it only under the approved retention procedure. The API must not start against the database before the restore:
+
+   ```sh
+   docker compose --env-file .env.migration-test -f docker-compose.hostinger.yml -p brgy-migration-test up -d node-db
+   docker compose --env-file .env.migration-test -f docker-compose.hostinger.yml -p brgy-migration-test exec -T node-db sh -c 'pg_restore --exit-on-error --no-owner --no-acl --role="$NODE_DB_USER" -U "$POSTGRES_USER" -d "$NODE_DB_NAME"' < /root/protected/authorized-staging-copy.dump
+   docker compose --env-file .env.migration-test -f docker-compose.hostinger.yml -p brgy-migration-test up --build -d
+   docker compose --env-file .env.migration-test -f docker-compose.hostinger.yml -p brgy-migration-test ps
+   ```
+
+   Set `WEB_PORT=8081` in `.env.migration-test` so this project binds only to `127.0.0.1:8081`. Use an SSH tunnel to test it locally; do not publish the staging port or enable official DNS. Keep the staging PostgreSQL volume separate from the production stack. Do not use a production dump for rehearsal unless specifically approved and secured; remove or anonymize resident data before functional tests wherever possible.
+5. After confirming authorized DNS points to this VPS, install `deploy/hostinger/nginx-http-challenge.conf`, create `/var/www/html/.well-known/acme-challenge`, and reload Nginx. Obtain a certificate with Certbot webroot mode for the approved hostname(s) (provide an authorized renewal-contact email during the command). Enable the HTTPS server block in `deploy/hostinger/nginx-host.conf` only after certificate files exist; validate with `nginx -t`, reload, and verify renewal. The host proxy should remain the only public path to the web container, which itself binds only to loopback.
+6. Verify from an external network that only SSH (trusted source IPs), 80, and 443 are reachable; ports 3001, 5432, and 8080 must not be public. Verify HTTPS, SPA deep links, same-origin `/api/health`, PostgreSQL storage, authenticated workflows, browser errors, and backup restoration before considering cutover.
+
+## Production data migration and cutover
+
+Do not treat the successful Laravel CI run as permission to replace the Node API with Laravel. Laravel's security hardening is tested, but 42 routes from the active Node API remain missing from Laravel. The Hostinger frontend therefore uses the existing Node API; the Compose `laravel-staging` profile starts Laravel only on an isolated database and does not publish it or route frontend requests to it.
+
+1. Complete the isolated migration rehearsal above using a protected database copy. The new target production database must be a separate PostgreSQL volume on Hostinger, not a shared Render/Node/Laravel database.
+2. Schedule an approved maintenance window. Stop writes to the old Node production API, take and verify a final backup encrypted at rest with an approved key, transfer it over an approved secure channel, and restore it to the new Hostinger Node database. Start only the production database service, restore into its empty application database using the same `pg_restore --no-owner --no-acl --role="$NODE_DB_USER" -U "$POSTGRES_USER" -d "$NODE_DB_NAME"` pattern, and start the API only after restore validation. The Node startup runs schema initialization/compatible `CREATE TABLE` and `ALTER TABLE` statements; verify their logs and the database on the rehearsal copy first.
+3. Preserve the active production `JWT_SECRET` and any `MFA_ENCRYPTION_KEY`/previous MFA keys required to decrypt current credentials. Changing these can invalidate sessions or lock users out of MFA. Transfer values only through a secret manager or protected operator-only file. Keep the database passwords, JWT/MFA keys, reset-delivery credentials, object-storage keys, and Meta tokens out of Git and chat. Do not configure `ADMIN_*` seed values.
+4. Start the production Compose project, validate the restored records and required workflows, then schedule DNS changes only after HTTPS and rollback checks pass. Update Meta webhook URLs and any password-reset/delivery allowlists if the official domain changes. Keep Render, Vercel, the original database, and the final pre-cutover backup available during the rollback period.
+5. If rollback is necessary after Hostinger has accepted writes, first freeze writes and preserve a backup of the Hostinger database. Do not simply point traffic back to the old API/database and assume new writes will follow: plan an approved reverse data migration or explicitly accept/reconcile the data written since cutover. Do not delete either database until the owner approves retirement.
 
 ## Deploy Laravel/PHP as a separate staging API
 
@@ -39,7 +66,7 @@ The repository's current `render.yaml` points the staged Laravel service at the 
 1. Use a separate empty PostgreSQL database and least-privilege role for Laravel. Do not point both API implementations at the production database or one shared staging database until schema and transaction compatibility are verified.
 2. Deploy Laravel from `laravel-api` using PHP 8.2 or newer and production Composer dependencies from `composer.lock`. Configure Nginx/PHP-FPM with document root `laravel-api/public`; enable `pdo_pgsql`, `mbstring`, `openssl`, `tokenizer`, `xml`, `ctype`, `curl`, `fileinfo`, and `zip`. Keep `storage` and `bootstrap/cache` writable by the application user. When running Composer package-discovery scripts during build/release, set `APP_ENV=local` (or `testing` in CI) so production startup validation is reserved for the actual service runtime.
 3. Configure Laravel's private environment values for production mode, `APP_DEBUG=false`, a unique `APP_KEY`, the staging `DATABASE_URL`, a distinct random `JWT_SECRET` of at least 32 characters, and exact HTTPS `CORS_ORIGINS`. Laravel now refuses to boot in production with debug enabled, a non-PostgreSQL database, a missing/non-HTTPS CORS origin, a missing/short/placeholder JWT secret, or a JWT secret equal to the app key. Preserve the current production JWT/MFA secrets only for a reviewed migration to production data; never copy them into an isolated test environment unnecessarily.
-4. Run Laravel migrations only against the empty staging database first. The container entrypoint in `laravel-api/docker-entrypoint.sh` runs `php artisan migrate --force`; on a VPS deployment, run migrations as a controlled release step over SSH, after confirming Laravel's environment points to the staging database. The token-revocation migration adds a legacy-JWT revocation table and a token-validity timestamp to users; test it on staging before any production migration.
+4. Run Laravel migrations only against the empty, isolated Laravel staging database first. The Compose `laravel-staging` profile runs `php artisan migrate --force` at container startup, so its database credentials must point only to the dedicated Laravel database and never to Node's database or production data. The token-revocation migration adds a legacy-JWT revocation table and a token-validity timestamp to users; test it on staging before any production migration.
 5. Verify `https://<laravel-api-hostname>/api/health` returns HTTP 200 and reports `pgsql`. Run the Laravel test suite from `laravel-api` with `composer install` and `php artisan test` in a development/staging environment.
 6. Compare Laravel route behavior and response shapes with the Node API using the frontend contract tests and authorized test accounts. The README currently identifies Laravel API parity as incomplete. Track and fix any missing or different behavior before selecting Laravel as the production API.
 
@@ -61,28 +88,13 @@ Do not dispatch the invitation until `https://barangay-legaspi.gov.ph` is regist
 
 The workflow now fails closed when `PUBLIC_APP_URL`, database/JWT configuration, invitation email configuration, or explicit workflow enablement is absent. After confirming the portal URL and invitation delivery, enable the workflow and choose `invite-admin` in the protected Actions workflow. Enter only the intended recipient email in the workflow form; the recipient creates their password from the emailed setup invitation. Never put a temporary password, database URL, API key, or invitation link into source control or chat.
 
-## Migrate the database safely
+## Data and frontend deployment notes
 
-1. Take a fresh PostgreSQL backup from the current production database using the approved operator workflow. Record the backup timestamp, size, and checksum without recording credentials.
-2. Restore into an isolated Hostinger staging database for the API implementation under test. Never test against or overwrite the active production database.
-3. Verify schema and representative record counts with an authorized, read-only database check. Do not export resident data to logs or screenshots.
-4. Test sign-in and the resident, staff, and Admin workflows on the staging frontend/API. Use authorized test accounts; do not create duplicate production users as a deployment test.
-5. Keep the original database untouched and ensure the backup can be restored before planning a cutover.
+The Hostinger Compose deployment builds the frontend with same-origin `VITE_API_BASE=/api`, serves the Vite build through the private web container, and proxies API requests to Node. Do not set the Hostinger frontend API base to Laravel or to the old Render URL.
 
-## Build and deploy the frontend
+Create a verified PostgreSQL backup before rehearsal and before cutover. Restore only to a separately named Compose project and volume for staging; inspect only approved, minimal metadata such as row counts, and do not put resident data in logs or screenshots. Keep the original database unchanged through the rollback period. The staging restore must be encrypted at rest and accessible only to authorized operators; use synthetic test accounts and remove/anonymize resident data before functional tests where possible.
 
-The frontend is a separate static site. Build it with the final API base URL, including `/api`, and upload the **contents** of `dist` to the Hostinger document root. `VITE_API_BASE` is embedded in the public frontend bundle; it must contain only the API URL, never a secret.
-
-For a local PowerShell build, use a temporary environment variable in the current shell:
-
-```powershell
-$env:VITE_API_BASE = 'https://<api-hostname>/api'
-npm ci
-npm run build
-Remove-Item Env:VITE_API_BASE
-```
-
-Upload `dist` using Hostinger's supported Git/build workflow or file manager over its secure connection. `public/.htaccess` is copied to `dist` and provides the single-page-app route fallback on Apache/LiteSpeed hosting. Confirm Hostinger supports `.htaccess` rewrite rules; if it does not, configure the equivalent fallback in its web server settings. Do not upload `.env` files, backups, local database files, or the repository's development data directory.
+The existing Vercel deployment remains configured for its current API during rehearsal and rollback. Do not change its `VITE_API_BASE` as part of the Hostinger cutover. The Hostinger bundle uses `/api` and is switched to the official Hostinger origin only through the separately approved DNS cutover.
 
 ## Staging verification and cutover gate
 
@@ -95,7 +107,7 @@ Use the temporary Hostinger hostname before changing DNS. Verify:
 - Browser console and API logs contain no unexpected errors; do not include personal data or tokens in diagnostic reports.
 - A fresh backup from the Hostinger database can be restored to a separate test database.
 
-Only after all checks pass should an authorized operator schedule DNS changes. Keep Vercel, Render, and the original database available through a rollback period. If the new site or API fails after cutover, restore the previous DNS target and continue using the original services. Do not shut down the old services until the owner has approved retirement after the rollback period.
+Only after all checks pass should an authorized operator schedule DNS changes. Keep Vercel, Render, and the original database available through a rollback period. If the new site or API fails after cutover, freeze writes, preserve the Hostinger database, and follow the reverse-migration decision in the cutover section; DNS rollback alone does not copy new data back to the old database. Do not shut down the old services until the owner has approved retirement after the rollback period.
 
 ## Current blocker
 

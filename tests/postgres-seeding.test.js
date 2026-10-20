@@ -10,10 +10,17 @@ const [{ default: pg }, {
   initDatabase,
   issueSuperAdminInvitation,
   promoteExistingUserToSuperAdmin,
+  resolveDatabaseSslOption,
 }] = await Promise.all([
   import('pg'),
   import('../server/db-postgres.js'),
 ])
+
+test('PostgreSQL connection keeps TLS by default and allows disabling it for private local databases', () => {
+  assert.deepEqual(resolveDatabaseSslOption('postgresql://localhost/database'), { rejectUnauthorized: false })
+  assert.equal(resolveDatabaseSslOption('postgresql://postgres/database', 'false'), false)
+  assert.equal(resolveDatabaseSslOption(undefined, 'true'), false)
+})
 
 test('PostgreSQL initialization skips admin seeding when a seed identifier already exists', async () => {
   const queries = []

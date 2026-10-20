@@ -6,9 +6,15 @@ import { ADMIN_SEED, IS_PRODUCTION, SHOULD_SKIP_SEED } from './config.js'
 const { Pool } = pg
 const databaseUrl = process.env.DATABASE_URL?.replace(/[?&]sslmode=[^&]*/i, '')
 
+export function resolveDatabaseSslOption(connectionString, sslSetting = process.env.DATABASE_SSL) {
+  // Compose's private Docker network uses a local PostgreSQL container without TLS.
+  if (!connectionString || String(sslSetting).toLowerCase() === 'false') return false
+  return { rejectUnauthorized: false }
+}
+
 const pool = new Pool({
   connectionString: databaseUrl,
-  ssl: process.env.DATABASE_URL ? { rejectUnauthorized: false } : false,
+  ssl: resolveDatabaseSslOption(databaseUrl),
   max: Number(process.env.DB_POOL_MAX || 10),
   idleTimeoutMillis: Number(process.env.DB_IDLE_TIMEOUT_MS || 30000),
   connectionTimeoutMillis: Number(process.env.DB_CONNECTION_TIMEOUT_MS || 10000),

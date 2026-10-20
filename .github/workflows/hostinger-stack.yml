@@ -1,0 +1,121 @@
+name: Hostinger stack validation
+
+on:
+  push:
+    branches:
+      - '**'
+    paths:
+      - '.dockerignore'
+      - '.env.hostinger.example'
+      - 'Dockerfile.hostinger'
+      - 'docker-compose.hostinger.yml'
+      - 'deploy/hostinger/**'
+      - 'server/**'
+      - 'tests/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/hostinger-stack.yml'
+  pull_request:
+    paths:
+      - '.dockerignore'
+      - '.env.hostinger.example'
+      - 'Dockerfile.hostinger'
+      - 'docker-compose.hostinger.yml'
+      - 'deploy/hostinger/**'
+      - 'server/**'
+      - 'tests/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/hostinger-stack.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Build and smoke-test isolated stack
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Run Node API tests
+        run: npm test
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Validate Compose configuration
+        run: docker compose --env-file .env.hostinger.example -f docker-compose.hostinger.yml config --quiet
+
+      - name: Build and start isolated production-shaped stack
+        env:
+          LARAVEL_APP_KEY: 'base64:MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY='
+        run: |
+          docker compose --env-file .env.hostinger.example --profile laravel-staging -f docker-compose.hostinger.yml up --build --detach node-db api web laravel-db laravel-api
+
+      - name: Verify API health and database separation
+        env:
+          LARAVEL_APP_KEY: 'base64:MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY='
+        run: |
+          set -euo pipefail
+          ready=false
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent http://127.0.0.1:8080/api/health > /tmp/node-health.json; then
+              ready=true
+              break
+            fi
+            sleep 2
+          done
+          if [ "$ready" != true ]; then
+            echo 'Node API did not become healthy.'
+            exit 1
+          fi
+          node --input-type=module -e "import fs from 'node:fs'; const health = JSON.parse(fs.readFileSync('/tmp/node-health.json', 'utf8')); if (health.storage !== 'postgres') process.exit(1);"
+
+          ready=false
+          for attempt in $(seq 1 60); do
+            container_id="$(docker compose --env-file .env.hostinger.example --profile laravel-staging -f docker-compose.hostinger.yml ps -q laravel-api)"
+            health=starting
+            if [ -n "$container_id" ]; then
+              health="$(docker inspect --format '{{.State.Health.Status}}' "$container_id")"
+            fi
+            if [ "$health" = healthy ]; then
+              ready=true
+              break
+            fi
+            sleep 2
+          done
+          if [ "$ready" != true ]; then
+            echo 'Isolated Laravel staging API did not become healthy.'
+            exit 1
+          fi
+
+          role_is_superuser="$(docker compose --env-file .env.hostinger.example -f docker-compose.hostinger.yml exec -T node-db psql -U postgres_admin -d postgres -tAc "SELECT rolsuper FROM pg_roles WHERE rolname = 'barangay_node'")"
+          if [ "$role_is_superuser" != f ]; then
+            echo 'Node application database role must not be a PostgreSQL superuser.'
+            exit 1
+          fi
+
+      - name: Check container status
+        if: success()
+        run: docker compose --env-file .env.hostinger.example --profile laravel-staging -f docker-compose.hostinger.yml ps
+
+      - name: Stop isolated validation containers
+        if: always()
+        env:
+          LARAVEL_APP_KEY: 'base64:MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY='
+        run: docker compose --env-file .env.hostinger.example --profile laravel-staging -f docker-compose.hostinger.yml down --volumes --remove-orphans

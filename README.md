@@ -30,6 +30,8 @@ The current production frontend on Vercel uses the Node/Express API at `https://
 
 For a staged Hostinger migration of the Vite frontend, Node API, Laravel/PHP API, and PostgreSQL database, follow [the Hostinger deployment guide](./docs/hostinger-deployment.md). Laravel is not yet the active API and has incomplete API parity; keep it on an isolated staging database and keep current production services online until parity, restore, and rollback checks pass.
 
+The VPS Compose stack is defined by `docker-compose.hostinger.yml` and `.env.hostinger.example`. It runs the existing Node API and Vite frontend against a private PostgreSQL container; the API uses same-origin `/api` routing. Laravel can be started only with the `laravel-staging` Compose profile and has a separate PostgreSQL volume. Do not expose Laravel to the frontend or migrate production traffic to it until route parity and isolated-data testing are complete.
+
 1. Set the Vercel build command to `npm run build`.
 2. Set `VITE_API_BASE` in Vercel to the active Node API URL ending in `/api`.
 3. Keep the active Node/Express Render service connected to PostgreSQL and configure its keys, exact frontend `CORS_ORIGINS`, and other required environment variables. Use random keys of at least 32 characters. Existing installations must coordinate JWT rotation because it invalidates existing sessions; the MFA key-rotation procedure below preserves enrolled authenticators.
