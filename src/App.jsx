@@ -4458,6 +4458,13 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
   const zoneNumbers = [1, 2, 3, 4, 5, 6, 7]
   const [managedUsers, setManagedUsers] = useState(users)
   const [activeTab, setActiveTab] = useState('overview')
+  const adminTabRefs = useRef({})
+  const adminTabs = [
+    { id: 'overview', label: t.overview, icon: '🧭' },
+    { id: 'residents', label: t.residents, icon: '👥' },
+    { id: 'access', label: t.access, icon: '🔐' },
+    { id: 'emergencies', label: t.emergencies, icon: '🚨' },
+  ]
   const [showAccountCreation, setShowAccountCreation] = useState(false)
   const [healthRefreshKey, setHealthRefreshKey] = useState(0)
   const [apiHealth, setApiHealth] = useState({ status: 'checking', storage: null, checkedAt: null })
@@ -4487,6 +4494,22 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
   const [accessZoneSort, setAccessZoneSort] = useState(() => {
     return Object.fromEntries(zoneNumbers.map((zone) => [zone, 'alphabetical']))
   })
+
+  const handleAdminTabKeyDown = (event) => {
+    const currentIndex = adminTabs.findIndex((tab) => tab.id === activeTab)
+    let nextIndex
+
+    if (event.key === 'ArrowRight') nextIndex = (currentIndex + 1) % adminTabs.length
+    else if (event.key === 'ArrowLeft') nextIndex = (currentIndex - 1 + adminTabs.length) % adminTabs.length
+    else if (event.key === 'Home') nextIndex = 0
+    else if (event.key === 'End') nextIndex = adminTabs.length - 1
+    else return
+
+    event.preventDefault()
+    const nextTab = adminTabs[nextIndex]
+    setActiveTab(nextTab.id)
+    adminTabRefs.current[nextTab.id]?.focus()
+  }
 
   useEffect(() => {
     setManagedUsers(users)
@@ -4932,53 +4955,44 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
       </header>
 
       <main className="dashboard-main">
-        <aside className="sidebar" aria-label={t.adminNavigationLabel}>
-          <nav className="sidebar-nav">
-            <button
-              type="button"
-              className={`nav-item ${activeTab === 'overview' ? 'active' : ''}`}
-              aria-current={activeTab === 'overview' ? 'page' : undefined}
-              onClick={() => setActiveTab('overview')}
-            >
-              <span className="nav-icon">🧭</span><span>{t.overview}</span>
-            </button>
-            <button
-              type="button"
-              className={`nav-item ${activeTab === 'residents' ? 'active' : ''}`}
-              aria-current={activeTab === 'residents' ? 'page' : undefined}
-              onClick={() => setActiveTab('residents')}
-            >
-              <span className="nav-icon">👥</span><span>{t.residents}</span>
-            </button>
-            <button
-              type="button"
-              className={`nav-item ${activeTab === 'access' ? 'active' : ''}`}
-              aria-current={activeTab === 'access' ? 'page' : undefined}
-              onClick={() => setActiveTab('access')}
-            >
-              <span className="nav-icon">🔐</span><span>{t.access}</span>
-            </button>
-            <button
-              type="button"
-              className={`nav-item ${activeTab === 'emergencies' ? 'active' : ''}`}
-              aria-current={activeTab === 'emergencies' ? 'page' : undefined}
-              onClick={() => setActiveTab('emergencies')}
-            >
-              <span className="nav-icon">🚨</span><span>{t.emergencies}</span>
-            </button>
+        <aside className="sidebar">
+          <nav className="sidebar-nav admin-sidebar-nav" aria-label={t.adminNavigationLabel} role="tablist" aria-orientation="horizontal">
+            {adminTabs.map((tab) => (
+              <button
+                key={tab.id}
+                ref={(element) => { adminTabRefs.current[tab.id] = element }}
+                id={`admin-tab-${tab.id}`}
+                type="button"
+                role="tab"
+                aria-controls="admin-tabpanel"
+                aria-selected={activeTab === tab.id}
+                tabIndex={activeTab === tab.id ? 0 : -1}
+                className={`nav-item ${activeTab === tab.id ? 'active' : ''}`}
+                onClick={() => setActiveTab(tab.id)}
+                onKeyDown={handleAdminTabKeyDown}
+              >
+                <span className="nav-icon" aria-hidden="true">{tab.icon}</span><span>{tab.label}</span>
+              </button>
+            ))}
           </nav>
         </aside>
 
-        <section className="content-panel" aria-label={t.adminOverviewLabel}>
+        <section
+          id="admin-tabpanel"
+          className="content-panel"
+          role="tabpanel"
+          aria-labelledby={`admin-tab-${activeTab}`}
+          tabIndex="-1"
+        >
           <div className="welcome-row">
             <div>
               <p className="eyebrow">{t.governance}</p>
-              <h1>{activeTab === 'overview' ? t.adminConsoleTitle : activeTab === 'residents' ? t.residentsByZone : activeTab === 'access' ? t.userAccessManagement : t.emergencyReportsTitle}</h1>
+              <h1 id="admin-panel-title">{activeTab === 'overview' ? t.adminConsoleTitle : activeTab === 'residents' ? t.residentsByZone : activeTab === 'access' ? t.userAccessManagement : t.emergencyReportsTitle}</h1>
             </div>
             <span className="counter-pill">{pending} {t.pending}</span>
           </div>
 
-          <div className="stats-grid" aria-label={t.adminSummaryLabel}>
+          <div className="stats-grid" role="group" aria-label={t.adminSummaryLabel}>
             <article className="stat-card accent">
               <div className="stat-header">
                 <span className="label">{t.residents}</span>
@@ -5145,6 +5159,7 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
                       aria-label={t.searchByName}
                     />
                     <select 
+                      aria-label={t.zoneLabel}
                       value={selectedZone}
                       onChange={(e) => setSelectedZone(e.target.value)}
                       className="zone-filter"
@@ -5190,8 +5205,9 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
                             {isExpanded && (
                               <div className="zone-group-body">
                                 <div className="zone-sort-row">
-                                  <span className="zone-sort-label">Sort by</span>
+                                  <label className="zone-sort-label" htmlFor={`resident-zone-sort-${group.zone}`}>{t.sortBy}</label>
                                   <select
+                                    id={`resident-zone-sort-${group.zone}`}
                                     className="zone-sort-select"
                                     value={residentZoneSort[group.zone] || 'alphabetical'}
                                     onClick={(event) => event.stopPropagation()}
@@ -5495,8 +5511,9 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
                           {isExpanded && (
                             <div className="zone-group-body">
                               <div className="zone-sort-row">
-                                <span className="zone-sort-label">Sort by</span>
+                                <label className="zone-sort-label" htmlFor={`access-zone-sort-${group.zone}`}>{t.sortBy}</label>
                                 <select
+                                  id={`access-zone-sort-${group.zone}`}
                                   className="zone-sort-select"
                                   value={accessZoneSort[group.zone] || 'alphabetical'}
                                   onClick={(event) => event.stopPropagation()}
