@@ -8,6 +8,8 @@ test('filipino translation includes resident and admin labels', () => {
 
   assert.deepEqual(Object.keys(fil).sort(), Object.keys(translations.en).sort())
   assert.equal(fil.residentPortal, 'Portal ng Residente')
+  assert.equal(fil.currentCaptain, 'Kasalukuyang Kapitan ng Barangay')
+  assert.ok(fil.currentCaptainNameMissing)
   assert.equal(fil.requestStatusTracker, 'Pagsubaybay sa kalagayan ng kahilingan')
   assert.equal(fil.requestHistory, 'Kasaysayan ng mga kahilingan')
   assert.equal(fil.requestStatusHistory, 'Kasaysayan ng kalagayan')

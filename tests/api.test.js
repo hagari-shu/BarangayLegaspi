@@ -2398,6 +2398,54 @@ test('MFA login requires a valid one-time authenticator code', async () => {
   }
 })
 
+test('staff can enroll authenticator MFA from account settings and use it at sign-in', async () => {
+  const { server, baseUrl } = await createTestServer()
+  const staff = {
+    id: randomUUID(),
+    firstName: 'Authenticator',
+    lastName: 'Staff',
+    mobile: `091${Math.floor(10000000 + Math.random() * 90000000)}`,
+    email: `authenticator.staff.${Date.now()}@example.com`,
+    passwordHash: await hashPassword('StaffSecure123!'),
+    role: 'staff',
+    status: 'On Duty',
+  }
+  const authorization = { Authorization: `Bearer ${signToken({ sub: staff.id, role: 'staff' })}` }
+
+  try {
+    await jsonDb.saveUser(staff)
+    const setupResponse = await fetch(`${baseUrl}/api/mfa/setup`, {
+      method: 'POST',
+      headers: { ...authorization, 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    })
+    assert.equal(setupResponse.status, 200)
+    const setup = await setupResponse.json()
+    assert.match(setup.secret, /^[A-Z2-7]+$/)
+    assert.match(setup.otpauthUri, /^otpauth:\/\/totp\//)
+
+    const enableResponse = await fetch(`${baseUrl}/api/mfa/enable`, {
+      method: 'POST',
+      headers: { ...authorization, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code: createTotpCode(setup.secret) }),
+    })
+    assert.equal(enableResponse.status, 200)
+    assert.equal((await enableResponse.json()).user.mfaEnabled, true)
+
+    const loginResponse = await fetch(`${baseUrl}/api/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ identifier: staff.email, password: 'StaffSecure123!' }),
+    })
+    assert.equal(loginResponse.status, 200)
+    assert.equal((await loginResponse.json()).requiresMfa, true)
+  } finally {
+    await new Promise((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()))
+    })
+  }
+})
+
 test('authenticated users can change passwords with the current password', async () => {
   const { server, baseUrl } = await createTestServer()
   const currentPassword = 'CurrentPass123!'

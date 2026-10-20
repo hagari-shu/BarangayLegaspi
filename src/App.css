@@ -5603,6 +5603,23 @@ textarea:focus {
   box-shadow: 0 14px 30px rgba(19, 50, 42, 0.08);
 }
 
+.captain-profile-hero {
+  align-items: stretch;
+  min-height: 210px;
+  padding: 16px;
+  background:
+    radial-gradient(circle at 100% 0%, rgba(244, 185, 66, 0.2), transparent 48%),
+    linear-gradient(135deg, #fffdf7 0%, #edf6ef 100%);
+}
+
+.captain-profile-hero .captain-photo-picker {
+  width: 148px;
+  height: 178px;
+  flex-basis: 148px;
+  border-style: solid;
+  border-radius: 16px;
+}
+
 .captain-photo-picker {
   position: relative;
   display: flex;
@@ -5709,6 +5726,7 @@ textarea:focus {
   display: flex;
   min-width: 0;
   flex-direction: column;
+  justify-content: center;
   gap: 6px;
 }
 
@@ -5725,6 +5743,16 @@ textarea:focus {
   font-size: clamp(1.3rem, 2.4vw, 1.75rem);
   font-weight: 800;
   line-height: 1.15;
+}
+
+.current-officeholder {
+  margin: 0 0 14px;
+  color: var(--text-700);
+  line-height: 1.45;
+}
+
+.current-officeholder strong {
+  color: var(--green-900);
 }
 
 .captain-location {
@@ -7052,6 +7080,16 @@ button.staff-metric-card:focus-visible,
     padding: 14px;
   }
 
+  .captain-profile-hero {
+    min-height: 0;
+  }
+
+  .captain-profile-hero .captain-photo-picker {
+    width: 112px;
+    height: 142px;
+    flex-basis: 112px;
+  }
+
   .captain-photo-picker {
     width: 96px;
     height: 96px;
@@ -7176,6 +7214,12 @@ button.staff-metric-card:focus-visible,
     gap: 10px;
     padding: 10px;
     border-radius: 16px;
+  }
+
+  .captain-profile-hero .captain-photo-picker {
+    width: 84px;
+    height: 112px;
+    flex-basis: 84px;
   }
 
   .captain-photo-picker {

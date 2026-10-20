@@ -884,6 +884,11 @@ function OfficialProfileSettings({ language, canManageLogo = false }) {
         {profiles.map((profile) => (
           <form key={profile.role} className="official-profile-editor" onSubmit={(event) => handleSaveProfile(event, profile.role)}>
             <h3>{labels[profile.role]}</h3>
+            {profile.role === 'captain' && (
+              <p className="current-officeholder">
+                {t.currentCaptain}: <strong>{profile.displayName || t.currentCaptainNameMissing}</strong>
+              </p>
+            )}
             <label>
               {t.officialNameLabel}
               <input
@@ -1360,7 +1365,7 @@ function LoginPage({ onLogin, language, setLanguage }) {
               <p>{t.residentPortal}</p>
               <span className="brand-location">Tayug, Pangasinan</span>
             </div>
-            <section className="captain-card" aria-label={t.captainIdentification}>
+            <section className="captain-card captain-profile-hero" aria-label={t.captainIdentification}>
               <div className="captain-photo-picker">
                 {captainPhotoAvailable ? (
                   <img
@@ -1378,7 +1383,7 @@ function LoginPage({ onLogin, language, setLanguage }) {
               </div>
               <div className="captain-details">
                 <span className="captain-role">{t.captainRole}</span>
-                {captainProfile?.displayName && <strong>{captainProfile.displayName}</strong>}
+                <strong>{captainProfile?.displayName || t.currentCaptainNameMissing}</strong>
                 <span className="captain-location">{t.captainLocation}</span>
                 <div className="official-profile-links">
                   {captainProfile?.profileUrl && <a href={captainProfile.profileUrl} target="_blank" rel="noopener noreferrer">{t.officialProfileLinkLabel}</a>}
@@ -3056,7 +3061,7 @@ function SettingsPage({ profile, onLogout, onPasswordChanged, language, setLangu
                       <button type="submit" className="primary-btn small" disabled={mfaBusy}>{mfaBusy ? t.working : t.mfaEnableAction}</button>
                     </form>
                   ) : (
-                    <button type="button" className="primary-btn small" onClick={startMfaSetup} disabled={mfaBusy}>{mfaBusy ? t.working : t.mfaSetupAction}</button>
+                    <button type="button" className="primary-btn small" onClick={() => startMfaSetup()} disabled={mfaBusy}>{mfaBusy ? t.working : t.mfaSetupAction}</button>
                   )}
                   {mfaMessage && <p className="mfa-message" role="status">{mfaMessage}</p>}
                 </>
