@@ -1136,6 +1136,8 @@ function LoginPage({ onLogin, language, setLanguage }) {
   const [showReset, setShowReset] = useState(false)
   const [resetForm, setResetForm] = useState({ identifier: '', token: '', newPassword: '' })
   const [resetRequested, setResetRequested] = useState(false)
+  const [resetManualPasswordRequired, setResetManualPasswordRequired] = useState(false)
+  const [resetTemporaryPassword, setResetTemporaryPassword] = useState('')
   const [resetting, setResetting] = useState(false)
   const [captainPhotoAvailable, setCaptainPhotoAvailable] = useState(true)
   const captainProfile = officialProfiles.find((profile) => profile.role === 'captain')
@@ -1254,9 +1256,17 @@ function LoginPage({ onLogin, language, setLanguage }) {
     }
   }
 
+  const closeResetModal = () => {
+    setShowReset(false)
+    setResetRequested(false)
+    setResetManualPasswordRequired(false)
+    setResetTemporaryPassword('')
+    setResetForm({ identifier: '', token: '', newPassword: '' })
+  }
+
   const handleResetSubmit = async (event) => {
     event.preventDefault()
-    if (resetRequested && !isValidPassword(resetForm.newPassword)) {
+    if (resetRequested && resetManualPasswordRequired && !isValidPassword(resetForm.newPassword)) {
       alert(`New password must have ${passwordRequirements}.`)
       return
     }
@@ -1264,7 +1274,9 @@ function LoginPage({ onLogin, language, setLanguage }) {
     try {
       const endpoint = resetRequested ? `${API_BASE}/reset-password` : `${API_BASE}/reset-password/request`
       const body = resetRequested
-        ? { token: resetForm.token, newPassword: resetForm.newPassword }
+        ? resetManualPasswordRequired
+          ? { token: resetForm.token, newPassword: resetForm.newPassword }
+          : { token: resetForm.token, generateTemporaryPassword: true }
         : { identifier: resetForm.identifier }
       const response = await fetch(endpoint, {
         method: 'POST',
@@ -1272,10 +1284,15 @@ function LoginPage({ onLogin, language, setLanguage }) {
         body: JSON.stringify(body),
       })
       const data = await response.json().catch(() => ({}))
+      if (!response.ok && data.code === 'manual_password_required') {
+        setResetManualPasswordRequired(true)
+        alert(data.message || t.resetManualPasswordInstructions)
+        return
+      }
       if (!response.ok) throw new Error(data.message || 'Unable to reset password.')
 
       if (!resetRequested) {
-        if (data.deliveryStatus !== 'queued' && !data.resetToken) {
+        if (!['queued', 'sent'].includes(data.deliveryStatus) && !data.resetToken) {
           alert(t.resetRequestGeneric)
           return
         }
@@ -1284,12 +1301,13 @@ function LoginPage({ onLogin, language, setLanguage }) {
           setResetForm((current) => ({ ...current, token: data.resetToken }))
         }
         alert(data.message || t.resetRequestGeneric)
+      } else if (data.temporaryPassword) {
+        setResetTemporaryPassword(data.temporaryPassword)
+        setResetForm((current) => ({ ...current, token: '', newPassword: '' }))
       } else {
         alert(data.message)
-        setShowReset(false)
-        setResetRequested(false)
+        closeResetModal()
         setForm((current) => ({ ...current, password: '' }))
-        setResetForm({ identifier: '', token: '', newPassword: '' })
       }
     } catch (error) {
       alert(error.message || 'Unable to reset password.')
@@ -1553,13 +1571,17 @@ function LoginPage({ onLogin, language, setLanguage }) {
       </main>
 
       {showReset && (
-        <div className="modal-overlay" onClick={() => setShowReset(false)}>
+        <div className="modal-overlay" onClick={closeResetModal}>
           <form className="modal-content reset-password-modal" onSubmit={handleResetSubmit} onClick={(event) => event.stopPropagation()}>
-            <button type="button" className="modal-close" onClick={() => setShowReset(false)} aria-label="Close password reset">×</button>
+            <button type="button" className="modal-close" onClick={closeResetModal} aria-label="Close password reset">×</button>
             <div className="modal-header">
               <div>
                 <h2>{t.resetPassword}</h2>
-                <p>{resetRequested ? 'Enter the one-time token and choose a new password.' : 'We will send a short-lived reset token to your registered contact.'}</p>
+                <p>{resetTemporaryPassword
+                  ? t.adminTemporaryPasswordInstructions
+                  : resetRequested
+                    ? resetManualPasswordRequired ? t.resetManualPasswordInstructions : t.resetCodeInstructions
+                    : 'We will send a short-lived reset token to your registered contact.'}</p>
               </div>
             </div>
             <div className="modal-body">
@@ -1567,16 +1589,23 @@ function LoginPage({ onLogin, language, setLanguage }) {
                 <label htmlFor="reset-identifier">Mobile number or email</label>
                 <input id="reset-identifier" type="text" value={resetForm.identifier} onChange={(event) => setResetForm((current) => ({ ...current, identifier: event.target.value }))} required />
               </div>}
-              {resetRequested && <div className="input-block">
+              {resetRequested && !resetTemporaryPassword && <div className="input-block">
                 <label htmlFor="reset-token">{t.oneTimeResetToken}</label>
                 <input id="reset-token" type="text" value={resetForm.token} onChange={(event) => setResetForm((current) => ({ ...current, token: event.target.value }))} required />
               </div>}
-              {resetRequested && <div className="input-block">
+              {resetRequested && resetManualPasswordRequired && !resetTemporaryPassword && <div className="input-block">
                 <PasswordField id="reset-new-password" label={t.password} value={resetForm.newPassword} onChange={(event) => setResetForm((current) => ({ ...current, newPassword: event.target.value }))} helpText={`${passwordRequirements}.`} />
               </div>}
+              {resetTemporaryPassword && <div className="input-block">
+                <label htmlFor="admin-reset-temporary-password">{t.temporaryPassword}</label>
+                <input id="admin-reset-temporary-password" type="text" value={resetTemporaryPassword} readOnly onFocus={(event) => event.target.select()} aria-describedby="admin-reset-password-help" />
+                <p id="admin-reset-password-help" role="status">{t.temporaryPasswordChangeRequired}</p>
+              </div>}
               <div className="modal-actions">
-                <button type="button" className="secondary-btn small" onClick={() => { setShowReset(false); setResetRequested(false) }}>{t.cancel}</button>
-                <button type="submit" className="primary-btn small" disabled={resetting}>{resetting ? t.working : resetRequested ? t.resetPasswordAction : t.sendResetToken}</button>
+                {!resetTemporaryPassword && <button type="button" className="secondary-btn small" onClick={closeResetModal}>{t.cancel}</button>}
+                {resetTemporaryPassword
+                  ? <button type="button" className="primary-btn small" onClick={closeResetModal}>{t.done}</button>
+                  : <button type="submit" className="primary-btn small" disabled={resetting}>{resetting ? t.working : resetRequested ? resetManualPasswordRequired ? t.resetPasswordAction : t.verifyResetToken : t.sendResetToken}</button>}
               </div>
             </div>
           </form>

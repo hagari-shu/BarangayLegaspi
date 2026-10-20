@@ -2163,6 +2163,14 @@ test('password reset uses a one-time token', async () => {
     const requestData = await requestResponse.json()
     assert.ok(requestData.resetToken)
 
+    const generatedPasswordResponse = await fetch(`${baseUrl}/api/reset-password`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: requestData.resetToken }),
+    })
+    assert.equal(generatedPasswordResponse.status, 400)
+    assert.equal((await generatedPasswordResponse.json()).code, 'manual_password_required')
+
     const resetResponse = await fetch(`${baseUrl}/api/reset-password`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -2198,6 +2206,118 @@ test('password reset uses a one-time token', async () => {
     })
     assert.equal(restoreResponse.status, 200)
   } finally {
+    await new Promise((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()))
+    })
+  }
+})
+
+test('Admin password reset generates a temporary password after email verification and requires a change at login', async () => {
+  const originalApiKey = process.env.RESEND_API_KEY
+  const originalResetFromEmail = process.env.PASSWORD_RESET_FROM_EMAIL
+  const originalInvitationFromEmail = process.env.SUPER_ADMIN_INVITATION_FROM_EMAIL
+  const originalDeliveryUrl = process.env.RESET_DELIVERY_URL
+  const originalDeliveryToken = process.env.RESET_DELIVERY_TOKEN
+  const originalFetch = globalThis.fetch
+  const emailRequests = []
+  process.env.RESEND_API_KEY = 'test-only-resend-api-key'
+  process.env.PASSWORD_RESET_FROM_EMAIL = 'no-reply@example.org'
+  delete process.env.SUPER_ADMIN_INVITATION_FROM_EMAIL
+  delete process.env.RESET_DELIVERY_URL
+  delete process.env.RESET_DELIVERY_TOKEN
+  globalThis.fetch = async (input, options) => {
+    if (input === 'https://api.resend.com/emails') {
+      emailRequests.push({ payload: JSON.parse(options.body) })
+      return new Response(null, { status: 200 })
+    }
+    return originalFetch(input, options)
+  }
+  const { server, baseUrl } = await createTestServer()
+  const admin = {
+    id: randomUUID(),
+    firstName: 'Password',
+    lastName: 'Admin',
+    mobile: `091${Math.floor(10000000 + Math.random() * 90000000)}`,
+    email: `admin-reset.${Date.now()}@example.com`,
+    passwordHash: await hashPassword('AdminOldPass123!'),
+    role: 'admin',
+    status: 'Administrator',
+    createdAt: new Date().toISOString(),
+  }
+
+  try {
+    await jsonDb.saveUser(admin)
+    const requestResponse = await fetch(`${baseUrl}/api/reset-password/request`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ identifier: admin.email }),
+    })
+    assert.equal(requestResponse.status, 200)
+    assert.equal((await requestResponse.json()).deliveryStatus, 'sent')
+    assert.equal(emailRequests.length, 1)
+
+    const emailPayload = emailRequests[0].payload
+    assert.equal(emailPayload.to[0], admin.email)
+    const resetToken = emailPayload.text.match(/\n\n([a-f0-9]{64})\n\n/)?.[1]
+    assert.ok(resetToken)
+
+    const resetResponse = await fetch(`${baseUrl}/api/reset-password`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: resetToken, generateTemporaryPassword: true }),
+    })
+    assert.equal(resetResponse.status, 200)
+    assert.equal(resetResponse.headers.get('cache-control'), 'no-store')
+    const resetBody = await resetResponse.json()
+    assert.equal(resetBody.mustChangePassword, true)
+    assert.match(resetBody.temporaryPassword, /[a-z]/)
+    assert.match(resetBody.temporaryPassword, /[A-Z]/)
+    assert.match(resetBody.temporaryPassword, /\d/)
+    assert.match(resetBody.temporaryPassword, /[^A-Za-z0-9\s]/)
+
+    const loginResponse = await fetch(`${baseUrl}/api/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ identifier: admin.email, password: resetBody.temporaryPassword }),
+    })
+    assert.equal(loginResponse.status, 200)
+    const loginBody = await loginResponse.json()
+    assert.equal(loginBody.mustChangePassword, true)
+    assert.equal(loginBody.user.mustChangePassword, true)
+
+    const passwordChangeResponse = await fetch(`${baseUrl}/api/change-password`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${loginBody.token}`,
+      },
+      body: JSON.stringify({
+        currentPassword: resetBody.temporaryPassword,
+        newPassword: 'AdminNewSecure123!',
+      }),
+    })
+    assert.equal(passwordChangeResponse.status, 200)
+    const changedBody = await passwordChangeResponse.json()
+    assert.equal(changedBody.user.mustChangePassword, false)
+
+    const reusedResponse = await fetch(`${baseUrl}/api/reset-password`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: resetToken }),
+    })
+    assert.equal(reusedResponse.status, 400)
+  } finally {
+    if (originalApiKey === undefined) delete process.env.RESEND_API_KEY
+    else process.env.RESEND_API_KEY = originalApiKey
+    if (originalResetFromEmail === undefined) delete process.env.PASSWORD_RESET_FROM_EMAIL
+    else process.env.PASSWORD_RESET_FROM_EMAIL = originalResetFromEmail
+    if (originalInvitationFromEmail === undefined) delete process.env.SUPER_ADMIN_INVITATION_FROM_EMAIL
+    else process.env.SUPER_ADMIN_INVITATION_FROM_EMAIL = originalInvitationFromEmail
+    if (originalDeliveryUrl === undefined) delete process.env.RESET_DELIVERY_URL
+    else process.env.RESET_DELIVERY_URL = originalDeliveryUrl
+    if (originalDeliveryToken === undefined) delete process.env.RESET_DELIVERY_TOKEN
+    else process.env.RESET_DELIVERY_TOKEN = originalDeliveryToken
+    globalThis.fetch = originalFetch
     await new Promise((resolve, reject) => {
       server.close((error) => (error ? reject(error) : resolve()))
     })

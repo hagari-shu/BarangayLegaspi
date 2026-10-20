@@ -1476,7 +1476,11 @@ export function createApp() {
 
       const token = randomBytes(32).toString('hex')
       const expiresAt = Date.now() + 15 * 60 * 1000
-      resetTokens.set(createHash('sha256').update(token).digest('hex'), { userId: user.id, expiresAt })
+      resetTokens.set(createHash('sha256').update(token).digest('hex'), {
+        userId: user.id,
+        expiresAt,
+        generateTemporaryPassword: String(user.role || '').toLowerCase() === 'admin',
+      })
 
       const deliveryResult = (async () => {
         if (process.env.RESEND_API_KEY || process.env.PASSWORD_RESET_FROM_EMAIL) {
@@ -1526,11 +1530,10 @@ export function createApp() {
   })
 
   app.post('/api/reset-password', authRateLimit, async (req, res) => {
+    res.set('Cache-Control', 'no-store')
     const token = sanitizeText(req.body?.token || '')
     const newPassword = String(req.body?.newPassword || '').trim()
-    if (!token || !isValidPassword(newPassword)) {
-      return res.status(400).json({ message: `A valid reset token and password with ${passwordRequirements} are required.` })
-    }
+    if (!token) return res.status(400).json({ message: 'A valid reset token is required.' })
 
     try {
       const tokenHash = createHash('sha256').update(token).digest('hex')
@@ -1540,11 +1543,41 @@ export function createApp() {
         return res.status(400).json({ message: 'This reset token is invalid or expired.' })
       }
 
-      const updatedUser = await store.updateUser?.(reset.userId, { passwordHash: await hashPassword(newPassword) })
+      const user = await store.findUserById(reset.userId)
+      if (!user) {
+        resetTokens.delete(tokenHash)
+        return res.status(404).json({ message: 'User not found.' })
+      }
+      const generateTemporaryPassword = reset.generateTemporaryPassword
+        && String(user.role || '').toLowerCase() === 'admin'
+      if (!generateTemporaryPassword && !isValidPassword(newPassword)) {
+        return res.status(400).json({
+          code: 'manual_password_required',
+          message: `Enter a new password with ${passwordRequirements} to finish resetting this account.`,
+        })
+      }
+
+      const temporaryPassword = generateTemporaryPassword ? generateInitialPassword() : null
+      const updatedUser = await store.updateUser?.(reset.userId, {
+        passwordHash: await hashPassword(temporaryPassword || newPassword),
+        ...(temporaryPassword ? { mustChangePassword: true } : {}),
+      })
       resetTokens.delete(tokenHash)
       if (!updatedUser) return res.status(404).json({ message: 'User not found.' })
 
-      await writeAudit(null, 'password.reset', 'user', reset.userId)
+      await writeAudit(
+        null,
+        temporaryPassword ? 'password.reset.temporary_password_generated' : 'password.reset',
+        'user',
+        reset.userId,
+      )
+      if (temporaryPassword) {
+        return res.json({
+          message: 'A temporary Admin password has been generated. It is shown once; change it after signing in.',
+          temporaryPassword,
+          mustChangePassword: true,
+        })
+      }
       return res.json({ message: 'Password reset successful. You can now log in.' })
     } catch (error) {
       console.error('reset password error', error)

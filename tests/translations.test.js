@@ -60,6 +60,10 @@ test('account creation controls and role permissions are translated in both loca
       'temporaryPassword',
       'temporaryPasswordShareWarning',
       'temporaryPasswordChangeRequired',
+      'verifyResetToken',
+      'resetCodeInstructions',
+      'resetManualPasswordInstructions',
+      'adminTemporaryPasswordInstructions',
       'superAdminInvitationOperatorOnly',
     ]) {
       assert.equal(typeof locale[key], 'string')
