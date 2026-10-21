@@ -9576,7 +9576,8 @@ body {
   }
 
   .mau-launcher.with-bottom-nav,
-  .mau-launcher.resident-mobile-dashboard {
+  .mau-launcher.resident-mobile-dashboard,
+  .mau-launcher.resident-registration-launcher {
     right: 16px;
     bottom: calc(12px + env(safe-area-inset-bottom));
     width: 48px;
@@ -9589,12 +9590,14 @@ body {
   }
 
   .mau-launcher.with-bottom-nav > span:last-child,
-  .mau-launcher.resident-mobile-dashboard > span:last-child {
+  .mau-launcher.resident-mobile-dashboard > span:last-child,
+  .mau-launcher.resident-registration-launcher > span:last-child {
     display: none;
   }
 
   .mau-launcher.with-bottom-nav .mau-launcher-badge,
-  .mau-launcher.resident-mobile-dashboard .mau-launcher-badge {
+  .mau-launcher.resident-mobile-dashboard .mau-launcher-badge,
+  .mau-launcher.resident-registration-launcher .mau-launcher-badge {
     width: 34px;
     height: 34px;
     flex-basis: 34px;
