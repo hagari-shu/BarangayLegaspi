@@ -5251,6 +5251,71 @@ textarea:focus {
     bottom: calc(140px + env(safe-area-inset-bottom));
   }
 
+  .mau-launcher.resident-registration-launcher {
+    right: 12px;
+    bottom: calc(12px + env(safe-area-inset-bottom));
+    min-height: 48px;
+    gap: 8px;
+    padding: 8px 12px 8px 8px;
+    font-size: 0.9rem;
+  }
+
+  .resident-registration-launcher .mau-launcher-badge {
+    width: 30px;
+    height: 30px;
+  }
+
+  .register-screen {
+    align-items: flex-start;
+    padding: 16px 12px calc(100px + env(safe-area-inset-bottom));
+  }
+
+  .register-box {
+    padding: 18px 14px;
+  }
+
+  .register-header {
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 18px;
+  }
+
+  .register-header .seal-logo {
+    flex: 0 0 auto;
+    width: 64px;
+    height: 64px;
+  }
+
+  .register-header h1 {
+    font-size: clamp(1.3rem, 6vw, 1.7rem);
+    line-height: 1.15;
+  }
+
+  .register-form {
+    gap: 12px;
+  }
+
+  .form-sections {
+    gap: 10px;
+  }
+
+  .form-section {
+    padding: 14px;
+  }
+
+  .form-section-heading {
+    margin-bottom: 10px;
+  }
+
+  .form-grid {
+    gap: 12px;
+  }
+
+  .register-actions {
+    gap: 10px;
+    margin-top: 14px;
+  }
+
   .request-reminder-alerts {
     top: 8px;
     right: 8px;

@@ -5819,6 +5819,7 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
 function MauAssistant({ language, userRole, isAuthenticated, pathname, mobileDashboard }) {
   const t = translations[language] || translations.en
   const isHomepage = !isAuthenticated && pathname === '/'
+  const residentRegistration = !isAuthenticated && pathname === '/register'
   const hasBottomNavigation = ['staff', 'admin', 'super_admin'].includes(userRole)
   const [open, setOpen] = useState(false)
   const [question, setQuestion] = useState('')
@@ -5946,7 +5947,7 @@ function MauAssistant({ language, userRole, isAuthenticated, pathname, mobileDas
     <>
       <button
         type="button"
-        className={`mau-launcher ${hasBottomNavigation ? 'with-bottom-nav' : ''} ${mobileDashboard ? 'resident-mobile-dashboard' : ''}`}
+        className={`mau-launcher ${hasBottomNavigation ? 'with-bottom-nav' : ''} ${mobileDashboard ? 'resident-mobile-dashboard' : ''} ${residentRegistration ? 'resident-registration-launcher' : ''}`}
         onClick={(event) => {
           if (!open) triggerRef.current = event.currentTarget
           setOpen((current) => !current)
