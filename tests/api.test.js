@@ -802,6 +802,74 @@ test('registers a resident and waits for administrator approval', async () => {
     assert.equal(unknownLoginResponse.status, 401)
     const auditAfterUnknownLogin = await jsonDb.listAuditLogs()
     assert.equal(auditAfterUnknownLogin.filter((entry) => entry.action === 'auth.login.rejected_unapproved_resident').length, 1)
+
+    const approvalResponse = await fetch(`${baseUrl}/api/admin/users/${registerData.user.id}`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${adminToken}`,
+      },
+      body: JSON.stringify({ status: 'Active Resident' }),
+    })
+    assert.equal(approvalResponse.status, 200)
+    assert.equal((await approvalResponse.json()).user.status, 'Active Resident')
+
+    const approvedLoginResponse = await fetch(`${baseUrl}/api/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ identifier: mobile, password: 'SecurePass123!' }),
+    })
+    assert.equal(approvedLoginResponse.status, 200)
+
+    const rejectedMobile = `091${Math.floor(10000000 + Math.random() * 90000000)}`
+    const rejectedEmail = `rejected.resident.${Date.now()}@gmail.com`
+    const rejectedRegistrationResponse = await fetch(`${baseUrl}/api/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        firstName: 'Rejected',
+        lastName: 'Resident',
+        mobile: rejectedMobile,
+        email: rejectedEmail,
+        address: 'Barangay Legaspi',
+        zone: 1,
+        password: 'SecurePass123!',
+      }),
+    })
+    assert.equal(rejectedRegistrationResponse.status, 201)
+    const rejectedRegistration = await rejectedRegistrationResponse.json()
+    const rejectionResponse = await fetch(`${baseUrl}/api/admin/users/${rejectedRegistration.user.id}`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${adminToken}`,
+      },
+      body: JSON.stringify({ status: 'Rejected' }),
+    })
+    assert.equal(rejectionResponse.status, 200)
+    assert.equal((await rejectionResponse.json()).user.status, 'Rejected')
+
+    const rejectedLoginResponse = await fetch(`${baseUrl}/api/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ identifier: rejectedMobile, password: 'SecurePass123!' }),
+    })
+    assert.equal(rejectedLoginResponse.status, 403)
+
+    const rejectedDuplicateRegistrationResponse = await fetch(`${baseUrl}/api/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        firstName: 'Rejected',
+        lastName: 'Resident',
+        mobile: rejectedMobile,
+        email: rejectedEmail,
+        address: 'Barangay Legaspi',
+        zone: 1,
+        password: 'SecurePass123!',
+      }),
+    })
+    assert.equal(rejectedDuplicateRegistrationResponse.status, 409)
   } finally {
     await new Promise((resolve, reject) => {
       server.close((error) => (error ? reject(error) : resolve()))

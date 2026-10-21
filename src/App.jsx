@@ -1644,6 +1644,8 @@ function RegisterPage({ language, setLanguage }) {
     householdMembers: [],
     password: '',
   })
+  const [submitting, setSubmitting] = useState(false)
+  const submittingRef = useRef(false)
 
   const handleChange = (event) => {
     const { name, value } = event.target
@@ -1667,6 +1669,7 @@ function RegisterPage({ language, setLanguage }) {
 
   const handleSubmit = async (event) => {
     event.preventDefault()
+    if (submittingRef.current) return
 
     const nextForm = {
       firstName: sanitizeText(form.firstName),
@@ -1696,6 +1699,8 @@ function RegisterPage({ language, setLanguage }) {
       return
     }
 
+    submittingRef.current = true
+    setSubmitting(true)
     try {
       const response = await fetch(`${API_BASE}/register`, {
         method: 'POST',
@@ -1722,6 +1727,9 @@ function RegisterPage({ language, setLanguage }) {
       navigate('/')
     } catch (error) {
       alert(error.message || t.registrationFailed)
+    } finally {
+      submittingRef.current = false
+      setSubmitting(false)
     }
   }
 
@@ -1746,7 +1754,7 @@ function RegisterPage({ language, setLanguage }) {
             </div>
           </div>
 
-          <form className="register-form" onSubmit={handleSubmit}>
+          <form className="register-form" onSubmit={handleSubmit} aria-busy={submitting}>
             <div className="info-strip" aria-label={t.registrationInformationNoticeLabel}>
               <p className="info-strip-title">{t.whyWeAskForThis}</p>
               <p>{t.registrationDataUseNotice}</p>
@@ -1842,8 +1850,8 @@ function RegisterPage({ language, setLanguage }) {
             <p className="approval-notice">{t.registrationApprovalNotice}</p>
 
             <div className="register-actions">
-              <button type="submit" className="primary-btn wide">{t.registerAsResident}</button>
-              <Link to="/" className="secondary-btn">{t.backToLogin}</Link>
+              <button type="submit" className="primary-btn wide" disabled={submitting}>{submitting ? t.working : t.registerAsResident}</button>
+              <Link to="/" className="secondary-btn" aria-disabled={submitting} onClick={(event) => { if (submitting) event.preventDefault() }}>{t.backToLogin}</Link>
             </div>
           </form>
         </div>
