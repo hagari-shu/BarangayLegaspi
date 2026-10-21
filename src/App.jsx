@@ -4895,6 +4895,7 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
   const superAdmins = managedUsers.filter((user) => user.role === 'super_admin').length
   const requestStatusCounts = getRequestStatusCounts(requests)
   const activeRequestCount = getActiveRequestCount(requestStatusCounts)
+  const pending = requestStatusCounts.Pending
   const pendingVerificationUsers = managedUsers.filter((user) => user.role === 'resident' && user.status === 'Pending Verification')
   const approvedUsers = managedUsers.filter((user) => user.role === 'resident' && user.status === 'Active Resident').length
   const unapprovedLoginCutoff = Date.now() - 24 * 60 * 60 * 1000
