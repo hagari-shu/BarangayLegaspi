@@ -9,6 +9,7 @@ on:
       - 'server/**'
       - 'scripts/check-laravel-api-parity.js'
       - 'package.json'
+      - 'render.yaml'
       - '.github/workflows/laravel-tests.yml'
   pull_request:
     paths:
@@ -16,6 +17,7 @@ on:
       - 'server/**'
       - 'scripts/check-laravel-api-parity.js'
       - 'package.json'
+      - 'render.yaml'
       - '.github/workflows/laravel-tests.yml'
   workflow_dispatch:
 

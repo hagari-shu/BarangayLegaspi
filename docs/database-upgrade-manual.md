@@ -7,7 +7,7 @@ Use this runbook to evaluate and, if approved, upgrade the PostgreSQL database s
 Current repository configuration indicates:
 
 - The application has a PostgreSQL adapter in the Node/Express API and PostgreSQL configuration in the Laravel API.
-- `render.yaml` configures the Laravel service to use the existing Render database named `barangay-legaspi-db` in Singapore.
+- `render.yaml` leaves the Laravel service's `DATABASE_URL` for manual configuration; operators must use a dedicated staging database and must not point Laravel at Node's production database.
 - The repository deployment notes say to keep Vercel pointed at the Node API until authenticated resident, staff, administrator, and content-management workflows have all passed against Laravel.
 - The current JSON database is for local development/testing; it is not synchronized with PostgreSQL and is not a production backup.
 
