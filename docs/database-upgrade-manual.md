@@ -7,7 +7,7 @@ Use this runbook to evaluate and, if approved, upgrade the PostgreSQL database s
 Current repository configuration indicates:
 
 - The application has a PostgreSQL adapter in the Node/Express API and PostgreSQL configuration in the Laravel API.
-- `render.yaml` configures the Laravel service to use the existing Render database named `barangay-legaspi-db` in Singapore.
+- The previous `render.yaml` configuration pointed Laravel at the existing Render database named `barangay-legaspi-db` in Singapore, which is shared with the active Node API. The blueprint now requires an operator-supplied `DATABASE_URL`; set it to a separate, empty staging database before resuming the Laravel service.
 - The repository deployment notes say to keep Vercel pointed at the Node API until authenticated resident, staff, administrator, and content-management workflows have all passed against Laravel.
 - The current JSON database is for local development/testing; it is not synchronized with PostgreSQL and is not a production backup.
 
@@ -16,7 +16,7 @@ Current repository configuration indicates:
 ## 1. Establish the actual change and cost
 
 1. Sign in to the Render account that owns the production services.
-2. Locate the PostgreSQL database referenced by the Laravel service. Confirm its name, region, plan, storage usage, connection status, and current billing.
+2. Locate the PostgreSQL database referenced by the active Node service and any isolated Laravel staging database. Confirm their names, regions, plans, storage usage, connection status, and current billing; do not use production as the Laravel staging target.
 3. Identify the exact proposed upgrade in the dashboard and record its monthly price, any one-time charges, downtime expectation, storage limit, and backup retention.
 4. Confirm whether the change is an in-place plan adjustment, a new database, or a migration. Treat a new database as a data migration, not a simple resize.
 5. Record the current Vercel API base URL and the production Node and Laravel service URLs without copying secrets into tickets or chat.
