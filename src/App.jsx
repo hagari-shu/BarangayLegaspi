@@ -5103,6 +5103,11 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
                           <small>{t[stage.messageKey]}</small>
                         </div>
                       ))}
+                      <div className="overview-item">
+                        <h4>{t.approvedResidents || 'Approved residents'}</h4>
+                        <p className="overview-value">{approvedUsers}</p>
+                        <small>{t.verifiedAccounts}</small>
+                      </div>
                     </div>
                     <div className="service-count-list">
                       {Object.entries(requestCountsByType).map(([type, count]) => <div key={type}><span>{type}</span><strong>{count}</strong></div>)}
