@@ -2,7 +2,7 @@
 
 ## A practical upgrade, built around the system we already have
 
-Barangay Legaspi's application already supports PostgreSQL, and its Render deployment configuration already connects the Laravel API to an existing Singapore PostgreSQL database. The proposed work is therefore a **capacity, reliability, backup, and rollout review**—not an automatic move to a different database provider.
+Barangay Legaspi's application already supports PostgreSQL. The Laravel staging API must use a separate PostgreSQL database from the active Node API; its Render blueprint now requires an operator-supplied `DATABASE_URL` rather than automatically binding to the production database. The proposed work is therefore a **capacity, reliability, backup, and rollout review**—not an automatic move to a different database provider.
 
 ## Why review the database now?
 
