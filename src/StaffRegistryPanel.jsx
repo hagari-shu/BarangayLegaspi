@@ -5,6 +5,76 @@ import './StaffRegistryPanel.css'
 
 const API_BASE = (import.meta.env.VITE_API_BASE || (import.meta.env.DEV ? 'http://localhost:3001/api' : '')).replace(/\/$/, '')
 
+function RegistryDialog({ children, className, backdropClassName = '', labelledBy, onClose, closeDisabled = false, as = 'section', onSubmit }) {
+  const dialogRef = useRef(null)
+  const onCloseRef = useRef(onClose)
+  const closeDisabledRef = useRef(closeDisabled)
+  const DialogElement = as
+
+  useEffect(() => {
+    onCloseRef.current = onClose
+    closeDisabledRef.current = closeDisabled
+  }, [onClose, closeDisabled])
+
+  useEffect(() => {
+    const dialog = dialogRef.current
+    const previousFocus = document.activeElement
+    const focusableSelector = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+    const focusableElements = () => [...(dialog?.querySelectorAll(focusableSelector) || [])]
+      .filter((element) => element.getClientRects().length > 0)
+    const firstFocusable = focusableElements()[0]
+    const initialFocusTarget = firstFocusable || dialog
+    if (initialFocusTarget) initialFocusTarget.focus()
+
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape' && !closeDisabledRef.current) {
+        event.preventDefault()
+        onCloseRef.current()
+      }
+      if (event.key !== 'Tab') return
+
+      const elements = focusableElements()
+      if (!elements.length) {
+        event.preventDefault()
+        dialog?.focus()
+        return
+      }
+
+      const first = elements[0]
+      const last = elements[elements.length - 1]
+      if (event.shiftKey && (document.activeElement === first || !dialog.contains(document.activeElement))) {
+        event.preventDefault()
+        last.focus()
+      } else if (!event.shiftKey && (document.activeElement === last || !dialog.contains(document.activeElement))) {
+        event.preventDefault()
+        first.focus()
+      }
+    }
+
+    document.addEventListener('keydown', handleKeyDown)
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown)
+      if (previousFocus instanceof HTMLElement && previousFocus.isConnected) previousFocus.focus()
+    }
+  }, [])
+
+  return (
+    <div className={`registry-modal-backdrop${backdropClassName ? ` ${backdropClassName}` : ''}`} role="presentation">
+      <DialogElement
+        ref={dialogRef}
+        className={className}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={labelledBy}
+        tabIndex="-1"
+        onSubmit={onSubmit}
+      >
+        {children}
+      </DialogElement>
+    </div>
+  )
+}
+
 const text = {
   en: {
     title: 'Resident and household registry',
@@ -101,6 +171,10 @@ const text = {
     privacyTitle: 'Personal information — authorized use only',
     privacyNotice: 'Use these records only for authorized barangay duties. Enter only information needed from an official source; leave unknown fields blank. Do not share screenshots or exports outside approved work. New entries stay pending, and resident, import, verification, review-status, and record-status changes are recorded in the audit log.',
     search: 'Search full name',
+    searchLoading: 'Searching resident records…',
+    searchResults: '{count} matching resident record(s).',
+    searchMoreResults: 'Showing the first {shown} records. Refine the filters to narrow the results.',
+    clearFilters: 'Clear filters',
     birthDate: 'Exact birthdate',
     zone: 'Zone',
     allZones: 'All zones',
@@ -262,6 +336,10 @@ const text = {
     privacyTitle: 'Personal na impormasyon — para lamang sa awtorisadong gawain',
     privacyNotice: 'Gamitin lamang ang mga tala para sa awtorisadong tungkulin ng barangay. Ilagay lamang ang impormasyong kailangan mula sa opisyal na sanggunian; iwang blangko ang hindi alam. Huwag magbahagi ng screenshot o kopya sa labas ng aprubadong gawain. Mananatiling pending ang mga bagong tala, at itinatala sa audit log ang pagbabago ng resident, import, beripikasyon, review status, at status ng tala.',
     search: 'Hanapin ang buong pangalan',
+    searchLoading: 'Hinahanap ang mga tala ng residente…',
+    searchResults: '{count} katugmang tala ng residente.',
+    searchMoreResults: 'Ipinapakita ang unang {shown} tala. Gawing mas tiyak ang mga filter upang paliitin ang resulta.',
+    clearFilters: 'I-clear ang mga filter',
     birthDate: 'Eksaktong petsa ng kapanganakan',
     zone: 'Zone',
     allZones: 'Lahat ng zone',
@@ -345,6 +423,7 @@ export default function StaffRegistryPanel({ language = 'en' }) {
   const [zone, setZone] = useState('')
   const [debounced, setDebounced] = useState({ search: '', birthDate: '', zone: '' })
   const [records, setRecords] = useState([])
+  const [recordsTotal, setRecordsTotal] = useState(0)
   const [zones, setZones] = useState(Array.from({ length: 7 }, (_, index) => ({ zone: index + 1, total: 0 })))
   const [zonesLoading, setZonesLoading] = useState(true)
   const [zonesError, setZonesError] = useState('')
@@ -428,6 +507,7 @@ export default function StaffRegistryPanel({ language = 'en' }) {
         if (active) {
           const nextRecords = Array.isArray(residentData.residents) ? residentData.residents : []
           setRecords(nextRecords)
+          setRecordsTotal(Number(residentData.total) || nextRecords.length)
           const normalizedSearch = debounced.search.toLocaleLowerCase()
           const exactMatches = nextRecords.filter((resident) => `${resident.firstName} ${resident.lastName}`.trim().toLocaleLowerCase() === normalizedSearch)
           if (normalizedSearch && exactMatches.length === 1 && autoFilledSearchRef.current !== normalizedSearch) {
@@ -839,6 +919,13 @@ export default function StaffRegistryPanel({ language = 'en' }) {
     ? records.filter((resident) => `${resident.firstName} ${resident.lastName}`.trim().toLocaleLowerCase() === search.trim().toLocaleLowerCase())
     : []
   const exactSearchMatch = exactSearchMatches.length === 1 ? exactSearchMatches[0] : null
+  const hasSearchFilters = Boolean(search.trim() || birthDate || zone)
+  const clearSearchFilters = () => {
+    autoFilledSearchRef.current = ''
+    setSearch('')
+    setBirthDate('')
+    setZone('')
+  }
   const zonePageCount = Math.max(1, Math.ceil(zoneTotal / pageSize))
   const openZone = (zoneNumber) => {
     setZoneDialog(zoneNumber)
@@ -1073,8 +1160,12 @@ export default function StaffRegistryPanel({ language = 'en' }) {
       {familyMessage && <p className="registry-message" role="status">{familyMessage}</p>}
 
       {familyWizardOpen && (
-        <div className="registry-modal-backdrop" role="presentation">
-          <section className="registry-modal family-wizard" role="dialog" aria-modal="true" aria-labelledby="family-wizard-title">
+        <RegistryDialog
+          className="registry-modal family-wizard"
+          labelledBy="family-wizard-title"
+          closeDisabled={familyBusy}
+          onClose={() => { if (!familyBusy) setFamilyWizardOpen(false) }}
+        >
             <div className="registry-modal-header">
               <div>
                 <p className="registry-step-label">{labels.familyStepHousehold} · {labels.familyStepMembers} · {labels.familyStepReview} ({familyStep}/3)</p>
@@ -1172,11 +1263,10 @@ export default function StaffRegistryPanel({ language = 'en' }) {
               </div>
             )}
             {familyError && familyStep !== 3 && <p className="registry-message error" role="alert">{familyError}</p>}
-          </section>
-        </div>
+        </RegistryDialog>
       )}
 
-      <div className="registry-filters" aria-label={labels.title}>
+      <div className="registry-filters" role="group" aria-label={labels.title}>
         <label>{labels.search}<input type="search" value={search} onChange={(event) => {
           autoFilledSearchRef.current = ''
           setBirthDate('')
@@ -1185,7 +1275,15 @@ export default function StaffRegistryPanel({ language = 'en' }) {
         }} /></label>
         <label>{labels.birthDate}<input type="date" value={birthDate} onChange={(event) => setBirthDate(event.target.value)} /></label>
         <label>{labels.zone}<select value={zone} onChange={(event) => setZone(event.target.value)}><option value="">{labels.allZones}</option>{[1, 2, 3, 4, 5, 6, 7].map((number) => <option key={number} value={number}>Zone {number}</option>)}</select></label>
+        <button type="button" className="secondary-btn small registry-clear-filters" disabled={!hasSearchFilters} onClick={clearSearchFilters}>{labels.clearFilters}</button>
       </div>
+      {hasSearchFilters && <p className="registry-message" role="status" aria-live="polite" aria-atomic="true">
+        {loading
+          ? labels.searchLoading
+          : recordsTotal === 0
+            ? labels.searchNoMatch
+            : `${labels.searchResults.replace('{count}', String(recordsTotal))}${recordsTotal > records.length ? ` ${labels.searchMoreResults.replace('{shown}', String(records.length))}` : ''}`}
+      </p>}
       {search.trim() && exactSearchMatch && <p className="registry-message" role="status">{labels.searchAutofill}</p>}
       {search.trim() && exactSearchMatches.length > 1 && <div className="registry-search-match-list" aria-label={labels.search}>
         <p>{labels.searchChooseMatch}</p>
@@ -1202,7 +1300,7 @@ export default function StaffRegistryPanel({ language = 'en' }) {
       {search.trim() && records.length > 0 && !exactSearchMatch && exactSearchMatches.length === 0 && (
         <div className="registry-search-match-list" aria-label={labels.search}>
           <p>{labels.searchResultsHelp}</p>
-          {records.slice(0, 5).map((resident) => (
+          {records.map((resident) => (
             <button type="button" className="registry-search-match" key={resident.id} onClick={() => {
               setBirthDate(resident.birthDate || '')
               setZone(resident.zone ? String(resident.zone) : '')
@@ -1213,7 +1311,6 @@ export default function StaffRegistryPanel({ language = 'en' }) {
           ))}
         </div>
       )}
-      {search.trim() && !loading && exactSearchMatches.length === 0 && records.length === 0 && <p className="registry-message" role="status">{labels.searchNoMatch}</p>}
       {error && <p className="registry-message error" role="alert">{error}</p>}
       <section className="registry-zone-directory" aria-labelledby="registry-zone-title">
         <div>
@@ -1243,8 +1340,11 @@ export default function StaffRegistryPanel({ language = 'en' }) {
       )}
 
       {zoneDialog !== null && (
-        <div className="registry-modal-backdrop" role="presentation">
-          <section className="registry-modal registry-zone-modal" role="dialog" aria-modal="true" aria-labelledby="zone-dialog-title">
+        <RegistryDialog
+          className="registry-modal registry-zone-modal"
+          labelledBy="zone-dialog-title"
+          onClose={() => setZoneDialog(null)}
+        >
             <div className="registry-modal-header">
               <div><h2 id="zone-dialog-title">{labels.zoneResidentsTitle} {zoneDialog}</h2><p>{zoneTotal} {labels.assignedResidents}</p></div>
               <button type="button" className="secondary-btn small" onClick={() => setZoneDialog(null)}>{labels.close}</button>
@@ -1310,13 +1410,18 @@ export default function StaffRegistryPanel({ language = 'en' }) {
                 </div>
               </>
             )}
-          </section>
-        </div>
+        </RegistryDialog>
       )}
 
       {editingResident && (
-        <div className="registry-modal-backdrop registry-edit-backdrop" role="presentation">
-          <form className="registry-modal registry-edit-modal" role="dialog" aria-modal="true" aria-labelledby="edit-resident-title" onSubmit={saveResidentDetails}>
+        <RegistryDialog
+          as="form"
+          className="registry-modal registry-edit-modal"
+          backdropClassName="registry-edit-backdrop"
+          labelledBy="edit-resident-title"
+          onClose={() => setEditingResident(null)}
+          onSubmit={saveResidentDetails}
+        >
             <div className="registry-modal-header">
               <h2 id="edit-resident-title">{labels.editResident}</h2>
               <button type="button" className="secondary-btn small" onClick={() => setEditingResident(null)}>{labels.close}</button>
@@ -1338,8 +1443,7 @@ export default function StaffRegistryPanel({ language = 'en' }) {
               <button type="button" className="secondary-btn small" disabled={editBusy} onClick={() => setEditingResident(null)}>{labels.close}</button>
               <button type="submit" className="primary-btn small" disabled={editBusy}>{editBusy ? labels.saving : labels.saveChanges}</button>
             </div>
-          </form>
-        </div>
+        </RegistryDialog>
       )}
       <datalist id="registry-occupation-options">
         {[labels.student, labels.governmentEmployee, labels.privateEmployee, labels.selfEmployed, labels.farmer, labels.homemaker, labels.unemployed].map((occupation) => <option key={occupation} value={occupation} />)}

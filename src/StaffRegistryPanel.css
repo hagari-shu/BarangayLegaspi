@@ -244,6 +244,10 @@
   font-weight: 600;
 }
 
+.registry-clear-filters {
+  justify-self: start;
+}
+
 .registry-entry-form {
   padding: 1rem;
   border: 1px solid #d8e2e8;
@@ -530,6 +534,16 @@
   border-radius: 1rem;
   background: #fff;
   box-shadow: 0 1.5rem 4rem rgba(0, 0, 0, 0.24);
+}
+
+.registry-modal:focus-visible {
+  outline: 3px solid #245b78;
+  outline-offset: 2px;
+}
+
+.registry-modal :focus-visible {
+  outline: 3px solid #245b78;
+  outline-offset: 2px;
 }
 
 .registry-zone-modal {
