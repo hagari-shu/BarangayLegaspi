@@ -25,6 +25,50 @@ test('filipino translation includes resident and admin labels', () => {
   assert.ok(fil.mauWelcome.includes('Mau'))
 })
 
+test('resident registration guidance and password requirements are localized', () => {
+  for (const locale of [translations.en, translations.fil]) {
+    for (const key of [
+      'registrationInformationNoticeLabel',
+      'registrationDataUseNotice',
+      'registrationRequiredFieldsError',
+      'registrationFailed',
+      'registrationPendingNotice',
+      'registrationApprovalNotice',
+      'registrationHouseholdOptionalHint',
+      'registrationHouseholdMemberName',
+      'registrationHouseholdMemberRelationship',
+      'registrationRemoveHouseholdMember',
+      'registrationHouseholdMemberNamePlaceholder',
+      'registrationFirstNamePlaceholder',
+      'registrationLastNamePlaceholder',
+      'registrationEmailPlaceholder',
+      'registrationAddressPlaceholder',
+      'registrationSelectZone',
+      'registrationPasswordPlaceholder',
+      'relationshipParent',
+      'relationshipSibling',
+      'relationshipRelative',
+      'relationshipSpouse',
+      'relationshipChild',
+      'relationshipOther',
+      'passwordRequirements',
+      'passwordRequirementsError',
+      'newPasswordRequirementsError',
+    ]) {
+      assert.equal(typeof locale[key], 'string', `${key} must be localized`)
+      assert.ok(locale[key].length > 0, `${key} must not be empty`)
+    }
+  }
+
+  assert.match(translations.en.registrationHouseholdMemberName, /\{number\}/)
+  assert.match(translations.fil.registrationHouseholdMemberName, /\{number\}/)
+  assert.notEqual(translations.en.registrationDataUseNotice, translations.fil.registrationDataUseNotice)
+  assert.notEqual(translations.en.passwordRequirements, translations.fil.passwordRequirements)
+  assert.equal(translations.fil.mobileNumberLabel, 'Numero ng cellphone')
+  assert.equal(translations.fil.homeAddressLabel, 'Tirahan')
+  assert.equal(translations.fil.relationshipParent, 'Magulang')
+})
+
 test('Filipino role dashboards have translated controls and accessible navigation labels', () => {
   const { fil } = translations
 

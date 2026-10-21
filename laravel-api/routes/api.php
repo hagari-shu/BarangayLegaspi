@@ -20,6 +20,8 @@ Route::middleware('auth.api')->group(function () {
     Route::post('/logout', [ApiController::class, 'logout']);
     Route::post('/change-password', [ApiController::class, 'changePassword']);
     Route::get('/profile', [ApiController::class, 'profile']);
+    Route::post('/profile/email/request', [ApiController::class, 'requestProfileEmailVerification'])->middleware('throttle:12,1');
+    Route::post('/profile/email/verify', [ApiController::class, 'verifyProfileEmail'])->middleware('throttle:12,1');
     Route::patch('/profile', [ApiController::class, 'updateProfile']);
     Route::get('/dashboard', [ApiController::class, 'dashboard']);
     Route::get('/payments', [ApiController::class, 'payments']);

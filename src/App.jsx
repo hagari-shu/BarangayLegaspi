@@ -88,7 +88,6 @@ const isValidPassword = (value) => {
   const password = String(value).trim()
   return password.length >= 8 && /[a-z]/.test(password) && /[A-Z]/.test(password) && /\d/.test(password) && /[^A-Za-z0-9\s]/.test(password)
 }
-const passwordRequirements = 'at least 8 characters, one uppercase letter, one lowercase letter, one number, and one special character'
 
 const LanguageToggle = ({ language, setLanguage, className = '' }) => {
   const [largeText, setLargeText] = useState(() => {
@@ -130,8 +129,9 @@ const LanguageToggle = ({ language, setLanguage, className = '' }) => {
   )
 }
 
-function PasswordField({ id, label, value, onChange, autoComplete = 'new-password', minLength = 8, placeholder, required = true, helpText }) {
+function PasswordField({ id, label, value, onChange, language = 'en', autoComplete = 'new-password', minLength = 8, placeholder, required = true, helpText }) {
   const [visible, setVisible] = useState(false)
+  const t = translations[language] || translations.en
 
   return (
     <div className="password-field-block">
@@ -150,7 +150,7 @@ function PasswordField({ id, label, value, onChange, autoComplete = 'new-passwor
         <button
           type="button"
           className="toggle-password"
-          aria-label={visible ? `Hide ${label || 'password'}` : `Show ${label || 'password'}`}
+          aria-label={visible ? t.hidePassword : t.showPassword}
           aria-pressed={visible}
           onClick={() => setVisible((current) => !current)}
         >
@@ -1274,7 +1274,7 @@ function LoginPage({ onLogin, language, setLanguage }) {
   const handleResetSubmit = async (event) => {
     event.preventDefault()
     if (resetRequested && resetManualPasswordRequired && !isValidPassword(resetForm.newPassword)) {
-      alert(`New password must have ${passwordRequirements}.`)
+      alert(t.newPasswordRequirementsError.replace('{requirements}', t.passwordRequirements))
       return
     }
     setResetting(true)
@@ -1605,7 +1605,7 @@ function LoginPage({ onLogin, language, setLanguage }) {
                 <input id="reset-token" type="text" value={resetForm.token} onChange={(event) => setResetForm((current) => ({ ...current, token: event.target.value }))} required />
               </div>}
               {resetRequested && resetManualPasswordRequired && !resetTemporaryPassword && <div className="input-block">
-                <PasswordField id="reset-new-password" label={t.password} value={resetForm.newPassword} onChange={(event) => setResetForm((current) => ({ ...current, newPassword: event.target.value }))} helpText={`${passwordRequirements}.`} />
+                <PasswordField id="reset-new-password" label={t.password} value={resetForm.newPassword} onChange={(event) => setResetForm((current) => ({ ...current, newPassword: event.target.value }))} language={language} helpText={`${t.passwordRequirements}.`} />
               </div>}
               {resetTemporaryPassword && <div className="input-block">
                 <label htmlFor="admin-reset-temporary-password">{t.temporaryPassword}</label>
@@ -1629,7 +1629,14 @@ function LoginPage({ onLogin, language, setLanguage }) {
 function RegisterPage({ language, setLanguage }) {
   const navigate = useNavigate()
   const t = translations[language] || translations.en
-  const relationshipOptions = ['Parent', 'Sibling', 'Relative', 'Spouse', 'Child', 'Other']
+  const relationshipOptions = [
+    { value: 'Parent', label: t.relationshipParent },
+    { value: 'Sibling', label: t.relationshipSibling },
+    { value: 'Relative', label: t.relationshipRelative },
+    { value: 'Spouse', label: t.relationshipSpouse },
+    { value: 'Child', label: t.relationshipChild },
+    { value: 'Other', label: t.relationshipOther },
+  ]
   const [form, setForm] = useState({
     firstName: '',
     lastName: '',
@@ -1672,13 +1679,13 @@ function RegisterPage({ language, setLanguage }) {
       address: sanitizeText(form.address),
       zone: Number(form.zone),
       householdMembers: form.householdMembers
-        .map((member) => ({ name: sanitizeText(member.name), relationship: relationshipOptions.includes(member.relationship) ? member.relationship : 'Other' }))
+        .map((member) => ({ name: sanitizeText(member.name), relationship: relationshipOptions.some((option) => option.value === member.relationship) ? member.relationship : 'Other' }))
         .filter((member) => member.name),
       password: sanitizeText(form.password),
     }
 
     if (!nextForm.firstName || !nextForm.lastName || !nextForm.mobile || !nextForm.address || !nextForm.zone || !nextForm.password) {
-      alert('Please complete all required fields to register.')
+      alert(t.registrationRequiredFieldsError)
       return
     }
 
@@ -1688,7 +1695,7 @@ function RegisterPage({ language, setLanguage }) {
     }
 
     if (!isValidPassword(nextForm.password)) {
-      alert(`Password must have ${passwordRequirements}.`)
+      alert(t.passwordRequirementsError.replace('{requirements}', t.passwordRequirements))
       return
     }
 
@@ -1711,13 +1718,13 @@ function RegisterPage({ language, setLanguage }) {
       const data = await response.json()
 
       if (!response.ok) {
-        throw new Error(data.message || 'Registration failed.')
+        throw new Error(data.message || t.registrationFailed)
       }
 
-      alert(data.message || 'Account created. Please wait for administrator approval before signing in.')
+      alert(data.message || t.registrationPendingNotice)
       navigate('/')
     } catch (error) {
-      alert(error.message || 'Registration failed.')
+      alert(error.message || t.registrationFailed)
     }
   }
 
@@ -1743,13 +1750,9 @@ function RegisterPage({ language, setLanguage }) {
           </div>
 
           <form className="register-form" onSubmit={handleSubmit}>
-            <div className="info-strip" aria-label="Information collection notice">
+            <div className="info-strip" aria-label={t.registrationInformationNoticeLabel}>
               <p className="info-strip-title">{t.whyWeAskForThis}</p>
-              <p>
-                {language === 'fil'
-                  ? 'Tanging impormasyon lamang ang kinokolekta namin upang i-verify ang iyong resident account, magtalaga ng zone, at magbigay ng serbisyo ng barangay. Opsyonal ang detalye ng household member.'
-                  : 'We only collect the information needed to verify your resident account, assign your barangay zone, and provide barangay services. Household member details are optional.'}
-              </p>
+              <p>{t.registrationDataUseNotice}</p>
             </div>
 
             <div className="form-sections">
@@ -1761,20 +1764,20 @@ function RegisterPage({ language, setLanguage }) {
 
                 <div className="form-grid">
                   <div className="input-block">
-                    <label>{t.firstNameLabel}</label>
-                    <input type="text" name="firstName" value={form.firstName} onChange={handleChange} placeholder="Enter your first name" autoComplete="given-name" required />
+                    <label htmlFor="registration-first-name">{t.firstNameLabel}</label>
+                    <input id="registration-first-name" type="text" name="firstName" value={form.firstName} onChange={handleChange} placeholder={t.registrationFirstNamePlaceholder} autoComplete="given-name" required />
                   </div>
                   <div className="input-block">
-                    <label>{t.lastNameLabel}</label>
-                    <input type="text" name="lastName" value={form.lastName} onChange={handleChange} placeholder="Enter your last name" autoComplete="family-name" required />
+                    <label htmlFor="registration-last-name">{t.lastNameLabel}</label>
+                    <input id="registration-last-name" type="text" name="lastName" value={form.lastName} onChange={handleChange} placeholder={t.registrationLastNamePlaceholder} autoComplete="family-name" required />
                   </div>
                   <div className="input-block">
-                    <label>{t.mobileNumberLabel}</label>
-                    <input type="text" name="mobile" value={form.mobile} onChange={handleChange} placeholder="09XXXXXXXXX" autoComplete="tel" inputMode="numeric" maxLength={11} required />
+                    <label htmlFor="registration-mobile">{t.mobileNumberLabel}</label>
+                    <input id="registration-mobile" type="text" name="mobile" value={form.mobile} onChange={handleChange} placeholder="09XXXXXXXXX" autoComplete="tel" inputMode="numeric" maxLength={11} required />
                   </div>
                   <div className="input-block">
-                    <label>{t.emailOptional}</label>
-                    <input type="email" name="email" value={form.email} onChange={handleChange} placeholder="name@gmail.com" autoComplete="email" aria-describedby="registration-email-hint" />
+                    <label htmlFor="registration-email">{t.emailOptional}</label>
+                    <input id="registration-email" type="email" name="email" value={form.email} onChange={handleChange} placeholder={t.registrationEmailPlaceholder} autoComplete="email" aria-describedby="registration-email-hint" />
                     <small id="registration-email-hint">{t.residentEmailOptionalHint}</small>
                   </div>
                 </div>
@@ -1788,13 +1791,13 @@ function RegisterPage({ language, setLanguage }) {
 
                 <div className="form-grid">
                   <div className="input-block full-width">
-                    <label>{t.homeAddressLabel}</label>
-                    <input type="text" name="address" value={form.address} onChange={handleChange} placeholder="House number, street, Barangay Legaspi" autoComplete="street-address" required />
+                    <label htmlFor="registration-address">{t.homeAddressLabel}</label>
+                    <input id="registration-address" type="text" name="address" value={form.address} onChange={handleChange} placeholder={t.registrationAddressPlaceholder} autoComplete="street-address" required />
                   </div>
                   <div className="input-block">
-                    <label>{t.zoneLabel}</label>
-                    <select name="zone" value={form.zone} onChange={handleChange} required>
-                      <option value="">Select your zone</option>
+                    <label htmlFor="registration-zone">{t.zoneLabel}</label>
+                    <select id="registration-zone" name="zone" value={form.zone} onChange={handleChange} required>
+                      <option value="">{t.registrationSelectZone}</option>
                       {[1, 2, 3, 4, 5, 6, 7].map((zone) => <option key={zone} value={zone}>Zone {zone}</option>)}
                     </select>
                   </div>
@@ -1807,21 +1810,21 @@ function RegisterPage({ language, setLanguage }) {
                   <p>{t.optionalHousehold}</p>
                 </div>
 
-                <div className="input-block full-width household-members-block">
+                <div className="input-block full-width household-members-block" role="group" aria-labelledby="registration-household-members-label">
                   <div className="household-members-header">
                     <div>
-                      <label>{t.householdMembersLabel}</label>
-                      <small>This section is optional and only helps maintain a more complete household record.</small>
+                      <strong id="registration-household-members-label" className="household-members-label">{t.householdMembersLabel}</strong>
+                      <small>{t.registrationHouseholdOptionalHint}</small>
                     </div>
                     <button type="button" className="secondary-btn small" onClick={addHouseholdMember}>{t.addMember}</button>
                   </div>
                   {form.householdMembers.map((member, index) => (
                     <div className="household-member-row" key={`household-member-${index}`}>
-                      <input type="text" value={member.name} onChange={(event) => updateHouseholdMember(index, 'name', event.target.value)} placeholder="Full name" aria-label={`Household member ${index + 1} name`} />
-                      <select value={member.relationship} onChange={(event) => updateHouseholdMember(index, 'relationship', event.target.value)} aria-label={`Household member ${index + 1} relationship`}>
-                        {relationshipOptions.map((relationship) => <option key={relationship} value={relationship}>{relationship}</option>)}
+                      <input type="text" value={member.name} onChange={(event) => updateHouseholdMember(index, 'name', event.target.value)} placeholder={t.registrationHouseholdMemberNamePlaceholder} aria-label={t.registrationHouseholdMemberName.replace('{number}', String(index + 1))} />
+                      <select value={member.relationship} onChange={(event) => updateHouseholdMember(index, 'relationship', event.target.value)} aria-label={t.registrationHouseholdMemberRelationship.replace('{number}', String(index + 1))}>
+                        {relationshipOptions.map((relationship) => <option key={relationship.value} value={relationship.value}>{relationship.label}</option>)}
                       </select>
-                      <button type="button" className="small-action danger" onClick={() => removeHouseholdMember(index)} aria-label={`Remove household member ${index + 1}`}>{t.remove}</button>
+                      <button type="button" className="small-action danger" onClick={() => removeHouseholdMember(index)} aria-label={t.registrationRemoveHouseholdMember.replace('{number}', String(index + 1))}>{t.remove}</button>
                     </div>
                   ))}
                 </div>
@@ -1834,15 +1837,12 @@ function RegisterPage({ language, setLanguage }) {
                 </div>
 
                 <div className="form-grid">
-                  <PasswordField id="registration-password" label={t.passwordLabel} value={form.password} onChange={(event) => setForm((current) => ({ ...current, password: event.target.value }))} placeholder="Create a strong password" helpText={`${passwordRequirements}.`} />
+                  <PasswordField id="registration-password" label={t.passwordLabel} value={form.password} onChange={(event) => setForm((current) => ({ ...current, password: event.target.value }))} language={language} placeholder={t.registrationPasswordPlaceholder} helpText={`${t.passwordRequirements}.`} />
                 </div>
               </section>
             </div>
 
-            <p className="approval-notice">
-              After registration, your account will remain pending until a barangay administrator verifies it. This helps keep
-              resident records accurate and ensures only valid barangay residents receive access.
-            </p>
+            <p className="approval-notice">{t.registrationApprovalNotice}</p>
 
             <div className="register-actions">
               <button type="submit" className="primary-btn wide">{t.registerAsResident}</button>
@@ -3104,7 +3104,7 @@ function SettingsPage({ profile, onLogout, onPasswordChanged, onProfileUpdated, 
   const handlePasswordSubmit = async (event) => {
     event.preventDefault()
     if (!isValidPassword(passwordForm.newPassword)) {
-      alert(`New password must have ${passwordRequirements}.`)
+      alert(t.newPasswordRequirementsError.replace('{requirements}', t.passwordRequirements))
       return
     }
     if (passwordForm.newPassword !== passwordForm.confirmPassword) {
@@ -3217,9 +3217,9 @@ function SettingsPage({ profile, onLogout, onPasswordChanged, onProfileUpdated, 
             <div className="info-box">
               <h3>{t.security}</h3>
               <form className="password-change-form" onSubmit={handlePasswordSubmit}>
-                <PasswordField id="current-password" label={t.currentPassword} autoComplete="current-password" value={passwordForm.currentPassword} onChange={(event) => setPasswordForm((current) => ({ ...current, currentPassword: event.target.value }))} />
-                <PasswordField id="new-password" label={t.newPassword} value={passwordForm.newPassword} onChange={(event) => setPasswordForm((current) => ({ ...current, newPassword: event.target.value }))} />
-                <PasswordField id="confirm-password" label={t.confirmNewPassword} value={passwordForm.confirmPassword} onChange={(event) => setPasswordForm((current) => ({ ...current, confirmPassword: event.target.value }))} helpText={`${passwordRequirements}.`} />
+                <PasswordField id="current-password" label={t.currentPassword} language={language} autoComplete="current-password" value={passwordForm.currentPassword} onChange={(event) => setPasswordForm((current) => ({ ...current, currentPassword: event.target.value }))} />
+                <PasswordField id="new-password" label={t.newPassword} language={language} value={passwordForm.newPassword} onChange={(event) => setPasswordForm((current) => ({ ...current, newPassword: event.target.value }))} />
+                <PasswordField id="confirm-password" label={t.confirmNewPassword} language={language} value={passwordForm.confirmPassword} onChange={(event) => setPasswordForm((current) => ({ ...current, confirmPassword: event.target.value }))} helpText={`${t.passwordRequirements}.`} />
                 <button type="submit" className="primary-btn small" disabled={savingPassword}>{savingPassword ? t.saving : t.changePassword}</button>
               </form>
             </div>
@@ -4843,7 +4843,7 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
   const handleResetStaffPassword = async (event) => {
     event.preventDefault()
     if (!isValidPassword(staffPasswordResetForm.password)) {
-      alert(`${t.newPassword} must have ${passwordRequirements}.`)
+      alert(t.newPasswordRequirementsError.replace('{requirements}', t.passwordRequirements))
       return
     }
     if (staffPasswordResetForm.password !== staffPasswordResetForm.confirmPassword) {
@@ -5555,13 +5555,15 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
                           <PasswordField
                             id="admin-staff-reset-password"
                             label={t.newPassword}
+                            language={language}
                             value={staffPasswordResetForm.password}
                             onChange={(event) => setStaffPasswordResetForm((current) => ({ ...current, password: event.target.value }))}
-                            helpText={`${passwordRequirements}.`}
+                            helpText={`${t.passwordRequirements}.`}
                           />
                           <PasswordField
                             id="admin-staff-reset-password-confirm"
                             label={t.confirmNewPassword}
+                            language={language}
                             value={staffPasswordResetForm.confirmPassword}
                             onChange={(event) => setStaffPasswordResetForm((current) => ({ ...current, confirmPassword: event.target.value }))}
                             helpText={null}
@@ -6322,7 +6324,7 @@ function App() {
     let active = true
     fetch(`${API_BASE}/system-logo`)
       .then(async (response) => {
-        if (response.status === 404) return ''
+        if (response.status === 204 || response.status === 404) return ''
         const data = await response.json().catch(() => ({}))
         if (!response.ok || typeof data.url !== 'string') {
           throw new Error(data.message || 'Unable to load the system logo.')

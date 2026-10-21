@@ -14,7 +14,7 @@ return new class extends Migration
                 $table->string('first_name', 100);
                 $table->string('last_name', 100);
                 $table->string('mobile', 20)->unique();
-                $table->string('email')->unique();
+                $table->string('email')->nullable()->unique();
                 $table->text('password_hash');
                 $table->string('role', 30)->default('resident');
                 $table->string('household_id', 50)->nullable();

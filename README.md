@@ -123,7 +123,7 @@ Vercel continues to serve the frontend and SPA routes through `vercel.json`.
 
 ### Production health monitoring
 
-The `Production health check` GitHub Actions workflow checks the public frontend, Laravel API, PostgreSQL-backed health endpoint, and public services, announcements, and events endpoints every 15 minutes. It also runs after changes to the workflow and can be started manually from the repository's Actions tab. A failed check identifies the failing service in the workflow log.
+The `Production health check` GitHub Actions workflow checks the Vercel frontend and the publicly available Hostinger migration candidate (frontend, registration route, and PostgreSQL-backed API), as well as the Render Node/Laravel APIs and public services, announcements, and events endpoints every 15 minutes. A successful candidate check does not mean DNS cutover or authenticated workflow parity has been approved. The workflow also runs after changes to its definition and can be started manually from the repository's Actions tab. A failed check identifies the failing service in the workflow log.
 
 Enable GitHub Actions failure notifications in your GitHub account or repository notification settings to be alerted when a scheduled check fails. The frontend reports rendering errors, uncaught browser errors, and unhandled promise rejections to the active API. Reports are rate-limited and contain only an allowlisted event type, route, language, and role; error messages, stacks, and account data are deliberately excluded. Review these warnings in the active API service logs. The frontend also shows a bilingual recovery screen if a rendering error prevents the portal from loading.
 

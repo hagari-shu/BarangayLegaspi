@@ -20,6 +20,7 @@ return [
 
     'resend' => [
         'key' => env('RESEND_API_KEY'),
+        'from_email' => env('PASSWORD_RESET_FROM_EMAIL', env('SUPER_ADMIN_INVITATION_FROM_EMAIL')),
     ],
 
     'ses' => [

@@ -8,7 +8,7 @@ import { hashPassword, verifyToken } from '../server/auth.js'
 import { signToken } from '../server/auth.js'
 import * as jsonDb from '../server/db.js'
 import { DB_PATH } from '../server/config.js'
-import { isCaptainPhotoStorageConfigured } from '../server/captain-photo-storage.js'
+import { isCaptainPhotoStorageConfigured, isSystemLogoStorageConfigured } from '../server/captain-photo-storage.js'
 import { createHash, createHmac, randomUUID } from 'node:crypto'
 import { createTotpSecret, encryptTotpSecret } from '../server/mfa.js'
 import { registryAgeDateRange } from '../server/resident-registry.js'
@@ -150,6 +150,25 @@ const createTestServer = async () => {
     baseUrl: `http://127.0.0.1:${port}`,
   }
 }
+
+test('system logo endpoint returns no content when the optional logo is unavailable', async () => {
+  const { server, baseUrl } = await createTestServer()
+  try {
+    const response = await fetch(`${baseUrl}/api/system-logo`)
+    if (isSystemLogoStorageConfigured()) {
+      assert.ok([200, 204].includes(response.status))
+      if (response.status === 200) {
+        assert.equal(typeof (await response.json()).url, 'string')
+      }
+    } else {
+      assert.equal(response.status, 204)
+    }
+  } finally {
+    await new Promise((resolve, reject) => {
+      server.close((error) => error ? reject(error) : resolve())
+    })
+  }
+})
 
 test('registry age bounds include February 29 birthdays under the displayed-age convention', () => {
   const cases = [

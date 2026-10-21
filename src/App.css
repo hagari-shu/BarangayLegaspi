@@ -375,7 +375,9 @@ textarea:focus {
   margin-bottom: 10px;
 }
 
-.household-members-header label {
+.household-members-header label,
+.household-members-header .household-members-label {
+  display: block;
   margin-bottom: 3px;
 }
 

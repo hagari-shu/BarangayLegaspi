@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Support\ApiIdentity;
+use Illuminate\Database\QueryException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Routing\Controller;
@@ -85,11 +86,12 @@ class ApiController extends Controller
             ->values()
             ->all();
 
-        if (!$firstName || !$lastName || !$mobile || !$email || !$password) {
+        $email = $email ?: null;
+        if (!$firstName || !$lastName || !$mobile || !$password) {
             return response()->json(['message' => 'Please complete all required fields.'], 400);
         }
-        if (!preg_match('/^09\d{9}$/', $mobile) || !filter_var($email, FILTER_VALIDATE_EMAIL) || !$this->validPassword($password)) {
-            return response()->json(['message' => 'Please enter a valid mobile number, email, and password with '.self::PASSWORD_REQUIREMENTS.'.'], 400);
+        if (!preg_match('/^09\d{9}$/', $mobile) || ($email !== null && !$this->isGmail($email)) || !$this->validPassword($password)) {
+            return response()->json(['message' => 'Please enter a valid mobile number, a Gmail address if provided, and a password with '.self::PASSWORD_REQUIREMENTS.'.'], 400);
         }
         if (!$address || $zone === false || $zone < 1 || $zone > 7) {
             return response()->json(['message' => 'Please provide a valid address and a zone from 1 to 7.'], 400);
@@ -97,10 +99,10 @@ class ApiController extends Controller
         if (DB::table('users')->where('mobile', $mobile)->exists()) {
             return response()->json(['message' => 'A resident with this mobile number already exists.'], 409);
         }
-        if (DB::table('users')->whereRaw('LOWER(email) = ?', [$email])->exists()) {
+        if ($email !== null && DB::table('users')->whereRaw('LOWER(email) = ?', [$email])->exists()) {
             return response()->json(['message' => 'A resident with this email already exists.'], 409);
         }
-        if (DB::table('super_admin_invitations')
+        if ($email !== null && DB::table('super_admin_invitations')
             ->whereRaw('LOWER(email) = ?', [$email])
             ->whereNull('accepted_at')
             ->whereNull('revoked_at')
@@ -366,12 +368,144 @@ class ApiController extends Controller
         return response()->json(['user' => $this->publicUser($request->attributes->get('actor'))]);
     }
 
+    public function requestProfileEmailVerification(Request $request): JsonResponse
+    {
+        $actor = $request->attributes->get('actor');
+        $email = strtolower($this->clean($request->input('email')));
+        if (!$this->isGmail($email) || strlen($email) > 255) {
+            return response()->json(['message' => 'Enter a valid Gmail address to receive a verification code.'], 400);
+        }
+
+        $user = DB::table('users')->where('id', $actor->id)->first();
+        if (!$user) {
+            return response()->json(['message' => 'User not found.'], 404);
+        }
+        if ($email === strtolower((string) ($user->email ?? ''))) {
+            return response()->json(['code' => 'email_unchanged', 'message' => 'This Gmail address is already on your account.'], 409);
+        }
+        if (DB::table('users')->whereRaw('LOWER(email) = ?', [$email])->where('id', '!=', $actor->id)->exists()) {
+            return response()->json(['message' => 'A user with this Gmail address already exists.'], 409);
+        }
+
+        $apiKey = (string) config('services.resend.key');
+        $fromEmail = (string) config('services.resend.from_email');
+        if ($apiKey === '' || !filter_var($fromEmail, FILTER_VALIDATE_EMAIL) || strlen($fromEmail) > 254) {
+            return response()->json([
+                'code' => 'email_verification_unavailable',
+                'message' => 'Email verification is not configured. Contact the barangay office.',
+            ], 503);
+        }
+
+        $code = str_pad((string) random_int(0, 999999), 6, '0', STR_PAD_LEFT);
+        $expiresAt = now()->addMinutes(10);
+        try {
+            $response = Http::timeout(10)
+                ->acceptJson()
+                ->withToken($apiKey)
+                ->post('https://api.resend.com/emails', [
+                    'from' => 'Barangay Legaspi <'.$fromEmail.'>',
+                    'to' => [$email],
+                    'subject' => 'Verify your Barangay Legaspi account email',
+                    'html' => '<p>Enter this one-time code in your account settings to verify your Gmail address:</p><p><strong>'.$code.'</strong></p><p>This code expires at '.$expiresAt->toISOString().' and can only be used once.</p><p>If you did not request this change, you can ignore this email.</p>',
+                    'text' => "Enter this one-time code in your account settings to verify your Gmail address:\n\n".$code."\n\nThis code expires at ".$expiresAt->toISOString()." and can only be used once.\nIf you did not request this change, you can ignore this email.",
+                ]);
+            if (!$response->successful()) {
+                Log::warning('Profile email verification delivery failed', ['status' => $response->status()]);
+
+                return response()->json(['message' => 'Unable to send the email verification code. Try again later.'], 502);
+            }
+        } catch (Throwable $error) {
+            Log::error('Profile email verification delivery failed', ['exception' => $error::class]);
+
+            return response()->json(['message' => 'Unable to send the email verification code. Try again later.'], 502);
+        }
+
+        DB::table('profile_email_verifications')->updateOrInsert(
+            ['user_id' => $actor->id],
+            [
+                'email' => $email,
+                'code_hash' => hash('sha256', $code),
+                'expires_at' => $expiresAt,
+                'attempts' => 0,
+                'created_at' => now(),
+            ]
+        );
+
+        return response()->json(['message' => 'A verification code was sent to the new Gmail address. It expires in 10 minutes.']);
+    }
+
+    public function verifyProfileEmail(Request $request): JsonResponse
+    {
+        $actor = $request->attributes->get('actor');
+        $email = strtolower($this->clean($request->input('email')));
+        $code = trim((string) $request->input('code', ''));
+        if (!$this->isGmail($email) || strlen($email) > 255 || !preg_match('/^\d{6}$/', $code)) {
+            return response()->json(['message' => 'Enter the Gmail address and its 6-digit verification code.'], 400);
+        }
+
+        try {
+            [$status, $body] = DB::transaction(function () use ($actor, $email, $code) {
+                $pending = DB::table('profile_email_verifications')
+                    ->where('user_id', $actor->id)
+                    ->lockForUpdate()
+                    ->first();
+                if (!$pending || $pending->email !== $email || now()->greaterThanOrEqualTo($pending->expires_at)) {
+                    DB::table('profile_email_verifications')->where('user_id', $actor->id)->delete();
+
+                    return [400, ['message' => 'The verification code is invalid or expired. Request a new code.']];
+                }
+
+                $attempts = (int) $pending->attempts + 1;
+                DB::table('profile_email_verifications')->where('user_id', $actor->id)->update(['attempts' => $attempts]);
+                if ($attempts > 5) {
+                    DB::table('profile_email_verifications')->where('user_id', $actor->id)->delete();
+
+                    return [429, ['message' => 'Too many incorrect codes. Request a new verification code.']];
+                }
+                if (!hash_equals($pending->code_hash, hash('sha256', $code))) {
+                    return [400, ['message' => 'The verification code is incorrect.']];
+                }
+
+                if (!DB::table('users')->where('id', $actor->id)->exists()) {
+                    DB::table('profile_email_verifications')->where('user_id', $actor->id)->delete();
+
+                    return [404, ['message' => 'User not found.']];
+                }
+                if (DB::table('users')->whereRaw('LOWER(email) = ?', [$email])->where('id', '!=', $actor->id)->exists()) {
+                    DB::table('profile_email_verifications')->where('user_id', $actor->id)->delete();
+
+                    return [409, ['message' => 'A user with this Gmail address already exists.']];
+                }
+
+                DB::table('users')->where('id', $actor->id)->update(['email' => $email]);
+                DB::table('profile_email_verifications')->where('user_id', $actor->id)->delete();
+                $this->writeAudit($actor, 'profile.email_verified', 'user', $actor->id);
+
+                return [200, [
+                    'message' => 'Gmail address verified and saved.',
+                    'user' => $this->publicUser(DB::table('users')->where('id', $actor->id)->first()),
+                ]];
+            });
+        } catch (QueryException $error) {
+            $isDuplicate = ($error->errorInfo[0] ?? null) === '23505'
+                || (($error->errorInfo[0] ?? null) === '23000' && str_contains(strtolower($error->getMessage()), 'unique'));
+            if (!$isDuplicate) {
+                throw $error;
+            }
+
+            return response()->json(['message' => 'A user with this Gmail address already exists.'], 409);
+        }
+
+        return response()->json($body, $status);
+    }
+
     public function updateProfile(Request $request): JsonResponse
     {
         $actor = $request->attributes->get('actor');
         $firstName = $this->clean($request->input('firstName', $actor->firstName));
         $lastName = $this->clean($request->input('lastName', $actor->lastName));
-        $email = strtolower($this->clean($request->input('email', $actor->email)));
+        $currentEmail = strtolower((string) ($actor->email ?? ''));
+        $email = strtolower($this->clean($request->input('email', $currentEmail))) ?: null;
         $mobile = $this->clean($request->input('mobile', $actor->mobile));
         $address = $this->clean($request->input('address', $actor->address));
         $householdId = $this->clean($request->input('householdId', $actor->householdId ?? '')) ?: null;
@@ -380,13 +514,16 @@ class ApiController extends Controller
         if (!$firstName || !$lastName) {
             return response()->json(['message' => 'First name and last name are required.'], 400);
         }
-        if ($email && !filter_var($email, FILTER_VALIDATE_EMAIL)) {
-            return response()->json(['message' => 'Please enter a valid email.'], 400);
+        if ($email && $email !== $currentEmail && !$this->isGmail($email)) {
+            return response()->json(['message' => 'A new email must be a valid Gmail address. Verify it before saving.'], 400);
         }
-        if ($mobile && !preg_match('/^09\d{9}$/', $mobile)) {
+        if ($email && $email !== $currentEmail) {
+            return response()->json(['code' => 'email_verification_required', 'message' => 'Verify the new Gmail address before saving it.'], 400);
+        }
+        if (!preg_match('/^09\d{9}$/', $mobile)) {
             return response()->json(['message' => 'Please enter a valid mobile number.'], 400);
         }
-        if (DB::table('users')->whereRaw('LOWER(email) = ?', [$email])->where('id', '!=', $actor->id)->exists()) {
+        if ($email && DB::table('users')->whereRaw('LOWER(email) = ?', [$email])->where('id', '!=', $actor->id)->exists()) {
             return response()->json(['message' => 'A user with this email already exists.'], 409);
         }
         if (DB::table('users')->where('mobile', $mobile)->where('id', '!=', $actor->id)->exists()) {
@@ -1365,6 +1502,12 @@ class ApiController extends Controller
             && preg_match('/[A-Z]/', $password)
             && preg_match('/\d/', $password)
             && preg_match('/[^A-Za-z0-9\s]/', $password);
+    }
+
+    private function isGmail(string $email): bool
+    {
+        return filter_var($email, FILTER_VALIDATE_EMAIL) !== false
+            && str_ends_with(strtolower($email), '@gmail.com');
     }
 
     private function findUser(string $identifier): ?object

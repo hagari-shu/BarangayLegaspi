@@ -27,6 +27,28 @@ jobs:
             --write-out 'Production frontend returned HTTP %{http_code} in %{time_total}s\n' \
             https://barangay-legaspi.vercel.app/
 
+      - name: Check publicly available Hostinger migration candidate
+        run: |
+          set -euo pipefail
+          for path in / /register; do
+            curl --fail --silent --show-error --retry 2 --retry-delay 5 --max-time 25 \
+              --output /dev/null \
+              --write-out "Hostinger candidate ${path} returned HTTP %{http_code} in %{time_total}s\n" \
+              "https://barangaylegaspi.tech${path}"
+          done
+          body="$(curl --fail --silent --show-error --retry 2 --retry-delay 5 --max-time 25 \
+            https://barangaylegaspi.tech/api/health)"
+          printf '%s' "$body" | node -e '
+            let health;
+            try { health = JSON.parse(require("fs").readFileSync(0, "utf8")); }
+            catch { console.error("Hostinger candidate health endpoint did not return valid JSON."); process.exit(1); }
+            if (health.ok !== true || health.storage !== "postgres") {
+              console.error("Hostinger candidate health check failed or PostgreSQL is unavailable:", health);
+              process.exit(1);
+            }
+            console.log(`Hostinger candidate API healthy; storage=${health.storage}`);
+          '
+
       - name: Check API health and PostgreSQL
         run: |
           set -euo pipefail

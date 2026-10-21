@@ -136,7 +136,7 @@ class ApiContractTest extends TestCase
             'firstName' => 'Maria',
             'lastName' => 'Dela Cruz',
             'mobile' => '09171234567',
-            'email' => 'maria@example.test',
+            'email' => 'maria@gmail.com',
             'password' => 'Barangay!2026',
             'address' => 'Legaspi, Tayug',
             'zone' => 2,
@@ -147,7 +147,83 @@ class ApiContractTest extends TestCase
             ->assertJsonPath('user.status', 'Pending Verification')
             ->assertJsonMissingPath('user.password_hash');
 
-        $this->assertDatabaseHas('users', ['email' => 'maria@example.test', 'zone' => 2]);
+        $this->assertDatabaseHas('users', ['email' => 'maria@gmail.com', 'zone' => 2]);
+    }
+
+    public function test_resident_registration_supports_mobile_only_accounts(): void
+    {
+        $this->postJson('/api/register', [
+            'firstName' => 'Mobile',
+            'lastName' => 'Resident',
+            'mobile' => '09171234568',
+            'password' => 'Barangay!2026',
+            'address' => 'Legaspi, Tayug',
+            'zone' => 2,
+        ])
+            ->assertCreated()
+            ->assertJsonPath('user.email', null);
+
+        $this->assertDatabaseHas('users', ['mobile' => '09171234568', 'email' => null]);
+    }
+
+    public function test_profile_email_change_requires_a_valid_one_time_code(): void
+    {
+        config([
+            'services.resend.key' => 'test-resend-key',
+            'services.resend.from_email' => 'no-reply@example.org',
+        ]);
+        $code = null;
+        Http::fake(function ($request) use (&$code) {
+            preg_match('/\n\n(\d{6})\n\n/', $request['text'], $matches);
+            $code = $matches[1] ?? null;
+
+            return Http::response(['id' => 'email-test'], 200);
+        });
+
+        $userId = (string) \Illuminate\Support\Str::uuid();
+        $this->insertAuthUser($userId, 'profile-owner@example.test', 'Original!Password2026');
+        $login = $this->postJson('/api/login', [
+            'identifier' => 'profile-owner@example.test',
+            'password' => 'Original!Password2026',
+        ])->assertOk();
+        $token = $login->json('token');
+        $newEmail = 'profile.owner@gmail.com';
+
+        $this->withToken($token)->patchJson('/api/profile', ['email' => $newEmail])
+            ->assertBadRequest()
+            ->assertJsonPath('code', 'email_verification_required');
+        $this->assertDatabaseHas('users', ['id' => $userId, 'email' => 'profile-owner@example.test']);
+
+        $this->withToken($token)->postJson('/api/profile/email/request', ['email' => $newEmail])
+            ->assertOk();
+        $this->assertNotNull($code);
+        $this->assertDatabaseHas('profile_email_verifications', [
+            'user_id' => $userId,
+            'email' => $newEmail,
+            'code_hash' => hash('sha256', $code),
+        ]);
+        Http::assertSent(fn ($request) => $request->url() === 'https://api.resend.com/emails'
+            && $request->hasHeader('Authorization', 'Bearer test-resend-key'));
+
+        $wrongCode = $code === '000000' ? '000001' : '000000';
+        $this->withToken($token)->postJson('/api/profile/email/verify', [
+            'email' => $newEmail,
+            'code' => $wrongCode,
+        ])->assertBadRequest();
+        $this->assertDatabaseHas('profile_email_verifications', ['user_id' => $userId, 'attempts' => 1]);
+
+        $this->withToken($token)->postJson('/api/profile/email/verify', [
+            'email' => $newEmail,
+            'code' => $code,
+        ])->assertOk()
+            ->assertJsonPath('user.email', $newEmail);
+        $this->assertDatabaseHas('users', ['id' => $userId, 'email' => $newEmail]);
+        $this->assertDatabaseMissing('profile_email_verifications', ['user_id' => $userId]);
+
+        $this->withToken($token)->postJson('/api/profile/email/verify', [
+            'email' => $newEmail,
+            'code' => $code,
+        ])->assertBadRequest();
     }
 
     public function test_login_does_not_create_a_bootstrap_admin_from_environment(): void

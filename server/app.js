@@ -625,9 +625,9 @@ export function createApp() {
   app.get('/api/system-logo', async (_req, res) => {
     res.setHeader('Cache-Control', 'no-store')
     try {
-      if (!isSystemLogoStorageConfigured()) return res.sendStatus(404)
+      if (!isSystemLogoStorageConfigured()) return res.status(204).end()
       const logoUrl = await getSystemLogoUrl()
-      if (!logoUrl) return res.sendStatus(404)
+      if (!logoUrl) return res.status(204).end()
       return res.json({ url: logoUrl })
     } catch (error) {
       console.error('load system logo failed', error)
