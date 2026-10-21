@@ -7,6 +7,7 @@ import { getMauQuickOptions, getMauReply, getMauResidentAnswer, getMauWelcome } 
 import { reportClientError } from './client-error-reporting'
 import { getReportDateRange } from './report-date-range'
 import { isStaffReportResponse } from './report-contract'
+import { getActiveRequestCount, getRequestStatusCounts, getRequestStatusMessage, REQUEST_WORKFLOW_STAGES } from './request-workflow'
 import StaffRegistryPanel from './StaffRegistryPanel'
 import StaffPrintCenter from './StaffPrintCenter'
 import StaffInvitationPage from './StaffInvitationPage'
@@ -63,14 +64,10 @@ window.fetch = (input, init = {}) => {
 }
 
 const sanitizeText = (value = '') => String(value).replace(/[<>]/g, '').trim()
-const getRequestStatusLabel = (status, t) => ({
-  Pending: t.statusSubmitted,
-  'In Review': t.statusUnderReview,
-  'Needs Information': t.statusNeedsInformation,
-  Approved: t.approved,
-  Rejected: t.statusRejected,
-  Available: t.availableLabel,
-}[status] || status || t.statusSubmitted)
+const getRequestStatusLabel = (status, t) => {
+  const stage = REQUEST_WORKFLOW_STAGES.find((item) => item.status === status)
+  return stage ? t[stage.labelKey] : status === 'Available' ? t.availableLabel : status || t.statusSubmitted
+}
 const getStaffPositionLabel = (position, t) => ({
   Staff: t.staffRole,
   Secretary: t.secretaryRole,
@@ -2406,14 +2403,6 @@ function RequestsPage({ requests, onSubmit, onRequestUpdated, onLogout, language
       : parsedDate.toLocaleDateString(language === 'fil' ? 'fil-PH' : 'en-PH')
   }
 
-  const getRequestStatusMessage = (status) => {
-    if (status === 'Approved') return t.requestStatusApprovedMessage
-    if (status === 'Rejected') return t.requestStatusRejectedMessage
-    if (status === 'Needs Information') return t.requestStatusNeedsInformationMessage
-    if (status === 'In Review') return t.requestStatusInReviewMessage
-    return t.requestStatusPendingMessage
-  }
-
   const handleChange = (event) => {
     const { name, value } = event.target
     setForm((prev) => ({ ...prev, [name]: value }))
@@ -2615,7 +2604,7 @@ function RequestsPage({ requests, onSubmit, onRequestUpdated, onLogout, language
                     <strong>{item.type}</strong>
                     <span className={'status-badge ' + (item.status || '').toLowerCase().replace(/\s+/g, '-')}>{getRequestStatusLabel(item.status, t)}</span>
                   </div>
-                  <p>{getRequestStatusMessage(item.status)}</p>
+                  <p className="request-status-guidance">{getRequestStatusMessage(item.status, t)}</p>
                   <div className="request-delivery-summary">
                     <strong>{t.deliveryMethodLabel}:</strong> {item.deliveryMethod === 'physical' ? t.physicalCopy : t.onlineCopy}
                     {item.deliveryNote && <p>{item.deliveryNote}</p>}
@@ -4573,7 +4562,13 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
               <div><dt>{t.resident}</dt><dd>{selectedRequest.first_name || selectedRequest.firstName || t.resident} {selectedRequest.last_name || selectedRequest.lastName || ''}</dd></div>
               <div><dt>{t.requestType}</dt><dd>{selectedRequest.type}</dd></div>
               <div><dt>{t.submissionDate}</dt><dd>{formatRequestDate(selectedRequest.date || selectedRequest.createdAt || selectedRequest.created_at)}</dd></div>
-              <div><dt>{t.status}</dt><dd>{getRequestStatusLabel(selectedRequest.status, t)}</dd></div>
+              <div>
+                <dt>{t.status}</dt>
+                <dd>
+                  <span className={'status-badge ' + (selectedRequest.status || '').toLowerCase().replace(/\s+/g, '-')}>{getRequestStatusLabel(selectedRequest.status, t)}</span>
+                  <p className="request-status-guidance">{getRequestStatusMessage(selectedRequest.status, t)}</p>
+                </dd>
+              </div>
               <div><dt>{t.purpose}</dt><dd>{selectedRequest.purpose || '—'}</dd></div>
               <div><dt>{t.deliveryMethodLabel}</dt><dd>{selectedRequest.deliveryMethod === 'physical' || selectedRequest.delivery_method === 'physical' ? t.physicalCopy : t.onlineCopy}</dd></div>
               {(selectedRequest.deliveryNote || selectedRequest.delivery_note) && <div><dt>{t.deliveryNoteLabel}</dt><dd>{selectedRequest.deliveryNote || selectedRequest.delivery_note}</dd></div>}
@@ -4780,7 +4775,8 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
   const staffCount = managedUsers.filter((user) => user.role === 'staff').length
   const admins = managedUsers.filter((user) => user.role === 'admin').length
   const superAdmins = managedUsers.filter((user) => user.role === 'super_admin').length
-  const pending = requests.filter((item) => ['Pending', 'In Review', 'Needs Information'].includes(item.status)).length
+  const requestStatusCounts = getRequestStatusCounts(requests)
+  const activeRequestCount = getActiveRequestCount(requestStatusCounts)
   const pendingVerificationUsers = managedUsers.filter((user) => user.role === 'resident' && user.status === 'Pending Verification')
   const approvedUsers = managedUsers.filter((user) => user.role === 'resident' && user.status === 'Active Resident').length
   const unapprovedLoginCutoff = Date.now() - 24 * 60 * 60 * 1000
@@ -4794,7 +4790,7 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
   }, {})
   const notifications = [
     pendingVerificationUsers.length > 0 && `${pendingVerificationUsers.length} resident account${pendingVerificationUsers.length === 1 ? '' : 's'} awaiting verification`,
-    pending > 0 && `${pending} service request${pending === 1 ? '' : 's'} need review`,
+    activeRequestCount > 0 && t.activeServiceRequestsAlert.replace('{count}', String(activeRequestCount)),
     unapprovedLoginAttempts.length > 0 && t.adminUnapprovedLoginAlert.replace('{count}', String(unapprovedLoginAttempts.length)),
   ].filter(Boolean)
   const derivedActivityEntries = [
@@ -5221,7 +5217,7 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
               <p className="eyebrow">{t.governance}</p>
               <h1 id="admin-panel-title">{activeTab === 'overview' ? t.adminConsoleTitle : activeTab === 'residents' ? t.residentsByZone : activeTab === 'access' ? t.userAccessManagement : t.emergencyReportsTitle}</h1>
             </div>
-            <span className="counter-pill">{pending} {t.pending}</span>
+            <span className="counter-pill">{activeRequestCount} {t.activeRequests}</span>
           </div>
 
           <div className="stats-grid" role="group" aria-label={t.adminSummaryLabel}>
@@ -5259,9 +5255,9 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
 
             <article className="stat-card">
               <div className="stat-header">
-                <span className="label">{t.pending}</span>
+                <span className="label">{t.activeRequests}</span>
               </div>
-              <div className="stat-number">{pending}</div>
+              <div className="stat-number">{activeRequestCount}</div>
               <p>{t.serviceRequests}</p>
             </article>
           </div>
@@ -5286,7 +5282,7 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
                     <div className="overview-item">
                       <h4>{t.serviceRequests}</h4>
                       <p className="overview-value">{requests.length}</p>
-                      <small>{pending} {t.pendingReview}</small>
+                      <small>{activeRequestCount} {t.activeRequests}</small>
                     </div>
                     <div className="overview-item">
                       <h4>{t.zonesCovered}</h4>
@@ -5343,13 +5339,16 @@ function AdminPage({ users, residents = [], requests, reports = [], currentUser,
                   <article className="panel-card compact-panel">
                     <div className="panel-header">
                       <h2>{t.requestMonitoring}</h2>
-                      <span className="soft-label">{pending} {t.pendingReview}</span>
+                      <span className="soft-label">{activeRequestCount} {t.activeRequests}</span>
                     </div>
-                    <div className="overview-grid admin-metric-grid">
-                      <div className="overview-item"><h4>{t.pending}</h4><p className="overview-value">{pending}</p><small>{t.awaitingStaffAction}</small></div>
-                      <div className="overview-item"><h4>{t.approved}</h4><p className="overview-value">{requests.filter((item) => item.status === 'Approved').length}</p><small>{t.approvals}</small></div>
-                      <div className="overview-item"><h4>{t.rejected || 'Rejected'}</h4><p className="overview-value">{requests.filter((item) => item.status === 'Rejected').length}</p><small>{t.declinedRequests}</small></div>
-                      <div className="overview-item"><h4>{t.approvedResidents || 'Approved residents'}</h4><p className="overview-value">{approvedUsers}</p><small>{t.verifiedAccounts}</small></div>
+                    <div className="overview-grid admin-metric-grid request-workflow-metrics">
+                      {REQUEST_WORKFLOW_STAGES.map((stage) => (
+                        <div className="overview-item" key={stage.status}>
+                          <h4>{t[stage.labelKey]}</h4>
+                          <p className="overview-value">{requestStatusCounts[stage.status]}</p>
+                          <small>{t[stage.messageKey]}</small>
+                        </div>
+                      ))}
                     </div>
                     <div className="service-count-list">
                       {Object.entries(requestCountsByType).map(([type, count]) => <div key={type}><span>{type}</span><strong>{count}</strong></div>)}
