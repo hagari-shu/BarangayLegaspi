@@ -1794,7 +1794,7 @@ function RegisterPage({ language, setLanguage }) {
                     <label htmlFor="registration-address">{t.homeAddressLabel}</label>
                     <input id="registration-address" type="text" name="address" value={form.address} onChange={handleChange} placeholder={t.registrationAddressPlaceholder} autoComplete="street-address" required />
                   </div>
-                  <div className="input-block">
+                  <div className="input-block full-width">
                     <label htmlFor="registration-zone">{t.zoneLabel}</label>
                     <select id="registration-zone" name="zone" value={form.zone} onChange={handleChange} required>
                       <option value="">{t.registrationSelectZone}</option>
@@ -1836,7 +1836,7 @@ function RegisterPage({ language, setLanguage }) {
                   <p>{t.usedToProtect}</p>
                 </div>
 
-                <div className="form-grid">
+                <div className="form-grid registration-password-grid">
                   <PasswordField id="registration-password" label={t.passwordLabel} value={form.password} onChange={(event) => setForm((current) => ({ ...current, password: event.target.value }))} language={language} placeholder={t.registrationPasswordPlaceholder} helpText={`${t.passwordRequirements}.`} />
                 </div>
               </section>
