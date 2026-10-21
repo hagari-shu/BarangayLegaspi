@@ -170,6 +170,107 @@ test('system logo endpoint returns no content when the optional logo is unavaila
   }
 })
 
+test('staff can review pending resident sign-ups without general account administration access', async () => {
+  const { server, baseUrl } = await createTestServer()
+  const staff = {
+    id: randomUUID(),
+    firstName: 'Review',
+    lastName: 'Staff',
+    email: 'review.staff@example.test',
+    passwordHash: await hashPassword('ReviewStaffPass123!'),
+    role: 'staff',
+    status: 'On Duty',
+  }
+  const residentToApprove = {
+    id: randomUUID(),
+    firstName: 'Pending',
+    lastName: 'Approval',
+    email: 'pending.approval@example.test',
+    mobile: '09171112221',
+    passwordHash: await hashPassword('ResidentPass123!'),
+    role: 'resident',
+    status: 'Pending Verification',
+  }
+  const residentToReject = {
+    id: randomUUID(),
+    firstName: 'Pending',
+    lastName: 'Rejection',
+    email: 'pending.rejection@example.test',
+    mobile: '09171112222',
+    passwordHash: await hashPassword('ResidentPass123!'),
+    role: 'resident',
+    status: 'Pending Verification',
+  }
+  const activeResident = {
+    id: randomUUID(),
+    firstName: 'Active',
+    lastName: 'Resident',
+    email: 'active.resident@example.test',
+    mobile: '09171112223',
+    passwordHash: await hashPassword('ResidentPass123!'),
+    role: 'resident',
+    status: 'Active Resident',
+  }
+  try {
+    for (const user of [staff, residentToApprove, residentToReject, activeResident]) {
+      await jsonDb.saveUser(user)
+    }
+    const staffToken = signToken({ sub: staff.id })
+    const residentToken = signToken({ sub: activeResident.id })
+    const staffHeaders = { Authorization: `Bearer ${staffToken}` }
+
+    assert.equal((await fetch(`${baseUrl}/api/staff/resident-registrations`)).status, 401)
+    assert.equal((await fetch(`${baseUrl}/api/staff/resident-registrations`, {
+      headers: { Authorization: `Bearer ${residentToken}` },
+    })).status, 403)
+    assert.equal((await fetch(`${baseUrl}/api/admin/users`, { headers: staffHeaders })).status, 403)
+
+    const pendingResponse = await fetch(`${baseUrl}/api/staff/resident-registrations`, { headers: staffHeaders })
+    assert.equal(pendingResponse.status, 200)
+    const pending = await pendingResponse.json()
+    assert.deepEqual(new Set(pending.registrations.map((user) => user.id)), new Set([residentToApprove.id, residentToReject.id]))
+    assert.equal(Object.hasOwn(pending.registrations[0], 'passwordHash'), false)
+
+    const approveResponse = await fetch(`${baseUrl}/api/staff/resident-registrations/${residentToApprove.id}`, {
+      method: 'PATCH',
+      headers: { ...staffHeaders, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'Active Resident' }),
+    })
+    assert.equal(approveResponse.status, 200)
+    assert.equal((await jsonDb.findUserById(residentToApprove.id)).status, 'Active Resident')
+
+    const rejectResponse = await fetch(`${baseUrl}/api/staff/resident-registrations/${residentToReject.id}`, {
+      method: 'PATCH',
+      headers: { ...staffHeaders, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'Rejected' }),
+    })
+    assert.equal(rejectResponse.status, 200)
+    assert.equal((await jsonDb.findUserById(residentToReject.id)).status, 'Rejected')
+
+    const repeatedReview = await fetch(`${baseUrl}/api/staff/resident-registrations/${residentToApprove.id}`, {
+      method: 'PATCH',
+      headers: { ...staffHeaders, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'Rejected' }),
+    })
+    assert.equal(repeatedReview.status, 409)
+
+    const roleEscalation = await fetch(`${baseUrl}/api/staff/resident-registrations/${staff.id}`, {
+      method: 'PATCH',
+      headers: { ...staffHeaders, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'Administrator' }),
+    })
+    assert.equal(roleEscalation.status, 400)
+
+    const auditLogs = await jsonDb.listAuditLogs()
+    assert.ok(auditLogs.some((log) => log.actorId === staff.id && log.action === 'resident_registration_approved' && log.targetId === residentToApprove.id))
+    assert.ok(auditLogs.some((log) => log.actorId === staff.id && log.action === 'resident_registration_rejected' && log.targetId === residentToReject.id))
+  } finally {
+    await new Promise((resolve, reject) => {
+      server.close((error) => error ? reject(error) : resolve())
+    })
+  }
+})
+
 test('registry age bounds include February 29 birthdays under the displayed-age convention', () => {
   const cases = [
     { today: '2024-02-28', birthDate: '2000-02-29', age: 23 },

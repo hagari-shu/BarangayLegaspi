@@ -3435,11 +3435,51 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
   const [showAnnouncementForm, setShowAnnouncementForm] = useState(false)
   const [selectedRequest, setSelectedRequest] = useState(null)
   const [confirmation, setConfirmation] = useState(null)
+  const [residentRegistrations, setResidentRegistrations] = useState([])
+  const [residentRegistrationsLoading, setResidentRegistrationsLoading] = useState(true)
+  const [residentRegistrationsError, setResidentRegistrationsError] = useState('')
+  const [residentRegistrationsMessage, setResidentRegistrationsMessage] = useState('')
+  const [residentRegistrationsRefreshKey, setResidentRegistrationsRefreshKey] = useState(0)
 
   useEffect(() => {
     const timeout = window.setTimeout(() => setDebouncedQueueSearch(queueSearch.trim()), 300)
     return () => window.clearTimeout(timeout)
   }, [queueSearch])
+
+  useEffect(() => {
+    let active = true
+    let loading = false
+    const controller = new AbortController()
+    const loadRegistrations = async () => {
+      if (loading) return
+      loading = true
+      setResidentRegistrationsLoading(true)
+      setResidentRegistrationsError('')
+      try {
+        const response = await fetch(`${API_BASE}/staff/resident-registrations`, { signal: controller.signal })
+        const data = await response.json().catch(() => ({}))
+        if (!response.ok || !Array.isArray(data.registrations)) {
+          throw new Error(data.message || t.residentRegistrationsLoadFailed)
+        }
+        if (active) setResidentRegistrations(data.registrations)
+      } catch (error) {
+        if (error.name !== 'AbortError' && active) {
+          console.error('load pending resident registrations failed', error)
+          setResidentRegistrationsError(error.message || t.residentRegistrationsLoadFailed)
+        }
+      } finally {
+        loading = false
+        if (active) setResidentRegistrationsLoading(false)
+      }
+    }
+    loadRegistrations()
+    const refreshInterval = window.setInterval(loadRegistrations, 30000)
+    return () => {
+      active = false
+      controller.abort()
+      window.clearInterval(refreshInterval)
+    }
+  }, [residentRegistrationsRefreshKey, t.residentRegistrationsLoadFailed])
 
   const effectiveQueueStatus = queueStatus
   useEffect(() => {
@@ -3683,6 +3723,27 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
     }
   }
 
+  const handleResidentRegistrationReview = (user, status) => {
+    const approved = status === 'Active Resident'
+    setResidentRegistrationsMessage('')
+    setConfirmation({
+      title: approved ? t.approve : t.reject,
+      message: `${approved ? t.approve : t.reject} ${getDisplayName(user)}'s resident registration?`,
+      confirmLabel: approved ? t.approve : t.reject,
+      onConfirm: async () => {
+        const response = await fetch(`${API_BASE}/staff/resident-registrations/${encodeURIComponent(user.id)}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ status }),
+        })
+        const data = await response.json().catch(() => ({}))
+        if (!response.ok || !data.user) throw new Error(data.message || t.residentRegistrationReviewFailed)
+        setResidentRegistrations((current) => current.filter((registration) => registration.id !== user.id))
+        setResidentRegistrationsMessage(approved ? t.residentRegistrationApproved : t.residentRegistrationRejected)
+      },
+    })
+  }
+
   const archiveProcessedRequests = async () => {
     if (!window.confirm(t.processedArchiveOlderMessage)) return
     setStaffArchiveBusy(true)
@@ -3825,6 +3886,15 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
             >
               <span className="nav-icon">📄</span><span>{t.staffDashboardTitle}</span>
             </button>
+            <button
+              type="button"
+              className={`nav-item ${activeTab === 'resident-registrations' ? 'active' : ''}`}
+              aria-current={activeTab === 'resident-registrations' ? 'page' : undefined}
+              onClick={() => setActiveTab('resident-registrations')}
+            >
+              <span className="nav-icon">📝</span><span>{t.residentRegistrationsNav}</span>
+              {residentRegistrations.length > 0 && <span className="staff-pending-badge" aria-label={`${residentRegistrations.length} ${t.pending}`}>{residentRegistrations.length}</span>}
+            </button>
             {userRole === 'staff' && (
               <button
                 type="button"
@@ -3882,7 +3952,7 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
           <div className="welcome-row">
             <div>
               <p className="eyebrow">{t.operations}</p>
-              <h1>{activeTab === 'queue' ? t.staffDashboardTitle : activeTab === 'printing' ? t.printCenterTitle : activeTab === 'reports' ? t.serviceReports : activeTab === 'announcements' ? t.announcements : activeTab === 'staff' ? t.staffDirectoryAndOfficials : activeTab === 'residents' ? (language === 'fil' ? 'Talaan ng residente' : 'Resident registry') : t.approvalsManagement}</h1>
+              <h1>{activeTab === 'queue' ? t.staffDashboardTitle : activeTab === 'resident-registrations' ? t.residentRegistrationsTitle : activeTab === 'printing' ? t.printCenterTitle : activeTab === 'reports' ? t.serviceReports : activeTab === 'announcements' ? t.announcements : activeTab === 'staff' ? t.staffDirectoryAndOfficials : activeTab === 'residents' ? (language === 'fil' ? 'Talaan ng residente' : 'Resident registry') : t.approvalsManagement}</h1>
               {activeTab === 'queue' && <p className="staff-dashboard-subtitle">{t.staffDashboardSubtitle}</p>}
             </div>
             {activeTab === 'queue' ? (
@@ -3893,10 +3963,10 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
                   {dashboardLoading ? t.loadingRequests : t.refreshRequests}
                 </button>
               </div>
-            ) : !['residents', 'staff', 'printing', 'approvals'].includes(activeTab) && <span className="counter-pill">{totalRequests} {t.requests}</span>}
+            ) : !['residents', 'staff', 'printing', 'approvals', 'resident-registrations'].includes(activeTab) && <span className="counter-pill">{totalRequests} {t.requests}</span>}
           </div>
 
-          {!['residents', 'staff', 'printing', 'approvals'].includes(activeTab) && <div className="stats-grid staff-dashboard-metrics" aria-label={t.staffSummaryLabel}>
+          {!['residents', 'staff', 'printing', 'approvals', 'resident-registrations'].includes(activeTab) && <div className="stats-grid staff-dashboard-metrics" aria-label={t.staffSummaryLabel}>
             <button className="stat-card staff-metric-card accent" type="button" onClick={() => setQueueFilter('Pending')}>
               <span className="label">{t.pendingReviewMetric}</span>
               <span className="stat-number">{pendingCount}</span>
@@ -3923,6 +3993,46 @@ function StaffPage({ staffMembers = [], announcements = [], currentUser, userRol
             <div className="main-column">
               {activeTab === 'residents' && <StaffRegistryPanel language={language} />}
               {activeTab === 'printing' && <StaffPrintCenter language={language} />}
+              {activeTab === 'resident-registrations' && (
+                <section className="panel-card resident-registrations-panel" aria-labelledby="resident-registrations-heading">
+                  <div className="panel-header">
+                    <div>
+                      <h2 id="resident-registrations-heading">{t.residentRegistrationsTitle}</h2>
+                      <p className="soft-label">{t.residentRegistrationsDescription}</p>
+                    </div>
+                    <button
+                      type="button"
+                      className="secondary-btn small"
+                      disabled={residentRegistrationsLoading}
+                      onClick={() => setResidentRegistrationsRefreshKey((current) => current + 1)}
+                    >
+                      {residentRegistrationsLoading ? t.loadingRequests : t.refreshRequests}
+                    </button>
+                  </div>
+                  {residentRegistrationsMessage && <p className="registration-review-message success" role="status">{residentRegistrationsMessage}</p>}
+                  {residentRegistrationsError && <p className="registration-review-message error" role="alert">{residentRegistrationsError}</p>}
+                  {residentRegistrationsLoading && <p className="soft-label" role="status">{t.loadingRequests}</p>}
+                  {!residentRegistrationsLoading && !residentRegistrationsError && residentRegistrations.length === 0 && (
+                    <p className="soft-label">{t.noPendingResidentRegistrations}</p>
+                  )}
+                  <div className="resident-registration-list">
+                    {residentRegistrations.map((registration) => (
+                      <article className="resident-registration-card" key={registration.id}>
+                        <div className="resident-registration-details">
+                          <h3>{getDisplayName(registration)}</h3>
+                          <p>{registration.email || t.notAvailable}</p>
+                          <p>{registration.mobile || t.notAvailable}</p>
+                          {registration.createdAt && <p className="soft-label">{t.submissionDate}: {formatRequestDate(registration.createdAt)}</p>}
+                        </div>
+                        <div className="resident-registration-actions">
+                          <button type="button" className="small-action success" onClick={() => handleResidentRegistrationReview(registration, 'Active Resident')}>{t.approve}</button>
+                          <button type="button" className="small-action danger" onClick={() => handleResidentRegistrationReview(registration, 'Rejected')}>{t.reject}</button>
+                        </div>
+                      </article>
+                    ))}
+                  </div>
+                </section>
+              )}
               {activeTab === 'queue' && (
                 <>
                 <section className="panel-card needs-attention" aria-labelledby="needs-attention-title">

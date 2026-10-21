@@ -2240,6 +2240,80 @@ export function createApp() {
     return res.json(result)
   })
 
+  app.get('/api/staff/resident-registrations', async (req, res) => {
+    const authHeader = req.headers.authorization || ''
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null
+    if (!token) return res.status(401).json({ message: 'Authentication required.' })
+
+    let actor
+    try {
+      actor = await getCurrentActor(token)
+    } catch {
+      return res.status(401).json({ message: 'Invalid or expired token.' })
+    }
+    if (!actor || !isStaffOrAdminRole(actor.user.role)) {
+      return res.status(403).json({ message: 'Staff access required.' })
+    }
+
+    try {
+      const users = filterVisibleUsers(await store.listAllUsers())
+      const registrations = users
+        .filter((user) => user.role === 'resident' && user.status === 'Pending Verification')
+        .map((user) => sanitizeUserRecord(user))
+      return res.json({ registrations })
+    } catch (error) {
+      console.error('load pending resident registrations failed', error)
+      return res.status(500).json({ message: 'Unable to load pending resident registrations.' })
+    }
+  })
+
+  app.patch('/api/staff/resident-registrations/:id', async (req, res) => {
+    const authHeader = req.headers.authorization || ''
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null
+    if (!token) return res.status(401).json({ message: 'Authentication required.' })
+
+    let actor
+    try {
+      actor = await getCurrentActor(token)
+    } catch {
+      return res.status(401).json({ message: 'Invalid or expired token.' })
+    }
+    if (!actor || !isStaffOrAdminRole(actor.user.role)) {
+      return res.status(403).json({ message: 'Staff access required.' })
+    }
+
+    const { status } = req.body || {}
+    if (!['Active Resident', 'Rejected'].includes(status)) {
+      return res.status(400).json({ message: 'Choose approval or rejection for this registration.' })
+    }
+
+    try {
+      const user = await store.findUserById(req.params.id)
+      if (!user || user.role !== 'resident') {
+        return res.status(404).json({ message: 'Pending resident registration not found.' })
+      }
+      if (user.status !== 'Pending Verification') {
+        return res.status(409).json({ message: 'This resident registration has already been reviewed.' })
+      }
+
+      const updatedUser = await store.updateUser(user.id, { status })
+      if (!updatedUser) {
+        return res.status(404).json({ message: 'Pending resident registration not found.' })
+      }
+      await writeAudit(
+        actor.user,
+        status === 'Active Resident' ? 'resident_registration_approved' : 'resident_registration_rejected',
+        'resident',
+        user.id,
+        { previousStatus: 'Pending Verification', status },
+      )
+      return res.json({ user: sanitizeUserRecord(updatedUser) })
+    } catch (error) {
+      console.error('review pending resident registration failed', error)
+      return res.status(500).json({ message: 'Unable to review resident registration.' })
+    }
+  })
+
   app.get('/api/admin/users', async (req, res) => {
     const authHeader = req.headers.authorization || ''
     const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null
