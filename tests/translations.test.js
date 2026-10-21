@@ -1,7 +1,40 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { getMauQuickOptions, getMauReply, getMauResidentAnswer, getMauWelcome } from '../src/mau-responses.js'
+import { getActiveRequestCount, getRequestStatusCounts, REQUEST_WORKFLOW_STAGES } from '../src/request-workflow.js'
 import translations from '../src/translations.js'
+
+test('request workflow stages have localized labels and matching guidance', () => {
+  for (const locale of [translations.en, translations.fil]) {
+    for (const stage of REQUEST_WORKFLOW_STAGES) {
+      assert.equal(typeof locale[stage.labelKey], 'string')
+      assert.ok(locale[stage.labelKey].length > 0)
+      assert.equal(typeof locale[stage.messageKey], 'string')
+      assert.ok(locale[stage.messageKey].length > 0)
+    }
+  }
+})
+
+test('request monitoring counts every workflow status and groups only active stages', () => {
+  const counts = getRequestStatusCounts([
+    { status: 'Pending' },
+    { status: 'Pending' },
+    { status: 'In Review' },
+    { status: 'Needs Information' },
+    { status: 'Approved' },
+    { status: 'Rejected' },
+    { status: 'Archived' },
+  ])
+
+  assert.deepEqual(counts, {
+    Pending: 2,
+    'In Review': 1,
+    'Needs Information': 1,
+    Approved: 1,
+    Rejected: 1,
+  })
+  assert.equal(getActiveRequestCount(counts), 4)
+})
 
 test('filipino translation includes resident and admin labels', () => {
   const fil = translations.fil
