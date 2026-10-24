@@ -1,0 +1,16 @@
+User-agent: *
+Allow: /
+Disallow: /admin
+Disallow: /super-admin
+Disallow: /staff
+Disallow: /staff-access
+Disallow: /staff-invite
+Disallow: /super-admin-invite
+Disallow: /dashboard
+Disallow: /requests
+Disallow: /profile
+Disallow: /payments
+Disallow: /settings
+Disallow: /api/
+
+Sitemap: https://barangaylegaspi.tech/sitemap.xml
